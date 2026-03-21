@@ -1,14 +1,11 @@
 const { Pool } = require("pg");
+const { createDefaultDashboardSettings, normalizeDashboardSettings } = require("./integrations");
 
 function createDefaultPersistentState() {
   return {
     tasks: [],
     rpcNodes: [],
-    settings: {
-      profileName: "local",
-      theme: "quantum-operator",
-      resultsPath: "./dist/mint-results.json"
-    }
+    settings: createDefaultDashboardSettings()
   };
 }
 
@@ -19,10 +16,7 @@ function normalizePersistentState(state) {
   return {
     tasks: Array.isArray(source.tasks) ? source.tasks : [],
     rpcNodes: Array.isArray(source.rpcNodes) ? source.rpcNodes : [],
-    settings: {
-      ...fallback.settings,
-      ...(source.settings && typeof source.settings === "object" ? source.settings : {})
-    }
+    settings: normalizeDashboardSettings(source.settings)
   };
 }
 
@@ -120,6 +114,15 @@ function createDatabase() {
         expires_at timestamptz not null,
         created_at timestamptz not null default now(),
         last_seen_at timestamptz not null default now()
+      )
+    `);
+
+    await query(`
+      create table if not exists app_secrets (
+        secret_key text primary key,
+        secret_ciphertext text not null,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
       )
     `);
   }
@@ -325,6 +328,36 @@ function createDatabase() {
     await query("delete from sessions where expires_at <= now()");
   }
 
+  async function getSecret(secretKey) {
+    const result = await query(
+      `
+        select secret_ciphertext
+        from app_secrets
+        where secret_key = $1
+        limit 1
+      `,
+      [secretKey]
+    );
+
+    return result.rows[0]?.secret_ciphertext || null;
+  }
+
+  async function upsertSecret(secretKey, secretCiphertext) {
+    await query(
+      `
+        insert into app_secrets (secret_key, secret_ciphertext, created_at, updated_at)
+        values ($1, $2, now(), now())
+        on conflict (secret_key)
+        do update set secret_ciphertext = excluded.secret_ciphertext, updated_at = now()
+      `,
+      [secretKey, secretCiphertext]
+    );
+  }
+
+  async function deleteSecret(secretKey) {
+    await query("delete from app_secrets where secret_key = $1", [secretKey]);
+  }
+
   async function close() {
     await pool.end();
   }
@@ -338,6 +371,7 @@ function createDatabase() {
     ensureBaseState,
     ensureSchema,
     findWalletByAddress,
+    getSecret,
     getSessionByTokenHash,
     getStoredWalletSecret,
     getUserByUsername,
@@ -347,6 +381,8 @@ function createDatabase() {
     loadState,
     saveState,
     touchSession,
+    upsertSecret,
+    deleteSecret,
     upsertUser
   };
 }

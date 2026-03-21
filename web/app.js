@@ -14,7 +14,6 @@ const state = {
 };
 
 const body = document.body;
-const fxCanvas = document.getElementById("fx-canvas");
 const authOverlay = document.getElementById("auth-overlay");
 const loginForm = document.getElementById("login-form");
 const loginUsernameInput = document.getElementById("login-username-input");
@@ -66,6 +65,20 @@ const settingsForm = document.getElementById("settings-form");
 const profileNameInput = document.getElementById("profile-name-input");
 const themeInput = document.getElementById("theme-input");
 const resultsPathInput = document.getElementById("results-path-input");
+const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
+const explorerConfigStatus = document.getElementById("explorer-config-status");
+const telegramEnabledInput = document.getElementById("telegram-enabled-input");
+const telegramBotTokenInput = document.getElementById("telegram-bot-token-input");
+const telegramChatIdInput = document.getElementById("telegram-chat-id-input");
+const telegramConfigStatus = document.getElementById("telegram-config-status");
+const discordEnabledInput = document.getElementById("discord-enabled-input");
+const discordWebhookUrlInput = document.getElementById("discord-webhook-url-input");
+const discordConfigStatus = document.getElementById("discord-config-status");
+const alertOnStartInput = document.getElementById("alert-on-start-input");
+const alertOnSuccessInput = document.getElementById("alert-on-success-input");
+const alertOnFailureInput = document.getElementById("alert-on-failure-input");
+const alertOnStopInput = document.getElementById("alert-on-stop-input");
+const testAlertsButton = document.getElementById("test-alerts-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const batchToggle = document.getElementById("batch-toggle");
@@ -92,6 +105,7 @@ const taskAbiFileInput = document.getElementById("task-abi-file-input");
 const taskAbiInput = document.getElementById("task-abi-input");
 const abiStatus = document.getElementById("abi-status");
 const abiDropzone = document.getElementById("abi-dropzone");
+const fetchAbiButton = document.getElementById("fetch-abi-button");
 const taskPlatformInput = document.getElementById("task-platform-input");
 const taskFunctionInput = document.getElementById("task-function-input");
 const taskArgsInput = document.getElementById("task-args-input");
@@ -128,7 +142,6 @@ const taskWarmupToggle = document.getElementById("task-warmup-toggle");
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
-let canvasSceneInitialized = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -315,15 +328,6 @@ function connectEvents() {
       }, 1200);
     }
   });
-}
-
-function ensureCanvasScene() {
-  if (canvasSceneInitialized) {
-    return;
-  }
-
-  canvasSceneInitialized = true;
-  initializeCanvasScene();
 }
 
 function activeTask() {
@@ -661,118 +665,6 @@ function initializeMotionSurfaces(root = document) {
   root.querySelectorAll("[data-tilt]").forEach((element) => {
     element.style.transform = "";
   });
-}
-
-function initializeCanvasScene() {
-  if (!fxCanvas || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    return;
-  }
-
-  const context = fxCanvas.getContext("2d");
-  if (!context) {
-    return;
-  }
-
-  let width = 0;
-  let height = 0;
-  let horizon = 0;
-  let particles = [];
-  const pointer = { x: 0.5, y: 0.4 };
-
-  function createParticle(forceTop = false) {
-    return {
-      x: Math.random(),
-      y: forceTop ? -0.2 : Math.random() * 1.2,
-      z: Math.random() * 0.9 + 0.1,
-      speed: Math.random() * 0.012 + 0.004,
-      size: Math.random() * 2.2 + 0.6
-    };
-  }
-
-  function resize() {
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    width = window.innerWidth;
-    height = window.innerHeight;
-    horizon = height * 0.34;
-    fxCanvas.width = Math.floor(width * ratio);
-    fxCanvas.height = Math.floor(height * ratio);
-    fxCanvas.style.width = `${width}px`;
-    fxCanvas.style.height = `${height}px`;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    particles = Array.from({ length: Math.max(36, Math.floor(width / 34)) }, () => createParticle());
-  }
-
-  function drawGrid() {
-    context.save();
-    context.strokeStyle = "rgba(113, 224, 255, 0.08)";
-    context.lineWidth = 1;
-
-    for (let i = 0; i < 13; i += 1) {
-      const x = (width / 12) * i;
-      context.beginPath();
-      context.moveTo(x, height);
-      context.lineTo(width / 2 + (x - width / 2) * 0.18, horizon);
-      context.stroke();
-    }
-
-    for (let i = 0; i < 9; i += 1) {
-      const y = horizon + ((height - horizon) / 8) * i;
-      const scale = (y - horizon) / (height - horizon || 1);
-      context.beginPath();
-      context.moveTo(width * (0.5 - 0.5 * scale), y);
-      context.lineTo(width * (0.5 + 0.5 * scale), y);
-      context.stroke();
-    }
-
-    context.restore();
-  }
-
-  function drawGlow() {
-    const centerX = width * (0.18 + pointer.x * 0.12);
-    const centerY = height * (0.12 + pointer.y * 0.06);
-    const gradient = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, 240);
-    gradient.addColorStop(0, "rgba(113, 224, 255, 0.18)");
-    gradient.addColorStop(1, "rgba(113, 224, 255, 0)");
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, width, height);
-  }
-
-  function render() {
-    context.clearRect(0, 0, width, height);
-    drawGlow();
-    drawGrid();
-
-    particles.forEach((particle) => {
-      particle.y += particle.speed * (0.45 + particle.z);
-      if (particle.y > 1.2) {
-        Object.assign(particle, createParticle(true));
-      }
-
-      const drift = (pointer.x - 0.5) * 110 * (1 - particle.z);
-      const x = particle.x * width + drift;
-      const y = horizon + particle.y * (height - horizon) * 0.92;
-      const size = particle.size * (0.6 + particle.z * 1.4);
-
-      context.fillStyle = `rgba(113, 224, 255, ${0.18 + particle.z * 0.4})`;
-      context.beginPath();
-      context.arc(x, y, size, 0, Math.PI * 2);
-      context.fill();
-
-      context.fillStyle = `rgba(79, 255, 210, ${0.08 + particle.z * 0.18})`;
-      context.fillRect(x - 0.45, y, 0.9, 18 * particle.z);
-    });
-
-    requestAnimationFrame(render);
-  }
-
-  window.addEventListener("pointermove", (event) => {
-    pointer.x = event.clientX / Math.max(window.innerWidth, 1);
-    pointer.y = event.clientY / Math.max(window.innerHeight, 1);
-  });
-
-  window.addEventListener("resize", resize);
-  resize();
-  render();
 }
 
 function updateClock() {
@@ -1398,6 +1290,43 @@ function renderSettings() {
   profileNameInput.value = state.settings.profileName || "local";
   themeInput.value = state.settings.theme || "quantum-operator";
   resultsPathInput.value = state.settings.resultsPath || "./dist/mint-results.json";
+  explorerApiKeyInput.value = "";
+  telegramBotTokenInput.value = "";
+  telegramChatIdInput.value = "";
+  discordWebhookUrlInput.value = "";
+  telegramEnabledInput.checked = Boolean(state.settings.telegramEnabled);
+  discordEnabledInput.checked = Boolean(state.settings.discordEnabled);
+  alertOnStartInput.checked = state.settings.alertOnRunStart !== false;
+  alertOnSuccessInput.checked = state.settings.alertOnRunSuccess !== false;
+  alertOnFailureInput.checked = state.settings.alertOnRunFailure !== false;
+  alertOnStopInput.checked = state.settings.alertOnRunStop !== false;
+
+  explorerApiKeyInput.placeholder = state.settings.explorerApiKeyConfigured
+    ? "Saved on server. Leave blank to keep it."
+    : "Etherscan V2 API key";
+  telegramBotTokenInput.placeholder = state.settings.telegramBotTokenConfigured
+    ? "Saved on server. Leave blank to keep it."
+    : "123456:ABC...";
+  telegramChatIdInput.placeholder = state.settings.telegramChatIdConfigured
+    ? "Saved on server. Leave blank to keep it."
+    : "-1001234567890";
+  discordWebhookUrlInput.placeholder = state.settings.discordWebhookUrlConfigured
+    ? "Saved on server. Leave blank to keep it."
+    : "https://discord.com/api/webhooks/...";
+
+  explorerConfigStatus.textContent = state.settings.explorerApiKeyConfigured
+    ? "Key available"
+    : "Not configured";
+  telegramConfigStatus.textContent = state.settings.telegramConfigured
+    ? `Telegram ready${state.settings.telegramEnabled ? "" : " (disabled)"}`
+    : state.settings.telegramEnabled
+      ? "Telegram is enabled but still missing a token or chat ID."
+      : "Telegram is disabled.";
+  discordConfigStatus.textContent = state.settings.discordConfigured
+    ? `Discord ready${state.settings.discordEnabled ? "" : " (disabled)"}`
+    : state.settings.discordEnabled
+      ? "Discord is enabled but still missing a webhook URL."
+      : "Discord is disabled.";
 }
 
 function renderRuntime() {
@@ -1513,19 +1442,80 @@ function populateChainSelectors() {
   }
 }
 
-function updateAbiStatus() {
+function parseAbiEntries(value) {
+  const parsed = JSON.parse(value);
+  return Array.isArray(parsed) ? parsed : parsed.abi || [];
+}
+
+function suggestFunctionFromAbi(abiEntries) {
+  const functions = abiEntries.filter((item) => item?.type === "function" && item.name);
+  const currentFunction = taskFunctionInput.value.trim();
+
+  if (currentFunction && functions.some((item) => item.name === currentFunction)) {
+    return "";
+  }
+
+  return (
+    functions.find((item) => item.name === "mint")?.name ||
+    functions.find((item) => /mint/i.test(item.name))?.name ||
+    functions[0]?.name ||
+    ""
+  );
+}
+
+function updateAbiStatus(sourceLabel = "") {
   if (!taskAbiInput.value.trim()) {
     abiStatus.textContent = "Paste JSON or load a file.";
     return;
   }
 
   try {
-    const parsed = JSON.parse(taskAbiInput.value);
-    const abi = Array.isArray(parsed) ? parsed : parsed.abi || [];
+    const abi = parseAbiEntries(taskAbiInput.value);
     const functionCount = abi.filter((item) => item.type === "function").length;
-    abiStatus.textContent = `ABI loaded · ${pluralize(functionCount, "function")}`;
+    abiStatus.textContent = `ABI loaded - ${pluralize(functionCount, "function")}${
+      sourceLabel ? ` - ${sourceLabel}` : ""
+    }`;
   } catch {
     abiStatus.textContent = "ABI JSON is not valid yet.";
+  }
+}
+
+async function fetchAbiForCurrentTask() {
+  const chainKey = taskChainInput.value;
+  const address = taskContractInput.value.trim();
+
+  if (!chainKey) {
+    showToast("Choose a chain before fetching ABI data.", "error", "Explorer ABI");
+    return;
+  }
+
+  if (!address) {
+    showToast("Enter a contract address before fetching ABI data.", "error", "Explorer ABI");
+    return;
+  }
+
+  const idleLabel = fetchAbiButton.textContent;
+  fetchAbiButton.disabled = true;
+  fetchAbiButton.textContent = "Fetching...";
+  abiStatus.textContent = "Fetching ABI from explorer...";
+
+  try {
+    const payload = await request(
+      `/api/explorer/abi?chainKey=${encodeURIComponent(chainKey)}&address=${encodeURIComponent(address)}`
+    );
+    taskAbiInput.value = JSON.stringify(payload.abi, null, 2);
+    const suggestedFunction = suggestFunctionFromAbi(payload.abi || []);
+    if (suggestedFunction) {
+      taskFunctionInput.value = suggestedFunction;
+    }
+
+    updateAbiStatus(payload.provider || "Explorer");
+    showToast(`ABI loaded from ${payload.provider || "the explorer"}.`, "success", "ABI Loaded");
+  } catch {
+    updateAbiStatus();
+  } finally {
+    fetchAbiButton.disabled = false;
+    fetchAbiButton.textContent = idleLabel;
   }
 }
 
@@ -1571,6 +1561,8 @@ function openTaskModal(task = null) {
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
   taskAbiFileInput.value = "";
+  fetchAbiButton.disabled = false;
+  fetchAbiButton.textContent = "Fetch from Explorer";
 
   updateAbiStatus();
   renderWalletSelector(task?.walletIds || []);
@@ -1690,7 +1682,6 @@ loginForm.addEventListener("submit", async (event) => {
 
     setAuthState(true, payload.user || null, true);
     setLoginStatus("Authenticated. Secure state sync is active.");
-    ensureCanvasScene();
     initializeMotionSurfaces(document);
     await loadState();
     connectEvents();
@@ -1836,10 +1827,35 @@ settingsForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         profileName: profileNameInput.value,
         theme: themeInput.value,
-        resultsPath: resultsPathInput.value
+        resultsPath: resultsPathInput.value,
+        explorerApiKey: explorerApiKeyInput.value,
+        telegramEnabled: telegramEnabledInput.checked,
+        telegramBotToken: telegramBotTokenInput.value,
+        telegramChatId: telegramChatIdInput.value,
+        discordEnabled: discordEnabledInput.checked,
+        discordWebhookUrl: discordWebhookUrlInput.value,
+        alertOnRunStart: alertOnStartInput.checked,
+        alertOnRunSuccess: alertOnSuccessInput.checked,
+        alertOnRunFailure: alertOnFailureInput.checked,
+        alertOnRunStop: alertOnStopInput.checked
       })
     });
-    showToast("Local operator settings saved.", "success", "Settings Updated");
+    explorerApiKeyInput.value = "";
+    telegramBotTokenInput.value = "";
+    telegramChatIdInput.value = "";
+    discordWebhookUrlInput.value = "";
+    showToast("Local operator settings and integrations saved.", "success", "Settings Updated");
+  } catch {}
+});
+
+testAlertsButton.addEventListener("click", async () => {
+  try {
+    const payload = await request("/api/control/test-alerts", { method: "POST" });
+    showToast(
+      `Delivered via ${(payload.result?.channels || []).join(", ") || "configured channels"}.`,
+      "success",
+      "Test Alert Sent"
+    );
   } catch {}
 });
 
@@ -1869,6 +1885,10 @@ taskChainInput.addEventListener("change", () => {
 });
 
 taskAbiInput.addEventListener("input", updateAbiStatus);
+
+fetchAbiButton.addEventListener("click", () => {
+  fetchAbiForCurrentTask().catch(() => {});
+});
 
 taskAbiFileInput.addEventListener("change", async () => {
   const file = taskAbiFileInput.files?.[0];
@@ -1928,7 +1948,6 @@ loadSession()
       return;
     }
 
-    ensureCanvasScene();
     initializeMotionSurfaces(document);
     await loadState();
     populateChainSelectors();

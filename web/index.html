@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <canvas id="fx-canvas" class="fx-canvas" aria-hidden="true"></canvas>
     <div class="noise-layer" aria-hidden="true"></div>
     <div class="scanline-layer" aria-hidden="true"></div>
 
@@ -354,25 +353,114 @@
           <div class="view-header">
             <div>
               <h2>Settings</h2>
-              <p class="view-subtitle">Local profile details and result export path.</p>
+              <p class="view-subtitle">Local profile details, outbound alerts, and explorer-backed ABI tools.</p>
             </div>
           </div>
 
           <section class="surface" data-tilt>
             <form id="settings-form" class="settings-panel">
-              <div class="settings-item">
-                <label>Profile</label>
-                <input id="profile-name-input" type="text" />
+              <div class="form-grid three">
+                <div class="settings-item">
+                  <label>Profile</label>
+                  <input id="profile-name-input" type="text" />
+                </div>
+                <div class="settings-item">
+                  <label>Theme</label>
+                  <input id="theme-input" type="text" />
+                </div>
+                <div class="settings-item">
+                  <label>Results Path</label>
+                  <input id="results-path-input" type="text" />
+                </div>
               </div>
-              <div class="settings-item">
-                <label>Theme</label>
-                <input id="theme-input" type="text" />
+
+              <section class="surface inset-surface">
+                <div class="surface-header compact">
+                  <div>
+                    <h4>Explorer ABI Fetch</h4>
+                    <p class="helper-copy">Save an Etherscan V2 API key to pull verified ABI JSON from the task builder.</p>
+                  </div>
+                  <span id="explorer-config-status" class="muted-copy">Not configured</span>
+                </div>
+                <label>
+                  <span>Explorer API Key</span>
+                  <input id="explorer-api-key-input" type="password" placeholder="Leave blank to keep the saved key" />
+                </label>
+              </section>
+
+              <section class="surface inset-surface">
+                <div class="surface-header compact">
+                  <div>
+                    <h4>Alert Channels</h4>
+                    <p class="helper-copy">Leave secret fields blank to keep their current server-side values.</p>
+                  </div>
+                </div>
+
+                <div class="form-grid two">
+                  <label class="toggle-card toggle-card-inline">
+                    <input id="telegram-enabled-input" type="checkbox" />
+                    <span>Enable Telegram Alerts</span>
+                  </label>
+                  <label class="toggle-card toggle-card-inline">
+                    <input id="discord-enabled-input" type="checkbox" />
+                    <span>Enable Discord Alerts</span>
+                  </label>
+                </div>
+
+                <div class="form-grid two">
+                  <label>
+                    <span>Telegram Bot Token</span>
+                    <input id="telegram-bot-token-input" type="password" placeholder="123456:ABC..." />
+                  </label>
+                  <label>
+                    <span>Telegram Chat ID</span>
+                    <input id="telegram-chat-id-input" type="text" placeholder="-1001234567890" />
+                  </label>
+                </div>
+                <p id="telegram-config-status" class="helper-copy">Telegram is disabled.</p>
+
+                <label>
+                  <span>Discord Webhook URL</span>
+                  <input
+                    id="discord-webhook-url-input"
+                    type="password"
+                    placeholder="https://discord.com/api/webhooks/..."
+                  />
+                </label>
+                <p id="discord-config-status" class="helper-copy">Discord is disabled.</p>
+              </section>
+
+              <section class="surface inset-surface">
+                <div class="surface-header compact">
+                  <div>
+                    <h4>Alert Events</h4>
+                    <p class="helper-copy">Choose which run milestones should trigger outbound notifications.</p>
+                  </div>
+                </div>
+                <div class="form-grid four">
+                  <label class="toggle-card toggle-card-inline">
+                    <input id="alert-on-start-input" type="checkbox" checked />
+                    <span>Run Start</span>
+                  </label>
+                  <label class="toggle-card toggle-card-inline">
+                    <input id="alert-on-success-input" type="checkbox" checked />
+                    <span>Run Success</span>
+                  </label>
+                  <label class="toggle-card toggle-card-inline">
+                    <input id="alert-on-failure-input" type="checkbox" checked />
+                    <span>Run Failure</span>
+                  </label>
+                  <label class="toggle-card toggle-card-inline">
+                    <input id="alert-on-stop-input" type="checkbox" checked />
+                    <span>Run Stop</span>
+                  </label>
+                </div>
+              </section>
+
+              <div class="settings-actions">
+                <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
+                <button id="test-alerts-button" class="ghost-button fx-button" type="button">Send Test Alert</button>
               </div>
-              <div class="settings-item">
-                <label>Results Path</label>
-                <input id="results-path-input" type="text" />
-              </div>
-              <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
             </form>
           </section>
         </section>
@@ -481,7 +569,10 @@
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <h4>ABI JSON</h4>
-              <span id="abi-status" class="muted-copy">Paste JSON or load a file.</span>
+              <div class="surface-actions">
+                <button id="fetch-abi-button" class="ghost-button fx-button" type="button">Fetch from Explorer</button>
+                <span id="abi-status" class="muted-copy">Paste JSON or load a file.</span>
+              </div>
             </div>
             <div id="abi-dropzone" class="dropzone">Drop ABI JSON here or use the file picker.</div>
             <textarea id="task-abi-input" rows="7" placeholder='[{"inputs":[],"name":"mint","type":"function"}]'></textarea>

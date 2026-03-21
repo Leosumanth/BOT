@@ -26,6 +26,8 @@ It is designed as a reusable template for contracts that expose a mint function 
 - optionally waits for the transaction receipt
 - includes a Postgres-backed dashboard with admin login
 - encrypts dashboard-imported wallet secrets before storing them
+- can send Telegram and Discord alerts for run lifecycle events
+- can fetch verified contract ABI JSON from explorer APIs inside the dashboard
 
 ## Setup
 
@@ -69,6 +71,10 @@ Copy-Item .env.example .env
 - `SESSION_TTL_HOURS`: dashboard session lifetime, defaults to `168`
 - `COOKIE_SECURE`: optional cookie override, use `true` behind HTTPS or `false` for plain local HTTP
 - `DEFAULT_RPC_CHAIN_KEY`: chain key assigned to env-provided RPC nodes inside the dashboard, defaults to `base_sepolia`
+- `ETHERSCAN_API_KEY`: optional fallback explorer API key used for dashboard ABI fetches
+- `TELEGRAM_BOT_TOKEN`: optional fallback Telegram bot token for dashboard alerts
+- `TELEGRAM_CHAT_ID`: optional fallback Telegram chat ID for dashboard alerts
+- `DISCORD_WEBHOOK_URL`: optional fallback Discord webhook URL for dashboard alerts
 - `RPC_URL`: a single JSON-RPC endpoint
 - `RPC_URLS`: optional comma-separated list of RPC endpoints for failover
 - `PRIVATE_KEY`: a single wallet private key
@@ -221,6 +227,7 @@ npm start
 Set `BOT_MODE=bot` or `BOT_MODE=dashboard` if you want to force one mode explicitly.
 
 The dashboard now stores tasks, RPC nodes, sessions, and encrypted imported wallets in Postgres. Env-provided wallets and RPC URLs still load at runtime without being copied into the database.
+Explorer keys and alert credentials can be supplied from `.env` or saved from the dashboard settings view. Dashboard-saved credentials are encrypted server-side and only their configured status is exposed back to the browser.
 
 ## Important notes
 

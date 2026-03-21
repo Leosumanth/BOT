@@ -96,7 +96,6 @@ body[data-auth-state="locked"] .app-shell {
   user-select: none;
 }
 
-body[data-auth-state="locked"] .fx-canvas,
 body[data-auth-state="locked"] .noise-layer,
 body[data-auth-state="locked"] .scanline-layer {
   display: none;
@@ -134,16 +133,11 @@ body[data-auth-state="locked"] .scanline-layer {
   margin-top: 6px;
 }
 
-.fx-canvas,
 .noise-layer,
 .scanline-layer {
   position: fixed;
   inset: 0;
   pointer-events: none;
-}
-
-.fx-canvas {
-  z-index: 0;
 }
 
 .noise-layer {
@@ -730,6 +724,14 @@ body[data-auth-state="locked"] .scanline-layer {
   margin-bottom: 12px;
 }
 
+.surface-actions,
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .dashboard-cards,
 .dashboard-insights {
   display: grid;
@@ -1124,6 +1126,10 @@ body[data-auth-state="locked"] .scanline-layer {
 
 .settings-item {
   padding: 16px;
+}
+
+.settings-actions {
+  justify-content: flex-end;
 }
 
 .empty-state {

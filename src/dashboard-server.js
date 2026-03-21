@@ -9,6 +9,14 @@ const { AbortRunError, formatError, runMintBot } = require("./bot");
 const { defaultInputValues, normalizeConfig } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
 const {
+  buildClientSettings,
+  fetchAbiFromExplorer,
+  normalizeDashboardSettings,
+  resolveIntegrationSecrets,
+  secretStorageKeys,
+  sendConfiguredAlert
+} = require("./integrations");
+const {
   decryptSecret,
   encryptSecret,
   generateSessionToken,
@@ -36,6 +44,7 @@ const chainCatalog = [
 let database = null;
 let initialized = false;
 let appState = null;
+let integrationSecrets = {};
 let runController = null;
 let activeTaskId = null;
 let liveLogs = [];
@@ -371,6 +380,58 @@ function mergeRpcInventories(storedRpcNodes, envRpcNodes) {
   return merged;
 }
 
+function chainLabel(chainKey) {
+  return chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey || "Unknown";
+}
+
+async function reloadIntegrationSecrets() {
+  const nextSecrets = {};
+
+  for (const [secretName, storageKey] of Object.entries(secretStorageKeys)) {
+    const ciphertext = await database.getSecret(storageKey);
+    if (!ciphertext) {
+      continue;
+    }
+
+    nextSecrets[secretName] = decryptSecret(ciphertext);
+  }
+
+  integrationSecrets = nextSecrets;
+}
+
+function buildPublicSettings() {
+  return buildClientSettings(appState?.settings, integrationSecrets);
+}
+
+function hasTelegramAlertsConfigured() {
+  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+  return Boolean(resolvedSecrets.telegramBotToken && resolvedSecrets.telegramChatId);
+}
+
+function hasDiscordAlertsConfigured() {
+  return Boolean(resolveIntegrationSecrets(integrationSecrets).discordWebhookUrl);
+}
+
+async function notifyRunEvent(eventType, context = {}) {
+  try {
+    await sendConfiguredAlert({
+      settings: appState.settings,
+      storedSecrets: integrationSecrets,
+      eventType,
+      task: context.task,
+      chainLabel: chainLabel(context.task?.chainKey),
+      summary: context.summary,
+      error: context.error
+    });
+  } catch (error) {
+    pushLog({
+      level: "error",
+      message: `Alert dispatch failed: ${formatError(error)}`,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
 function extractPersistentState() {
   return normalizePersistentState({
     tasks: appState.tasks,
@@ -384,6 +445,7 @@ async function reloadAppState() {
   const storedWallets = await database.listWallets();
   const { records: envWallets } = buildEnvWalletEntries();
   const envRpcNodes = buildEnvRpcNodes();
+  await reloadIntegrationSecrets();
 
   appState = {
     ...persistentState,
@@ -699,6 +761,20 @@ function buildTelemetry() {
       detail: "One or more priority tasks are missing required inputs or RPC coverage."
     });
   }
+  if (appState.settings.telegramEnabled && !hasTelegramAlertsConfigured()) {
+    alerts.push({
+      severity: "warning",
+      title: "Telegram alerts need credentials",
+      detail: "Save both a Telegram bot token and chat ID before enabling Telegram delivery."
+    });
+  }
+  if (appState.settings.discordEnabled && !hasDiscordAlertsConfigured()) {
+    alerts.push({
+      severity: "warning",
+      title: "Discord alerts need a webhook",
+      detail: "Add a Discord webhook URL in settings before enabling Discord delivery."
+    });
+  }
   if (activeTask) {
     alerts.push({
       severity: "info",
@@ -749,7 +825,7 @@ function buildPublicState(includeDefaults = false) {
     tasks: appState.tasks.map(buildTaskResponse),
     wallets: appState.wallets,
     rpcNodes: appState.rpcNodes,
-    settings: appState.settings,
+    settings: buildPublicSettings(),
     chains: chainCatalog,
     telemetry: buildTelemetry(),
     runState: getRunState(),
@@ -1056,6 +1132,9 @@ async function handleTaskRun(taskId, response) {
     });
 
     sendJson(response, 200, { ok: true });
+    void notifyRunEvent("run_start", {
+      task: getTaskById(taskId)
+    });
 
     runMintBot(config, {
       signal: runController.signal,
@@ -1084,6 +1163,10 @@ async function handleTaskRun(taskId, response) {
             ...(taskAfterRun.history || [])
           ].slice(0, 8)
         });
+        await notifyRunEvent("run_success", {
+          task: getTaskById(taskId),
+          summary
+        });
       })
       .catch(async (error) => {
         const stopped = error instanceof AbortRunError || runController?.signal.aborted;
@@ -1098,6 +1181,10 @@ async function handleTaskRun(taskId, response) {
           level: "error",
           message: formatError(error),
           timestamp: new Date().toISOString()
+        });
+        await notifyRunEvent(stopped ? "run_stopped" : "run_failure", {
+          task: getTaskById(taskId),
+          error: formatError(error)
         });
       })
       .catch(reportBackgroundError)
@@ -1148,6 +1235,16 @@ async function handleTaskSave(request, response) {
 
     if (!task.abiJson) {
       throw new Error("ABI JSON is required");
+    }
+
+    try {
+      const parsedAbi = JSON.parse(task.abiJson);
+      const abiEntries = Array.isArray(parsedAbi) ? parsedAbi : parsedAbi?.abi;
+      if (!Array.isArray(abiEntries)) {
+        throw new Error("ABI must be a JSON array or an object with an abi array");
+      }
+    } catch (error) {
+      throw new Error(`ABI JSON is invalid: ${formatError(error)}`);
     }
 
     if ((task.walletIds || []).length === 0) {
@@ -1376,22 +1473,126 @@ async function handleRpcPoolTest(response) {
   });
 }
 
+async function handleAlertTest(response) {
+  try {
+    const result = await sendConfiguredAlert({
+      settings: appState.settings,
+      storedSecrets: integrationSecrets,
+      eventType: "test",
+      task: {
+        name: "Dashboard connectivity check",
+        chainKey: appState.tasks[0]?.chainKey || "base_sepolia",
+        contractAddress: "",
+        walletCount: appState.wallets.length
+      }
+    });
+
+    if (result.attempted === 0) {
+      throw new Error("Enable and configure Telegram or Discord alerts in settings first.");
+    }
+
+    pushLog({
+      level: "info",
+      message: `Test alert sent via ${result.channels.join(", ")}`,
+      timestamp: new Date().toISOString()
+    });
+    sendJson(response, 200, { ok: true, result });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleExplorerAbiLookup(url, response) {
+  try {
+    const chainKey = String(url.searchParams.get("chainKey") || "").trim();
+    const address = String(url.searchParams.get("address") || "").trim();
+
+    if (!chainKey) {
+      throw new Error("Chain is required for explorer ABI fetch");
+    }
+
+    if (!address) {
+      throw new Error("Contract address is required for explorer ABI fetch");
+    }
+
+    const chain = chainCatalog.find((entry) => entry.key === chainKey);
+    if (!chain?.chainId) {
+      throw new Error(`Explorer ABI fetch is not configured for chain ${chainKey}`);
+    }
+
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const result = await fetchAbiFromExplorer({
+      chainId: chain.chainId,
+      address,
+      apiKey: resolvedSecrets.explorerApiKey
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      abi: result.abi,
+      chainKey,
+      chainLabel: chain.label,
+      provider: "Etherscan V2"
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleSettingsSave(request, response) {
   try {
     const payload = await readJsonBody(request);
-
-    appState.settings = {
+    const nextSettings = normalizeDashboardSettings({
       ...appState.settings,
-      profileName: String(payload.profileName || appState.settings.profileName || "local").trim(),
-      theme: String(payload.theme || appState.settings.theme || "quantum-operator").trim(),
-      resultsPath: String(
-        payload.resultsPath || appState.settings.resultsPath || "./dist/mint-results.json"
-      ).trim()
+      profileName: payload.profileName,
+      theme: payload.theme,
+      resultsPath: payload.resultsPath,
+      telegramEnabled: payload.telegramEnabled,
+      discordEnabled: payload.discordEnabled,
+      alertOnRunStart: payload.alertOnRunStart,
+      alertOnRunSuccess: payload.alertOnRunSuccess,
+      alertOnRunFailure: payload.alertOnRunFailure,
+      alertOnRunStop: payload.alertOnRunStop
+    });
+    const nextSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const secretInputs = {
+      explorerApiKey: String(payload.explorerApiKey || "").trim(),
+      telegramBotToken: String(payload.telegramBotToken || "").trim(),
+      telegramChatId: String(payload.telegramChatId || "").trim(),
+      discordWebhookUrl: String(payload.discordWebhookUrl || "").trim()
     };
 
+    Object.entries(secretInputs).forEach(([secretName, value]) => {
+      if (!value) {
+        return;
+      }
+
+      nextSecrets[secretName] = value;
+    });
+
+    if (nextSettings.telegramEnabled && (!nextSecrets.telegramBotToken || !nextSecrets.telegramChatId)) {
+      throw new Error("Telegram alerts require both a bot token and a chat ID.");
+    }
+
+    if (nextSettings.discordEnabled && !nextSecrets.discordWebhookUrl) {
+      throw new Error("Discord alerts require a webhook URL.");
+    }
+
+    appState.settings = nextSettings;
+
     await persistAppState();
+
+    for (const [secretName, value] of Object.entries(secretInputs)) {
+      if (!value) {
+        continue;
+      }
+
+      await database.upsertSecret(secretStorageKeys[secretName], encryptSecret(value));
+      integrationSecrets[secretName] = value;
+    }
+
     emitState();
-    sendJson(response, 200, { ok: true });
+    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
   }
@@ -1697,6 +1898,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/control/test-alerts") {
+      await handleAlertTest(response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/control/snapshot") {
       handleSnapshot(response);
       return;
@@ -1734,6 +1940,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/settings") {
       await handleSettingsSave(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/explorer/abi") {
+      await handleExplorerAbiLookup(url, response);
       return;
     }
 
