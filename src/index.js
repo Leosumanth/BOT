@@ -8,8 +8,14 @@ async function main() {
   await runMintBot(config);
 }
 
-main().catch((error) => {
-  console.error("Mint bot failed:");
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error("Mint bot failed:");
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  main
+};

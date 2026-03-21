@@ -7,8 +7,6 @@ const { ethers } = require("ethers");
 const { AbortRunError, formatError, runMintBot } = require("./bot");
 const { defaultInputValues, normalizeConfig } = require("./config");
 
-const host = process.env.HOST || "127.0.0.1";
-const port = Number(process.env.PORT || 3000);
 const webRoot = path.resolve(process.cwd(), "web");
 const statePath = path.resolve(process.cwd(), "dist", "dashboard-state.json");
 
@@ -1019,6 +1017,39 @@ const server = http.createServer(async (request, response) => {
   response.end("Not found");
 });
 
-server.listen(port, host, () => {
-  console.log(`Mint dashboard running at http://${host}:${port}`);
-});
+function resolveHost() {
+  if (process.env.HOST) {
+    return process.env.HOST;
+  }
+
+  return process.env.PORT ? "0.0.0.0" : "127.0.0.1";
+}
+
+function resolvePort() {
+  return Number(process.env.PORT || 3000);
+}
+
+function startServer() {
+  if (server.listening) {
+    return server;
+  }
+
+  const host = resolveHost();
+  const port = resolvePort();
+
+  server.listen(port, host, () => {
+    console.log(`Mint dashboard running at http://${host}:${port}`);
+  });
+
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  resolveHost,
+  resolvePort,
+  startServer
+};

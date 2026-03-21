@@ -57,6 +57,7 @@ Copy-Item .env.example .env
 
 ## Environment variables
 
+- `BOT_MODE`: optional startup override, use `bot` for the CLI minter or `dashboard` for the web UI
 - `RPC_URL`: a single JSON-RPC endpoint
 - `RPC_URLS`: optional comma-separated list of RPC endpoints for failover
 - `PRIVATE_KEY`: a single wallet private key
@@ -95,6 +96,8 @@ Copy-Item .env.example .env
 - `CONTINUE_ON_ERROR`: continue sequential runs after a wallet fails
 - `RESULTS_PATH`: optional JSON output path for a summary file
 - `MIN_BALANCE_ETH`: optional minimum wallet balance guard
+- `HOST`: optional web dashboard bind host, defaults to `127.0.0.1` locally and `0.0.0.0` when `PORT` is set
+- `PORT`: optional web dashboard port, defaults to `3000`
 
 ## Examples
 
@@ -164,13 +167,13 @@ PRIORITY_BOOST_PERCENT=20
 CLI:
 
 ```bash
-npm start
+npm run bot
 ```
 
 On Windows PowerShell:
 
 ```powershell
-npm.cmd start
+npm.cmd run bot
 ```
 
 Web dashboard:
@@ -186,6 +189,19 @@ npm.cmd run ui
 ```
 
 Then open `http://127.0.0.1:3000`.
+
+Default startup:
+
+```bash
+npm start
+```
+
+`npm start` now chooses a mode automatically:
+
+- it starts the CLI bot when the required bot env vars are present
+- it starts the dashboard on hosted platforms that provide `PORT` but do not have a complete bot configuration
+
+Set `BOT_MODE=bot` or `BOT_MODE=dashboard` if you want to force one mode explicitly.
 
 The dashboard is local-only by default, lets you paste ABI JSON directly, start and stop runs, watch live logs, and review result JSON after the run finishes.
 
