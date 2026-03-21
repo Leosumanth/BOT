@@ -15,10 +15,13 @@ It is designed as a reusable template for contracts that expose a mint function 
 - signs transactions with one or many wallet private keys
 - optionally waits until a specific ISO timestamp before sending
 - supports multiple RPC URLs for failover
+- warms up the provider session before launch
 - optionally simulates the mint transaction before sending
 - supports dry-run mode for preflight checks
 - retries failed mint attempts with a configurable delay
 - can run wallets sequentially or in parallel
+- can poll a contract read function until mint is ready
+- can export run results to a JSON file
 - calls your chosen mint function with custom JSON arguments
 - optionally waits for the transaction receipt
 
@@ -67,6 +70,9 @@ Copy-Item .env.example .env
 - `GAS_LIMIT`: optional gas limit
 - `MAX_FEE_GWEI`: optional EIP-1559 max fee
 - `MAX_PRIORITY_FEE_GWEI`: optional EIP-1559 priority fee
+- `GAS_STRATEGY`: `manual` or `provider`
+- `GAS_BOOST_PERCENT`: boost provider fee suggestions by a percentage
+- `PRIORITY_BOOST_PERCENT`: boost provider priority fee suggestions by a percentage
 - `WAIT_UNTIL_ISO`: optional start time such as `2026-03-21T18:30:00Z`
 - `POLL_INTERVAL_MS`: how often to check the countdown
 - `WAIT_FOR_RECEIPT`: `true` or `false`
@@ -80,6 +86,15 @@ Copy-Item .env.example .env
 - `TX_TIMEOUT_MS`: optional receipt wait timeout
 - `START_JITTER_MS`: random startup delay per wallet, useful in parallel mode
 - `NONCE_OFFSET`: optional nonce offset if you deliberately want to skip ahead
+- `READY_CHECK_FUNCTION`: optional read function to poll before minting
+- `READY_CHECK_ARGS`: JSON array for the ready-check function
+- `READY_CHECK_EXPECTED`: JSON value used when `READY_CHECK_MODE=equals`
+- `READY_CHECK_MODE`: `truthy`, `falsey`, or `equals`
+- `READY_CHECK_INTERVAL_MS`: how often to poll the ready check
+- `WARMUP_RPC`: preload provider state before launch
+- `CONTINUE_ON_ERROR`: continue sequential runs after a wallet fails
+- `RESULTS_PATH`: optional JSON output path for a summary file
+- `MIN_BALANCE_ETH`: optional minimum wallet balance guard
 
 ## Examples
 
@@ -125,6 +140,23 @@ MAX_RETRIES=3
 RETRY_DELAY_MS=1500
 SIMULATE_TRANSACTION=true
 START_JITTER_MS=250
+```
+
+Wait until a sale flag becomes live:
+
+```env
+READY_CHECK_FUNCTION=isPublicSaleOpen
+READY_CHECK_ARGS=[]
+READY_CHECK_MODE=truthy
+READY_CHECK_INTERVAL_MS=500
+```
+
+Use provider gas suggestions with a fee boost:
+
+```env
+GAS_STRATEGY=provider
+GAS_BOOST_PERCENT=15
+PRIORITY_BOOST_PERCENT=20
 ```
 
 ## Run

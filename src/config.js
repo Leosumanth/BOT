@@ -95,6 +95,19 @@ function parseJsonArray(name, fallback = "[]") {
   }
 }
 
+function parseJsonValue(name) {
+  const raw = process.env[name];
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Unable to parse ${name}: ${error.message}`);
+  }
+}
+
 function loadRpcUrls() {
   const raw = optionalString("RPC_URLS") || required("RPC_URL");
   const rpcUrls = parseCsv(raw);
@@ -128,8 +141,31 @@ function loadWalletMode() {
   return mode;
 }
 
+function loadGasStrategy() {
+  const strategy = (process.env.GAS_STRATEGY || "provider").toLowerCase();
+  const supportedStrategies = new Set(["manual", "provider"]);
+
+  if (!supportedStrategies.has(strategy)) {
+    throw new Error("GAS_STRATEGY must be either manual or provider");
+  }
+
+  return strategy;
+}
+
+function loadReadyCheckMode() {
+  const mode = (process.env.READY_CHECK_MODE || "truthy").toLowerCase();
+  const supportedModes = new Set(["truthy", "falsey", "equals"]);
+
+  if (!supportedModes.has(mode)) {
+    throw new Error("READY_CHECK_MODE must be truthy, falsey, or equals");
+  }
+
+  return mode;
+}
+
 function loadConfig() {
   const abiPath = process.env.ABI_PATH || "./abi/contract.json";
+  const pollIntervalMs = optionalNumber("POLL_INTERVAL_MS") || 1000;
 
   return {
     rpcUrls: loadRpcUrls(),
@@ -144,7 +180,7 @@ function loadConfig() {
     maxFeeGwei: optionalNumber("MAX_FEE_GWEI"),
     maxPriorityFeeGwei: optionalNumber("MAX_PRIORITY_FEE_GWEI"),
     waitUntilIso: process.env.WAIT_UNTIL_ISO,
-    pollIntervalMs: optionalNumber("POLL_INTERVAL_MS") || 1000,
+    pollIntervalMs,
     waitForReceipt: optionalBoolean("WAIT_FOR_RECEIPT", true),
     simulateTransaction: optionalBoolean("SIMULATE_TRANSACTION", true),
     dryRun: optionalBoolean("DRY_RUN", false),
@@ -155,7 +191,19 @@ function loadConfig() {
     receiptConfirmations: optionalInteger("RECEIPT_CONFIRMATIONS") || 1,
     txTimeoutMs: optionalInteger("TX_TIMEOUT_MS"),
     startJitterMs: optionalInteger("START_JITTER_MS") || 0,
-    nonceOffset: optionalInteger("NONCE_OFFSET") || 0
+    nonceOffset: optionalInteger("NONCE_OFFSET") || 0,
+    gasStrategy: loadGasStrategy(),
+    gasBoostPercent: optionalNumber("GAS_BOOST_PERCENT") || 0,
+    priorityBoostPercent: optionalNumber("PRIORITY_BOOST_PERCENT") || 0,
+    readyCheckFunction: optionalString("READY_CHECK_FUNCTION"),
+    readyCheckArgs: parseJsonArray("READY_CHECK_ARGS"),
+    readyCheckExpected: parseJsonValue("READY_CHECK_EXPECTED"),
+    readyCheckMode: loadReadyCheckMode(),
+    readyCheckIntervalMs: optionalInteger("READY_CHECK_INTERVAL_MS") || pollIntervalMs,
+    warmupRpc: optionalBoolean("WARMUP_RPC", true),
+    continueOnError: optionalBoolean("CONTINUE_ON_ERROR", false),
+    resultsPath: optionalString("RESULTS_PATH"),
+    minBalanceEth: optionalString("MIN_BALANCE_ETH")
   };
 }
 
