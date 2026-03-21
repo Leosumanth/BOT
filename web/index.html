@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MintBot Local Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-card">
+          <div class="brand-icon">MB</div>
+          <div>
+            <h1>MintBot</h1>
+            <p>Local Operator</p>
+          </div>
+          <span class="version-pill">v2.1</span>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-button active" data-view="dashboard">Dashboard</button>
+          <button class="nav-button" data-view="tasks">Tasks</button>
+          <button class="nav-button" data-view="wallets">Wallets</button>
+          <button class="nav-button" data-view="transfer">Transfer</button>
+          <button class="nav-button" data-view="rpc">RPC Nodes</button>
+          <button class="nav-button" data-view="settings">Settings</button>
+          <button class="nav-button" data-view="admin">Admin</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="account-card">
+            <div class="account-avatar">0x</div>
+            <div>
+              <strong id="account-label">Local Operator</strong>
+              <p id="account-status">Ready</p>
+            </div>
+            <span class="status-dot"></span>
+          </div>
+          <button id="global-stop-button" class="danger-button" type="button">Stop Active Run</button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="view active" data-view-panel="dashboard">
+          <div class="view-header">
+            <div>
+              <h2>Dashboard</h2>
+              <p class="view-subtitle">Mission control for your local mint workflow.</p>
+            </div>
+          </div>
+
+          <div class="dashboard-cards" id="dashboard-stats"></div>
+          <div id="run-insights" class="dashboard-insights"></div>
+
+          <div class="content-grid">
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Recent Tasks</h3>
+              </div>
+              <div id="dashboard-recent-tasks" class="stack-list"></div>
+            </section>
+
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Chain Breakdown</h3>
+              </div>
+              <div id="chain-breakdown" class="stack-list"></div>
+            </section>
+          </div>
+
+          <div class="content-grid">
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Live Activity</h3>
+                <button id="clear-logs-button" class="ghost-button" type="button">Clear</button>
+              </div>
+              <pre id="log-output" class="terminal-panel"></pre>
+            </section>
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Top Wallet Groups</h3>
+              </div>
+              <div id="wallet-group-breakdown" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="tasks">
+          <div class="view-header">
+            <div>
+              <h2>Tasks</h2>
+              <p id="tasks-subtitle" class="view-subtitle">Manage task presets, launch runs, and monitor progress.</p>
+            </div>
+            <div class="header-actions">
+              <input id="task-search-input" class="header-input" type="text" placeholder="Search tasks" />
+              <select id="task-status-filter" class="header-select">
+                <option value="all">All Statuses</option>
+                <option value="draft">Draft</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="done">Done</option>
+              </select>
+              <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
+              <button id="new-task-button" class="primary-button" type="button">New Task</button>
+            </div>
+          </div>
+
+          <div class="batch-bar">
+            <label class="toggle-inline">
+              <input id="batch-toggle" type="checkbox" />
+              <span>Batch</span>
+            </label>
+            <span id="batch-status" class="muted-copy">Batch tools are available for visual planning.</span>
+          </div>
+
+          <div id="task-grid" class="task-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="wallets">
+          <div class="view-header">
+            <div>
+              <h2>Wallets</h2>
+              <p class="view-subtitle">Import and group local wallets for task selection.</p>
+            </div>
+          </div>
+
+          <div class="content-grid">
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Import Wallets</h3>
+              </div>
+              <form id="wallet-import-form" class="stack-form">
+                <label>
+                  <span>Group Name</span>
+                  <input id="wallet-group-input" type="text" placeholder="test" />
+                </label>
+                <label>
+                  <span>Private Keys</span>
+                  <textarea id="wallet-keys-input" rows="8" placeholder="One private key per line"></textarea>
+                </label>
+                <button class="primary-button" type="submit">Import Wallets</button>
+              </form>
+            </section>
+
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Saved Wallets</h3>
+                <span id="wallet-count" class="muted-copy"></span>
+              </div>
+              <div id="wallet-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="transfer">
+          <div class="view-header">
+            <div>
+              <h2>Transfer</h2>
+              <p class="view-subtitle">Review transfer-ready tasks and post-mint routing options.</p>
+            </div>
+          </div>
+          <section class="surface">
+            <div class="empty-state">
+              <h3>Transfer routing stays local</h3>
+              <p>
+                Tasks can store a post-mint transfer toggle and destination. This panel is a
+                planning board for those routes.
+              </p>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view-panel="rpc">
+          <div class="view-header">
+            <div>
+              <h2>RPC Nodes</h2>
+              <p class="view-subtitle">Build chain-specific failover pools for every task.</p>
+            </div>
+          </div>
+
+          <div class="content-grid">
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Add RPC Node</h3>
+              </div>
+              <form id="rpc-form" class="stack-form">
+                <label>
+                  <span>Name</span>
+                  <input id="rpc-name-input" type="text" placeholder="Base Sepolia Primary" />
+                </label>
+                <label>
+                  <span>Chain</span>
+                  <select id="rpc-chain-input"></select>
+                </label>
+                <label>
+                  <span>URL</span>
+                  <input id="rpc-url-input" type="text" placeholder="https://..." />
+                </label>
+                <button class="primary-button" type="submit">Save RPC Node</button>
+              </form>
+            </section>
+
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Configured Nodes</h3>
+              </div>
+              <div id="rpc-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="settings">
+          <div class="view-header">
+            <div>
+              <h2>Settings</h2>
+              <p class="view-subtitle">Local profile details and result export path.</p>
+            </div>
+          </div>
+          <section class="surface">
+            <form id="settings-form" class="settings-panel">
+              <div class="settings-item">
+                <label>Profile</label>
+                <input id="profile-name-input" type="text" />
+              </div>
+              <div class="settings-item">
+                <label>Theme</label>
+                <input id="theme-input" type="text" />
+              </div>
+              <div class="settings-item">
+                <label>Results Path</label>
+                <input id="results-path-input" type="text" />
+              </div>
+              <button id="save-settings-button" class="primary-button" type="submit">Save Settings</button>
+            </form>
+          </section>
+        </section>
+
+        <section class="view" data-view-panel="admin">
+          <div class="view-header">
+            <div>
+              <h2>Admin</h2>
+              <p class="view-subtitle">Quick inspection of saved local data and runtime state.</p>
+            </div>
+          </div>
+          <div class="content-grid">
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Runtime State</h3>
+              </div>
+              <pre id="runtime-output" class="code-panel"></pre>
+            </section>
+            <section class="surface">
+              <div class="surface-header">
+                <h3>Last Results</h3>
+              </div>
+              <pre id="results-output" class="code-panel">No results yet.</pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="task-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="modal-title">New Task</h3>
+            <p class="muted-copy">Build a reusable task preset for local mint runs.</p>
+          </div>
+          <button id="close-modal-button" class="icon-button" type="button">x</button>
+        </div>
+
+        <form id="task-form" class="modal-form">
+          <input id="task-id-input" type="hidden" />
+
+          <div class="form-grid single">
+            <label>
+              <span>Task Name</span>
+              <input id="task-name-input" type="text" placeholder="e.g. Mint Project ABC" />
+            </label>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Priority</span>
+              <select id="task-priority-input">
+                <option value="standard">Standard</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label>
+              <span>Tags</span>
+              <input id="task-tags-input" type="text" placeholder="allowlist, base, fast" />
+            </label>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Contract Address</span>
+              <input id="task-contract-input" type="text" placeholder="0x..." />
+            </label>
+            <label>
+              <span>Chain</span>
+              <select id="task-chain-input"></select>
+            </label>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Quantity / Wallet</span>
+              <input id="task-quantity-input" type="number" min="1" value="1" />
+            </label>
+            <label>
+              <span>Price (ETH)</span>
+              <input id="task-price-input" type="text" value="0" />
+            </label>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Contract ABI</span>
+              <input id="task-abi-file-input" type="file" accept=".json,application/json" />
+            </label>
+            <label>
+              <span>Platform</span>
+              <select id="task-platform-input">
+                <option>Generic EVM (auto-detect)</option>
+                <option>ERC721 Public Mint</option>
+                <option>ERC1155 Mint</option>
+                <option>Allowlist Mint</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>ABI JSON</h4>
+              <span id="abi-status" class="muted-copy">Paste JSON or load a file.</span>
+            </div>
+            <div id="abi-dropzone" class="dropzone">Drop ABI JSON here or use the file picker.</div>
+            <textarea id="task-abi-input" rows="7" placeholder='[{"inputs":[],"name":"mint","type":"function"}]'></textarea>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Mint Function</span>
+              <input id="task-function-input" type="text" value="mint" />
+            </label>
+            <label>
+              <span>Mint Args JSON</span>
+              <input id="task-args-input" type="text" value="[1]" />
+            </label>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>Wallets</h4>
+              <button id="select-all-wallets-button" class="ghost-button" type="button">Select All</button>
+            </div>
+            <div id="wallet-group-tabs" class="group-tabs"></div>
+            <div id="wallet-selector" class="wallet-selector"></div>
+            <p id="wallet-selection-count" class="selection-copy">0 wallets selected</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>RPC Nodes</h4>
+              <button id="select-all-rpc-button" class="ghost-button" type="button">Select All</button>
+            </div>
+            <div id="rpc-selector" class="wallet-selector"></div>
+            <p id="rpc-selection-count" class="selection-copy">0 RPC nodes selected</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>Schedule and Execution</h4>
+            </div>
+            <div class="form-grid three">
+              <label class="toggle-stack">
+                <span>Timestamp to Start</span>
+                <label class="switch-row">
+                  <input id="task-schedule-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+              <label>
+                <span>Start Date and Time</span>
+                <input id="task-start-time-input" type="datetime-local" />
+              </label>
+              <label>
+                <span>Wallet Mode</span>
+                <select id="task-wallet-mode-input">
+                  <option value="parallel">Parallel</option>
+                  <option value="sequential">Sequential</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-grid four">
+            <label>
+              <span>Retries</span>
+              <input id="task-retries-input" type="number" value="1" />
+            </label>
+            <label>
+              <span>Retry Delay ms</span>
+              <input id="task-retry-delay-input" type="number" value="1000" />
+            </label>
+            <label>
+              <span>Start Jitter ms</span>
+              <input id="task-jitter-input" type="number" value="0" />
+            </label>
+            <label>
+              <span>Min Balance ETH</span>
+              <input id="task-min-balance-input" type="text" />
+            </label>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>Gas and Validation</h4>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Gas Strategy</span>
+                <select id="task-gas-strategy-input">
+                  <option value="provider">Provider</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label>
+                <span>Manual Gas Limit</span>
+                <input id="task-gas-limit-input" type="text" placeholder="200000" />
+              </label>
+              <label>
+                <span>Poll Interval ms</span>
+                <input id="task-poll-interval-input" type="number" value="1000" />
+              </label>
+            </div>
+            <div class="form-grid four">
+              <label>
+                <span>Max Fee Gwei</span>
+                <input id="task-max-fee-input" type="text" />
+              </label>
+              <label>
+                <span>Priority Fee Gwei</span>
+                <input id="task-priority-fee-input" type="text" />
+              </label>
+              <label>
+                <span>Gas Boost %</span>
+                <input id="task-gas-boost-input" type="number" value="0" />
+              </label>
+              <label>
+                <span>Priority Boost %</span>
+                <input id="task-priority-boost-input" type="number" value="0" />
+              </label>
+            </div>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>Ready Check and Routing</h4>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Ready Check Function</span>
+                <input id="task-ready-function-input" type="text" placeholder="isPublicSaleOpen" />
+              </label>
+              <label>
+                <span>Ready Check Args</span>
+                <input id="task-ready-args-input" type="text" value="[]" />
+              </label>
+              <label>
+                <span>Ready Check Mode</span>
+                <select id="task-ready-mode-input">
+                  <option value="truthy">Truthy</option>
+                  <option value="falsey">Falsey</option>
+                  <option value="equals">Equals</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Ready Expected</span>
+                <input id="task-ready-expected-input" type="text" />
+              </label>
+              <label>
+                <span>Ready Check Interval ms</span>
+                <input id="task-ready-interval-input" type="number" value="1000" />
+              </label>
+              <label>
+                <span>Transfer Address</span>
+                <input id="task-transfer-address-input" type="text" placeholder="0x..." />
+              </label>
+            </div>
+          </div>
+
+          <div class="form-grid four">
+            <label class="toggle-card">
+              <input id="task-simulate-toggle" type="checkbox" checked />
+              <span>Simulate</span>
+            </label>
+            <label class="toggle-card">
+              <input id="task-dry-run-toggle" type="checkbox" />
+              <span>Dry Run</span>
+            </label>
+            <label class="toggle-card">
+              <input id="task-warmup-toggle" type="checkbox" checked />
+              <span>Warmup RPC</span>
+            </label>
+            <label class="toggle-card">
+              <input id="task-transfer-toggle" type="checkbox" />
+              <span>Transfer After Minted</span>
+            </label>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>Notes</h4>
+            </div>
+            <textarea id="task-notes-input" rows="4" placeholder="Optional internal notes, reminders, or playbook steps."></textarea>
+          </div>
+
+          <div class="modal-actions">
+            <button id="cancel-task-button" class="ghost-button" type="button">Cancel</button>
+            <button class="primary-button" type="submit">Create Task</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

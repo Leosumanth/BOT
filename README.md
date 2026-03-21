@@ -161,6 +161,8 @@ PRIORITY_BOOST_PERCENT=20
 
 ## Run
 
+CLI:
+
 ```bash
 npm start
 ```
@@ -170,6 +172,22 @@ On Windows PowerShell:
 ```powershell
 npm.cmd start
 ```
+
+Web dashboard:
+
+```bash
+npm run ui
+```
+
+On Windows PowerShell:
+
+```powershell
+npm.cmd run ui
+```
+
+Then open `http://127.0.0.1:3000`.
+
+The dashboard is local-only by default, lets you paste ABI JSON directly, start and stop runs, watch live logs, and review result JSON after the run finishes.
 
 ## Important notes
 
