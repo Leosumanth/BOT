@@ -51,7 +51,7 @@ async function main() {
     }
 
     const { startServer } = require("./server");
-    startServer();
+    await startServer();
     return;
   }
 

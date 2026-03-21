@@ -1,0 +1,1814 @@
+require("dotenv").config();
+
+const crypto = require("crypto");
+const fs = require("fs");
+const http = require("http");
+const path = require("path");
+const { ethers } = require("ethers");
+const { AbortRunError, formatError, runMintBot } = require("./bot");
+const { defaultInputValues, normalizeConfig } = require("./config");
+const { createDatabase, normalizePersistentState } = require("./database");
+const {
+  decryptSecret,
+  encryptSecret,
+  generateSessionToken,
+  hashPassword,
+  hashToken,
+  isBlank,
+  verifyPassword
+} = require("./security");
+
+const webRoot = path.resolve(process.cwd(), "web");
+const legacyStatePath = path.resolve(process.cwd(), "dist", "dashboard-state.json");
+const sessionCookieName = process.env.SESSION_COOKIE_NAME || "mintbot_session";
+const sessionTtlHours = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 168));
+
+const clients = new Set();
+const chainCatalog = [
+  { key: "ethereum", label: "Ethereum", chainId: 1 },
+  { key: "sepolia", label: "Sepolia", chainId: 11155111 },
+  { key: "base", label: "Base", chainId: 8453 },
+  { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
+  { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
+  { key: "blast", label: "Blast", chainId: 81457 }
+];
+
+let database = null;
+let initialized = false;
+let appState = null;
+let runController = null;
+let activeTaskId = null;
+let liveLogs = [];
+let runStartedAt = null;
+
+function createId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function hashForId(value) {
+  return crypto.createHash("sha1").update(String(value)).digest("hex").slice(0, 12);
+}
+
+function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(payload));
+}
+
+function broadcast(type, payload) {
+  const body = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of clients) {
+    client.write(body);
+  }
+}
+
+function parseList(value) {
+  if (!value) {
+    return [];
+  }
+
+  return String(value)
+    .split(/[\r\n,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function truncateMiddle(value, start = 8, end = 6) {
+  if (!value || value.length <= start + end + 3) {
+    return value || "";
+  }
+
+  return `${value.slice(0, start)}...${value.slice(-end)}`;
+}
+
+function deriveAddress(privateKey) {
+  return new ethers.Wallet(privateKey).address;
+}
+
+function authIsRequired() {
+  return String(process.env.AUTH_REQUIRED || "true").trim().toLowerCase() !== "false";
+}
+
+function parseCookies(request) {
+  const raw = request.headers.cookie;
+  if (!raw) {
+    return {};
+  }
+
+  return raw.split(";").reduce((cookies, entry) => {
+    const [key, ...valueParts] = entry.split("=");
+    if (!key) {
+      return cookies;
+    }
+
+    cookies[key.trim()] = decodeURIComponent(valueParts.join("=").trim());
+    return cookies;
+  }, {});
+}
+
+function shouldUseSecureCookie(request) {
+  if (process.env.COOKIE_SECURE === "true") {
+    return true;
+  }
+
+  if (process.env.COOKIE_SECURE === "false") {
+    return false;
+  }
+
+  const host = String(request?.headers?.host || "");
+  return !/localhost|127\.0\.0\.1/i.test(host);
+}
+
+function appendSetCookie(response, value) {
+  const existing = response.getHeader("Set-Cookie");
+  if (!existing) {
+    response.setHeader("Set-Cookie", [value]);
+    return;
+  }
+
+  const values = Array.isArray(existing) ? existing : [existing];
+  response.setHeader("Set-Cookie", [...values, value]);
+}
+
+function buildSessionCookie(request, value, maxAgeSeconds) {
+  const parts = [`${sessionCookieName}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "SameSite=Lax"];
+  if (typeof maxAgeSeconds === "number") {
+    parts.push(`Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`);
+  }
+  if (shouldUseSecureCookie(request)) {
+    parts.push("Secure");
+  }
+  return parts.join("; ");
+}
+
+function clearSessionCookie(response, request) {
+  appendSetCookie(response, buildSessionCookie(request, "", 0));
+}
+
+function defaultTaskState() {
+  return {
+    id: createId("task"),
+    name: "Untitled Task",
+    contractAddress: "",
+    chainKey: "base_sepolia",
+    quantityPerWallet: 1,
+    priceEth: "0",
+    abiJson: "",
+    platform: "Generic EVM (auto-detect)",
+    priority: "standard",
+    tags: [],
+    notes: "",
+    walletIds: [],
+    rpcNodeIds: [],
+    mintFunction: "mint",
+    mintArgs: "[1]",
+    gasStrategy: "provider",
+    gasLimit: "",
+    maxFeeGwei: "",
+    maxPriorityFeeGwei: "",
+    gasBoostPercent: "0",
+    priorityBoostPercent: "0",
+    simulateTransaction: true,
+    dryRun: false,
+    waitForReceipt: true,
+    warmupRpc: true,
+    continueOnError: false,
+    walletMode: "parallel",
+    useSchedule: false,
+    waitUntilIso: "",
+    readyCheckFunction: "",
+    readyCheckArgs: "[]",
+    readyCheckMode: "truthy",
+    readyCheckExpected: "",
+    readyCheckIntervalMs: "1000",
+    pollIntervalMs: "1000",
+    maxRetries: "1",
+    retryDelayMs: "1000",
+    startJitterMs: "0",
+    minBalanceEth: "",
+    nonceOffset: "0",
+    transferAfterMinted: false,
+    transferAddress: "",
+    status: "draft",
+    progress: {
+      phase: "Ready",
+      percent: 0
+    },
+    summary: {
+      total: 0,
+      success: 0,
+      failed: 0,
+      stopped: 0,
+      hashes: []
+    },
+    history: [],
+    lastRunAt: null,
+    done: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function sanitizeTaskInput(payload, existingTask = null) {
+  const base = existingTask ? { ...existingTask } : defaultTaskState();
+
+  return {
+    ...base,
+    name: String(payload.name || base.name).trim() || "Untitled Task",
+    contractAddress: String(payload.contractAddress || "").trim(),
+    chainKey: String(payload.chainKey || base.chainKey || "base_sepolia"),
+    quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || base.quantityPerWallet || 1)),
+    priceEth: String(payload.priceEth ?? base.priceEth ?? "0").trim() || "0",
+    abiJson: String(payload.abiJson || base.abiJson || "").trim(),
+    platform: String(payload.platform || base.platform || "Generic EVM (auto-detect)"),
+    priority: String(payload.priority || base.priority || "standard"),
+    tags: Array.isArray(payload.tags)
+      ? payload.tags.filter(Boolean)
+      : String(payload.tags || "")
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+    notes: String(payload.notes ?? base.notes ?? "").trim(),
+    walletIds: Array.isArray(payload.walletIds) ? payload.walletIds : base.walletIds || [],
+    rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : base.rpcNodeIds || [],
+    mintFunction: String(payload.mintFunction || base.mintFunction || "mint").trim() || "mint",
+    mintArgs: String(payload.mintArgs || base.mintArgs || "[]").trim() || "[]",
+    gasStrategy: String(payload.gasStrategy || base.gasStrategy || "provider"),
+    gasLimit: String(payload.gasLimit ?? base.gasLimit ?? "").trim(),
+    maxFeeGwei: String(payload.maxFeeGwei ?? base.maxFeeGwei ?? "").trim(),
+    maxPriorityFeeGwei: String(payload.maxPriorityFeeGwei ?? base.maxPriorityFeeGwei ?? "").trim(),
+    gasBoostPercent: String(payload.gasBoostPercent ?? base.gasBoostPercent ?? "0").trim() || "0",
+    priorityBoostPercent: String(
+      payload.priorityBoostPercent ?? base.priorityBoostPercent ?? "0"
+    ).trim() || "0",
+    simulateTransaction: Boolean(payload.simulateTransaction ?? base.simulateTransaction ?? true),
+    dryRun: Boolean(payload.dryRun ?? base.dryRun ?? false),
+    waitForReceipt: Boolean(payload.waitForReceipt ?? base.waitForReceipt ?? true),
+    warmupRpc: Boolean(payload.warmupRpc ?? base.warmupRpc ?? true),
+    continueOnError: Boolean(payload.continueOnError ?? base.continueOnError ?? false),
+    walletMode: String(payload.walletMode || base.walletMode || "parallel"),
+    useSchedule: Boolean(payload.useSchedule ?? base.useSchedule ?? false),
+    waitUntilIso: String(payload.waitUntilIso ?? base.waitUntilIso ?? "").trim(),
+    readyCheckFunction: String(payload.readyCheckFunction ?? base.readyCheckFunction ?? "").trim(),
+    readyCheckArgs: String(payload.readyCheckArgs ?? base.readyCheckArgs ?? "[]").trim() || "[]",
+    readyCheckMode: String(payload.readyCheckMode || base.readyCheckMode || "truthy"),
+    readyCheckExpected: String(payload.readyCheckExpected ?? base.readyCheckExpected ?? "").trim(),
+    readyCheckIntervalMs: String(
+      payload.readyCheckIntervalMs ?? base.readyCheckIntervalMs ?? "1000"
+    ).trim() || "1000",
+    pollIntervalMs: String(payload.pollIntervalMs ?? base.pollIntervalMs ?? "1000").trim() || "1000",
+    maxRetries: String(payload.maxRetries ?? base.maxRetries ?? "1").trim() || "1",
+    retryDelayMs: String(payload.retryDelayMs ?? base.retryDelayMs ?? "1000").trim() || "1000",
+    startJitterMs: String(payload.startJitterMs ?? base.startJitterMs ?? "0").trim() || "0",
+    minBalanceEth: String(payload.minBalanceEth ?? base.minBalanceEth ?? "").trim(),
+    nonceOffset: String(payload.nonceOffset ?? base.nonceOffset ?? "0").trim() || "0",
+    transferAfterMinted: Boolean(payload.transferAfterMinted ?? base.transferAfterMinted ?? false),
+    transferAddress: String(payload.transferAddress ?? base.transferAddress ?? "").trim(),
+    status: payload.status || base.status || "draft",
+    progress: base.progress || { phase: "Ready", percent: 0 },
+    summary: base.summary || { total: 0, success: 0, failed: 0, stopped: 0, hashes: [] },
+    history: base.history || [],
+    lastRunAt: base.lastRunAt || null,
+    done: Boolean(payload.done ?? base.done ?? false),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function buildEnvWalletEntries() {
+  const keys = parseList(process.env.PRIVATE_KEYS || process.env.PRIVATE_KEY);
+  const records = [];
+  const keyMap = new Map();
+  const knownAddresses = new Set();
+  const createdAt = new Date().toISOString();
+
+  keys.forEach((privateKey, index) => {
+    try {
+      const address = deriveAddress(privateKey);
+      const addressLower = address.toLowerCase();
+      if (knownAddresses.has(addressLower)) {
+        return;
+      }
+
+      const id = `wallet_env_${addressLower}`;
+      records.push({
+        id,
+        label: `Env Wallet ${index + 1}`,
+        address,
+        addressShort: truncateMiddle(address),
+        group: "Env",
+        status: "ready",
+        source: "env",
+        hasSecret: true,
+        createdAt,
+        updatedAt: createdAt
+      });
+      keyMap.set(id, privateKey);
+      knownAddresses.add(addressLower);
+    } catch {
+      // Ignore invalid keys from env bootstrapping.
+    }
+  });
+
+  return {
+    records,
+    keyMap
+  };
+}
+
+function buildEnvRpcNodes() {
+  const urls = parseList(process.env.RPC_URLS || process.env.RPC_URL);
+  const chainKey = String(process.env.DEFAULT_RPC_CHAIN_KEY || "base_sepolia").trim() || "base_sepolia";
+  const knownUrls = new Set();
+
+  return urls.reduce((nodes, url, index) => {
+    if (knownUrls.has(url)) {
+      return nodes;
+    }
+
+    nodes.push({
+      id: `rpc_env_${hashForId(url)}`,
+      name: `Env RPC ${index + 1}`,
+      url,
+      chainKey,
+      enabled: true,
+      group: "Env",
+      source: "env",
+      lastHealth: null
+    });
+    knownUrls.add(url);
+    return nodes;
+  }, []);
+}
+
+function mergeWalletInventories(storedWallets, envWallets) {
+  const merged = [...storedWallets];
+  const knownAddresses = new Set(storedWallets.map((wallet) => wallet.address.toLowerCase()));
+
+  envWallets.forEach((wallet) => {
+    if (knownAddresses.has(wallet.address.toLowerCase())) {
+      return;
+    }
+
+    merged.push(wallet);
+    knownAddresses.add(wallet.address.toLowerCase());
+  });
+
+  return merged;
+}
+
+function mergeRpcInventories(storedRpcNodes, envRpcNodes) {
+  const merged = [...storedRpcNodes];
+  const knownUrls = new Set(storedRpcNodes.map((node) => node.url));
+
+  envRpcNodes.forEach((node) => {
+    if (knownUrls.has(node.url)) {
+      return;
+    }
+
+    merged.push(node);
+    knownUrls.add(node.url);
+  });
+
+  return merged;
+}
+
+function extractPersistentState() {
+  return normalizePersistentState({
+    tasks: appState.tasks,
+    rpcNodes: appState.rpcNodes.filter((node) => node.source !== "env"),
+    settings: appState.settings
+  });
+}
+
+async function reloadAppState() {
+  const persistentState = normalizePersistentState(await database.loadState());
+  const storedWallets = await database.listWallets();
+  const { records: envWallets } = buildEnvWalletEntries();
+  const envRpcNodes = buildEnvRpcNodes();
+
+  appState = {
+    ...persistentState,
+    wallets: mergeWalletInventories(storedWallets, envWallets),
+    rpcNodes: mergeRpcInventories(persistentState.rpcNodes, envRpcNodes)
+  };
+}
+
+async function persistAppState() {
+  await database.saveState(extractPersistentState());
+}
+
+async function migrateLegacyStateIfNeeded() {
+  if (!fs.existsSync(legacyStatePath)) {
+    return;
+  }
+
+  const currentState = await database.loadState();
+  const storedWallets = await database.listWallets();
+  const hasPersistedData =
+    currentState.tasks.length > 0 ||
+    currentState.rpcNodes.length > 0 ||
+    storedWallets.length > 0;
+
+  if (hasPersistedData) {
+    return;
+  }
+
+  let legacyState;
+  try {
+    legacyState = JSON.parse(fs.readFileSync(legacyStatePath, "utf8"));
+  } catch (error) {
+    console.error("Unable to parse legacy dashboard state:");
+    console.error(error);
+    return;
+  }
+
+  await database.saveState({
+    tasks: Array.isArray(legacyState.tasks) ? legacyState.tasks : [],
+    rpcNodes: Array.isArray(legacyState.rpcNodes)
+      ? legacyState.rpcNodes.filter((node) => node && node.url)
+      : [],
+    settings: legacyState.settings
+  });
+
+  const envWalletAddresses = new Set(
+    buildEnvWalletEntries().records.map((wallet) => wallet.address.toLowerCase())
+  );
+  const knownAddresses = new Set(storedWallets.map((wallet) => wallet.address.toLowerCase()));
+
+  for (const legacyWallet of Array.isArray(legacyState.wallets) ? legacyState.wallets : []) {
+    if (!legacyWallet?.privateKey) {
+      continue;
+    }
+
+    try {
+      const address = deriveAddress(legacyWallet.privateKey);
+      const addressLower = address.toLowerCase();
+      if (knownAddresses.has(addressLower) || envWalletAddresses.has(addressLower)) {
+        continue;
+      }
+
+      await database.insertWallet({
+        id: legacyWallet.id || createId("wallet"),
+        label: legacyWallet.label || "Migrated Wallet",
+        address,
+        addressShort: legacyWallet.addressShort || truncateMiddle(address),
+        secretCiphertext: encryptSecret(legacyWallet.privateKey),
+        group: legacyWallet.group || "Migrated",
+        status: legacyWallet.status || "ready",
+        source: "stored",
+        createdAt: legacyWallet.createdAt || new Date().toISOString(),
+        updatedAt: legacyWallet.updatedAt || new Date().toISOString()
+      });
+      knownAddresses.add(addressLower);
+    } catch {
+      // Ignore invalid legacy keys during migration.
+    }
+  }
+
+  console.log("Migrated legacy dashboard state from dist/dashboard-state.json into Postgres.");
+}
+
+async function ensureAdminUser() {
+  if (!authIsRequired()) {
+    return;
+  }
+
+  const username = String(process.env.ADMIN_USERNAME || "admin").trim() || "admin";
+  const passwordHash = !isBlank(process.env.ADMIN_PASSWORD_HASH)
+    ? String(process.env.ADMIN_PASSWORD_HASH).trim()
+    : !isBlank(process.env.ADMIN_PASSWORD)
+      ? hashPassword(process.env.ADMIN_PASSWORD)
+      : null;
+
+  if (!passwordHash) {
+    throw new Error(
+      "Auth is enabled but ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is not configured."
+    );
+  }
+
+  await database.upsertUser({
+    id: `user_${hashForId(username)}`,
+    username,
+    passwordHash
+  });
+  await database.deleteExpiredSessions();
+}
+
+async function initializeServer() {
+  if (initialized) {
+    return;
+  }
+
+  database = createDatabase();
+  await database.ensureSchema();
+  await database.ensureBaseState();
+  await migrateLegacyStateIfNeeded();
+  await ensureAdminUser();
+  await reloadAppState();
+  initialized = true;
+}
+
+function getRunState() {
+  return {
+    status: runController ? "running" : "idle",
+    activeTaskId,
+    startedAt: runStartedAt,
+    logs: liveLogs.slice(-200)
+  };
+}
+
+function buildTaskResponse(task) {
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+
+  return {
+    ...task,
+    walletIds,
+    rpcNodeIds,
+    walletCount: walletIds.length,
+    rpcCount: rpcNodeIds.length
+  };
+}
+
+function priorityRank(priority) {
+  return {
+    critical: 3,
+    high: 2,
+    standard: 1
+  }[priority] || 0;
+}
+
+function humanizePriority(priority) {
+  return priority ? `${priority[0].toUpperCase()}${priority.slice(1)}` : "Standard";
+}
+
+function findActiveTask() {
+  return activeTaskId ? appState.tasks.find((task) => task.id === activeTaskId) || null : null;
+}
+
+function getEligibleRpcNodes(task) {
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  return appState.rpcNodes.filter(
+    (node) =>
+      node.enabled &&
+      node.chainKey === task.chainKey &&
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+  );
+}
+
+function taskReadiness(task) {
+  const issues = [];
+  let score = 0;
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+
+  if (task.contractAddress) {
+    score += 25;
+  } else {
+    issues.push("Missing contract address");
+  }
+
+  if (task.abiJson) {
+    score += 25;
+  } else {
+    issues.push("ABI not loaded");
+  }
+
+  if (walletIds.length > 0) {
+    score += 25;
+  } else {
+    issues.push("No wallets selected");
+  }
+
+  const eligibleRpcNodes = getEligibleRpcNodes(task);
+  if (eligibleRpcNodes.length > 0) {
+    score += 25;
+  } else {
+    issues.push("No enabled RPC nodes");
+  }
+
+  let health = "blocked";
+  if (score >= 100) {
+    health = "armed";
+  } else if (score >= 50) {
+    health = "warming";
+  }
+
+  return {
+    score,
+    health,
+    rpcCount: eligibleRpcNodes.length,
+    issues
+  };
+}
+
+function buildTelemetry() {
+  const activeTask = findActiveTask();
+  const healthyRpcCount = appState.rpcNodes.filter(
+    (node) => node.lastHealth?.status === "healthy"
+  ).length;
+  const unhealthyRpcCount = appState.rpcNodes.filter(
+    (node) => node.lastHealth?.status === "error"
+  ).length;
+  const walletGroupCount = new Set(
+    appState.wallets.map((wallet) => wallet.group || "Imported")
+  ).size;
+
+  const summaries = appState.tasks.map((task) => task.summary || {});
+  const totalAttempts = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
+  const successfulAttempts = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
+  const successRate = totalAttempts ? Math.round((successfulAttempts / totalAttempts) * 100) : 0;
+
+  const priorityQueue = [...appState.tasks]
+    .filter((task) => !task.done)
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+    })
+    .slice(0, 5)
+    .map((task) => {
+      const readiness = taskReadiness(task);
+      return {
+        id: task.id,
+        name: task.name,
+        chainKey: task.chainKey,
+        chainLabel: chainCatalog.find((entry) => entry.key === task.chainKey)?.label || task.chainKey,
+        priority: task.priority,
+        priorityLabel: humanizePriority(task.priority),
+        status: task.status,
+        statusLabel: task.status,
+        readinessScore: readiness.score,
+        health: readiness.health,
+        walletCount: Array.isArray(task.walletIds) ? task.walletIds.length : 0,
+        rpcCount: readiness.rpcCount,
+        issues: readiness.issues,
+        updatedAt: task.updatedAt
+      };
+    });
+
+  const readinessScore = priorityQueue.length
+    ? Math.round(priorityQueue.reduce((sum, task) => sum + task.readinessScore, 0) / priorityQueue.length)
+    : 0;
+
+  const chainLoad = Object.entries(
+    appState.tasks.reduce((map, task) => {
+      map[task.chainKey] = (map[task.chainKey] || 0) + 1;
+      return map;
+    }, {})
+  )
+    .map(([chainKey, count]) => ({
+      chainKey,
+      label: chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey,
+      count,
+      share: appState.tasks.length ? Math.round((count / appState.tasks.length) * 100) : 0
+    }))
+    .sort((left, right) => right.count - left.count);
+
+  const latestRunTask = [...appState.tasks]
+    .filter((task) => task.lastRunAt)
+    .sort((left, right) => new Date(right.lastRunAt) - new Date(left.lastRunAt))[0];
+
+  const alerts = [];
+  if (appState.wallets.length === 0) {
+    alerts.push({
+      severity: "critical",
+      title: "No wallet fleet loaded",
+      detail: "Import at least one wallet before attempting a run."
+    });
+  }
+  if (appState.rpcNodes.length === 0) {
+    alerts.push({
+      severity: "critical",
+      title: "RPC mesh is empty",
+      detail: "Add RPC nodes to arm task execution paths."
+    });
+  }
+  if (unhealthyRpcCount > 0) {
+    alerts.push({
+      severity: "warning",
+      title: "RPC degradation detected",
+      detail: `${unhealthyRpcCount} node${unhealthyRpcCount === 1 ? "" : "s"} reported an error on the last health check.`
+    });
+  }
+  if (priorityQueue.some((task) => task.health === "blocked")) {
+    alerts.push({
+      severity: "warning",
+      title: "Blocked tasks detected",
+      detail: "One or more priority tasks are missing required inputs or RPC coverage."
+    });
+  }
+  if (activeTask) {
+    alerts.push({
+      severity: "info",
+      title: "Run in progress",
+      detail: `${activeTask.name} is currently executing with ${activeTask.progress?.percent || 0}% completion.`
+    });
+  }
+  if (!alerts.length) {
+    alerts.push({
+      severity: "info",
+      title: "System standing by",
+      detail: "No immediate blockers detected in the current secure operator stack."
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    readinessScore,
+    successRate,
+    healthyRpcCount,
+    unhealthyRpcCount,
+    walletGroupCount,
+    readyTaskCount: priorityQueue.filter((task) => task.health === "armed").length,
+    liveLogCount: liveLogs.length,
+    runDurationMs: runStartedAt ? Date.now() - new Date(runStartedAt).getTime() : 0,
+    activeTaskName: activeTask?.name || null,
+    topChainLabel: chainLoad[0]?.label || "No chain load",
+    lastRunTaskName: latestRunTask?.name || "No history",
+    lastRunAt: latestRunTask?.lastRunAt || null,
+    priorityQueue,
+    chainLoad,
+    alerts,
+    rpcMatrix: appState.rpcNodes.slice(0, 6).map((node) => ({
+      id: node.id,
+      name: node.name,
+      chainKey: node.chainKey,
+      chainLabel: chainCatalog.find((entry) => entry.key === node.chainKey)?.label || node.chainKey,
+      status: node.lastHealth?.status || "unknown",
+      latencyMs: node.lastHealth?.latencyMs || null,
+      checkedAt: node.lastHealth?.checkedAt || null,
+      url: node.url
+    }))
+  };
+}
+
+function buildPublicState(includeDefaults = false) {
+  const payload = {
+    tasks: appState.tasks.map(buildTaskResponse),
+    wallets: appState.wallets,
+    rpcNodes: appState.rpcNodes,
+    settings: appState.settings,
+    chains: chainCatalog,
+    telemetry: buildTelemetry(),
+    runState: getRunState(),
+    authRequired: authIsRequired()
+  };
+
+  if (includeDefaults) {
+    payload.defaults = defaultInputValues;
+  }
+
+  return payload;
+}
+
+function emitState() {
+  broadcast("state", buildPublicState());
+}
+
+function readBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    request.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 5 * 1024 * 1024) {
+        reject(new Error("Request body too large"));
+        request.destroy();
+      }
+    });
+
+    request.on("end", () => resolve(body));
+    request.on("error", reject);
+  });
+}
+
+async function readJsonBody(request) {
+  const rawBody = await readBody(request);
+  return rawBody ? JSON.parse(rawBody) : {};
+}
+
+function serveFile(response, filePath) {
+  if (!fs.existsSync(filePath)) {
+    response.writeHead(404);
+    response.end("Not found");
+    return;
+  }
+
+  const extension = path.extname(filePath).toLowerCase();
+  const contentTypes = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8"
+  };
+
+  response.writeHead(200, {
+    "Content-Type": contentTypes[extension] || "application/octet-stream",
+    "Cache-Control": "no-store"
+  });
+  response.end(fs.readFileSync(filePath));
+}
+
+function pushLog(entry) {
+  liveLogs.push(entry);
+  if (liveLogs.length > 400) {
+    liveLogs = liveLogs.slice(-400);
+  }
+  broadcast("log", entry);
+}
+
+function reportBackgroundError(error) {
+  console.error("Dashboard background update failed:");
+  console.error(error);
+}
+
+async function updateTask(taskId, patch) {
+  const index = appState.tasks.findIndex((task) => task.id === taskId);
+  if (index === -1) {
+    return null;
+  }
+
+  appState.tasks[index] = {
+    ...appState.tasks[index],
+    ...patch,
+    updatedAt: new Date().toISOString()
+  };
+  await persistAppState();
+  emitState();
+  return appState.tasks[index];
+}
+
+function cloneTask(task) {
+  return {
+    ...task,
+    id: createId("task"),
+    name: `${task.name} Copy`,
+    status: "draft",
+    done: false,
+    progress: {
+      phase: "Ready",
+      percent: 0
+    },
+    summary: {
+      total: 0,
+      success: 0,
+      failed: 0,
+      stopped: 0,
+      hashes: []
+    },
+    history: [],
+    lastRunAt: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function summarizeResults(results) {
+  return results.reduce(
+    (summary, result) => {
+      summary.total += 1;
+      if (result.status === "success" || result.status === "submitted") {
+        summary.success += 1;
+      } else if (result.status === "stopped") {
+        summary.stopped += 1;
+      } else if (result.status === "failed") {
+        summary.failed += 1;
+      }
+
+      if (result.txHash) {
+        summary.hashes.push(result.txHash);
+      }
+
+      return summary;
+    },
+    { total: 0, success: 0, failed: 0, stopped: 0, hashes: [] }
+  );
+}
+
+function updateTaskProgressFromLog(task, entry) {
+  if (!task) {
+    return;
+  }
+
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const total = Math.max(walletIds.length || 1, 1);
+  const summary = task.summary || { total: 0, success: 0, failed: 0, stopped: 0, hashes: [] };
+  let phase = task.progress?.phase || "Preparing";
+  let percent = task.progress?.percent || 8;
+
+  if (entry.message.includes("Waiting for launch time")) {
+    phase = "Scheduled";
+    percent = 4;
+  } else if (entry.message.includes("Provider warmup complete")) {
+    phase = "Pre-signing";
+    percent = Math.max(percent, 18);
+  } else if (entry.message.includes("Simulation passed")) {
+    phase = "Pre-signing";
+    const scanned = Math.min(total, summary.success + summary.failed + summary.stopped + 1);
+    percent = Math.max(percent, 20 + Math.round((scanned / total) * 25));
+  } else if (entry.message.includes("Submitted tx")) {
+    phase = "Broadcasting";
+    percent = Math.max(percent, 55);
+  } else if (
+    entry.message.includes("Confirmed in block") ||
+    entry.message.includes("Dry run enabled") ||
+    entry.message.includes("Status:")
+  ) {
+    phase = "Settling";
+    percent = Math.max(percent, 76);
+  } else if (entry.message.includes("Run summary")) {
+    phase = "Finalizing";
+    percent = Math.max(percent, 96);
+  }
+
+  void updateTask(task.id, {
+    progress: {
+      phase,
+      percent
+    }
+  }).catch(reportBackgroundError);
+}
+
+function getTaskById(taskId) {
+  return appState.tasks.find((task) => task.id === taskId);
+}
+
+async function resolveWalletPrivateKeys(walletIds) {
+  const { keyMap } = buildEnvWalletEntries();
+  const privateKeys = [];
+
+  for (const walletId of walletIds) {
+    if (keyMap.has(walletId)) {
+      privateKeys.push(keyMap.get(walletId));
+      continue;
+    }
+
+    const storedSecret = await database.getStoredWalletSecret(walletId);
+    if (!storedSecret?.secret_ciphertext) {
+      throw new Error(`Wallet secret not found for wallet ${walletId}`);
+    }
+
+    privateKeys.push(decryptSecret(storedSecret.secret_ciphertext));
+  }
+
+  return privateKeys;
+}
+
+async function buildConfigForTask(task) {
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  const wallets = appState.wallets.filter((wallet) => walletIds.includes(wallet.id));
+  if (wallets.length === 0) {
+    throw new Error("Select at least one wallet before running a task");
+  }
+
+  const privateKeys = await resolveWalletPrivateKeys(walletIds);
+  if (privateKeys.length !== walletIds.length) {
+    throw new Error("One or more selected wallets could not be resolved");
+  }
+
+  const configuredRpcNodes = appState.rpcNodes.filter(
+    (node) =>
+      node.enabled &&
+      node.chainKey === task.chainKey &&
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+  );
+
+  if (configuredRpcNodes.length === 0) {
+    throw new Error(`No enabled RPC nodes configured for ${task.chainKey}`);
+  }
+
+  const chain = chainCatalog.find((entry) => entry.key === task.chainKey);
+
+  return normalizeConfig({
+    ...defaultInputValues,
+    RPC_URLS: configuredRpcNodes.map((node) => node.url).join("\n"),
+    PRIVATE_KEYS: privateKeys.join("\n"),
+    CONTRACT_ADDRESS: task.contractAddress,
+    ABI_JSON: task.abiJson,
+    MINT_FUNCTION: task.mintFunction,
+    MINT_ARGS: task.mintArgs,
+    MINT_VALUE_ETH: task.priceEth,
+    GAS_STRATEGY: task.gasStrategy,
+    GAS_LIMIT: task.gasLimit,
+    MAX_FEE_GWEI: task.maxFeeGwei,
+    MAX_PRIORITY_FEE_GWEI: task.maxPriorityFeeGwei,
+    GAS_BOOST_PERCENT: task.gasBoostPercent,
+    PRIORITY_BOOST_PERCENT: task.priorityBoostPercent,
+    WAIT_FOR_RECEIPT: task.waitForReceipt,
+    SIMULATE_TRANSACTION: task.simulateTransaction,
+    DRY_RUN: task.dryRun,
+    WARMUP_RPC: task.warmupRpc,
+    CONTINUE_ON_ERROR: task.continueOnError,
+    WALLET_MODE: task.walletMode,
+    WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
+    READY_CHECK_FUNCTION: task.readyCheckFunction,
+    READY_CHECK_ARGS: task.readyCheckArgs,
+    READY_CHECK_MODE: task.readyCheckMode,
+    READY_CHECK_EXPECTED: task.readyCheckExpected,
+    READY_CHECK_INTERVAL_MS: task.readyCheckIntervalMs,
+    POLL_INTERVAL_MS: task.pollIntervalMs,
+    MAX_RETRIES: task.maxRetries,
+    RETRY_DELAY_MS: task.retryDelayMs,
+    START_JITTER_MS: task.startJitterMs,
+    MIN_BALANCE_ETH: task.minBalanceEth,
+    NONCE_OFFSET: task.nonceOffset,
+    CHAIN_ID: chain ? String(chain.chainId) : "",
+    RESULTS_PATH: appState.settings.resultsPath || "./dist/mint-results.json"
+  });
+}
+
+async function handleTaskRun(taskId, response) {
+  if (runController) {
+    sendJson(response, 409, { error: "A task is already running" });
+    return;
+  }
+
+  const task = getTaskById(taskId);
+  if (!task) {
+    sendJson(response, 404, { error: "Task not found" });
+    return;
+  }
+
+  try {
+    const config = await buildConfigForTask(task);
+    const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+    runController = new AbortController();
+    activeTaskId = taskId;
+    runStartedAt = new Date().toISOString();
+    liveLogs = [];
+
+    await updateTask(taskId, {
+      status: "running",
+      progress: {
+        phase: "Preparing",
+        percent: 8
+      },
+      summary: {
+        total: walletIds.length,
+        success: 0,
+        failed: 0,
+        stopped: 0,
+        hashes: []
+      }
+    });
+
+    sendJson(response, 200, { ok: true });
+
+    runMintBot(config, {
+      signal: runController.signal,
+      onLog(entry) {
+        pushLog(entry);
+        updateTaskProgressFromLog(getTaskById(taskId), entry);
+      }
+    })
+      .then(async (result) => {
+        const summary = summarizeResults(result.results);
+        const taskAfterRun = getTaskById(taskId);
+        await updateTask(taskId, {
+          status: "completed",
+          progress: {
+            phase: "Completed",
+            percent: 100
+          },
+          summary,
+          lastRunAt: new Date().toISOString(),
+          history: [
+            {
+              id: createId("history"),
+              ranAt: new Date().toISOString(),
+              summary
+            },
+            ...(taskAfterRun.history || [])
+          ].slice(0, 8)
+        });
+      })
+      .catch(async (error) => {
+        const stopped = error instanceof AbortRunError || runController?.signal.aborted;
+        await updateTask(taskId, {
+          status: stopped ? "stopped" : "failed",
+          progress: {
+            phase: stopped ? "Stopped" : "Failed",
+            percent: stopped ? 0 : 100
+          }
+        });
+        pushLog({
+          level: "error",
+          message: formatError(error),
+          timestamp: new Date().toISOString()
+        });
+      })
+      .catch(reportBackgroundError)
+      .finally(() => {
+        runController = null;
+        activeTaskId = null;
+        runStartedAt = null;
+        emitState();
+      });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleTaskDuplicate(taskId, response) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    sendJson(response, 404, { error: "Task not found" });
+    return;
+  }
+
+  const duplicate = cloneTask(task);
+  appState.tasks.unshift(duplicate);
+  await persistAppState();
+  emitState();
+  sendJson(response, 200, { ok: true, task: buildTaskResponse(duplicate) });
+}
+
+function handleStopRun(response) {
+  if (!runController) {
+    sendJson(response, 409, { error: "No task is running" });
+    return;
+  }
+
+  runController.abort();
+  sendJson(response, 200, { ok: true });
+}
+
+async function handleTaskSave(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const existingTask = payload.id ? getTaskById(payload.id) : null;
+    const task = sanitizeTaskInput(payload, existingTask);
+
+    if (!task.contractAddress) {
+      throw new Error("Contract address is required");
+    }
+
+    if (!task.abiJson) {
+      throw new Error("ABI JSON is required");
+    }
+
+    if ((task.walletIds || []).length === 0) {
+      throw new Error("Select at least one wallet");
+    }
+
+    if (existingTask) {
+      const index = appState.tasks.findIndex((entry) => entry.id === task.id);
+      appState.tasks[index] = task;
+    } else {
+      appState.tasks.unshift(task);
+    }
+
+    await persistAppState();
+    emitState();
+    sendJson(response, 200, { ok: true, task: buildTaskResponse(task) });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleTaskDelete(taskId, response) {
+  const before = appState.tasks.length;
+  appState.tasks = appState.tasks.filter((task) => task.id !== taskId);
+
+  if (appState.tasks.length === before) {
+    sendJson(response, 404, { error: "Task not found" });
+    return;
+  }
+
+  await persistAppState();
+  emitState();
+  sendJson(response, 200, { ok: true });
+}
+
+async function handleTaskDone(taskId, response) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    sendJson(response, 404, { error: "Task not found" });
+    return;
+  }
+
+  await updateTask(taskId, {
+    done: !task.done,
+    status: task.done ? "draft" : "done"
+  });
+  sendJson(response, 200, { ok: true });
+}
+
+async function handleWalletImport(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const privateKeys = parseList(payload.privateKeys);
+
+    if (privateKeys.length === 0) {
+      throw new Error("Provide at least one private key");
+    }
+
+    const knownAddresses = new Set(appState.wallets.map((wallet) => wallet.address.toLowerCase()));
+    const storedWallets = await database.listWallets();
+    let imported = 0;
+    let skipped = 0;
+
+    for (const privateKey of privateKeys) {
+      const address = deriveAddress(privateKey);
+      if (knownAddresses.has(address.toLowerCase())) {
+        skipped += 1;
+        continue;
+      }
+
+      const nextIndex = storedWallets.length + imported + 1;
+      const label = payload.group ? `${payload.group} ${nextIndex}` : `Wallet ${nextIndex}`;
+
+      await database.insertWallet({
+        id: createId("wallet"),
+        label,
+        address,
+        addressShort: truncateMiddle(address),
+        secretCiphertext: encryptSecret(privateKey),
+        group: payload.group || "Imported",
+        status: "ready",
+        source: "stored",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+
+      knownAddresses.add(address.toLowerCase());
+      imported += 1;
+    }
+
+    await reloadAppState();
+    emitState();
+    sendJson(response, 200, { ok: true, imported, skipped });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleWalletDelete(walletId, response) {
+  const wallet = appState.wallets.find((entry) => entry.id === walletId);
+  if (!wallet) {
+    sendJson(response, 404, { error: "Wallet not found" });
+    return;
+  }
+
+  if (wallet.source === "env") {
+    sendJson(response, 400, { error: "Env wallets are managed through environment variables" });
+    return;
+  }
+
+  await database.deleteWallet(walletId);
+  appState.tasks = appState.tasks.map((task) => ({
+    ...task,
+    walletIds: (task.walletIds || []).filter((id) => id !== walletId)
+  }));
+  await persistAppState();
+  await reloadAppState();
+  emitState();
+  sendJson(response, 200, { ok: true });
+}
+
+async function handleRpcSave(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+
+    if (!payload.url) {
+      throw new Error("RPC URL is required");
+    }
+
+    if (payload.id && String(payload.id).startsWith("rpc_env_")) {
+      throw new Error("Env RPC nodes cannot be overwritten from the dashboard");
+    }
+
+    const rpcNode = {
+      id: payload.id || createId("rpc"),
+      name: String(payload.name || "Custom RPC").trim() || "Custom RPC",
+      url: String(payload.url).trim(),
+      chainKey: String(payload.chainKey || "base_sepolia"),
+      enabled: payload.enabled !== false,
+      group: payload.group || "Custom",
+      source: "stored",
+      lastHealth: payload.lastHealth || null
+    };
+
+    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
+    const existingIndex = storedNodes.findIndex((node) => node.id === rpcNode.id);
+    if (existingIndex === -1) {
+      storedNodes.unshift(rpcNode);
+    } else {
+      storedNodes[existingIndex] = rpcNode;
+    }
+
+    appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
+    await persistAppState();
+    emitState();
+    sendJson(response, 200, { ok: true });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function testRpcNodeHealth(rpcNode) {
+  const started = Date.now();
+
+  try {
+    const provider = new ethers.JsonRpcProvider(rpcNode.url);
+    const blockNumber = await provider.getBlockNumber();
+    const latencyMs = Date.now() - started;
+
+    rpcNode.lastHealth = {
+      status: "healthy",
+      latencyMs,
+      blockNumber,
+      checkedAt: new Date().toISOString()
+    };
+  } catch (error) {
+    rpcNode.lastHealth = {
+      status: "error",
+      error: formatError(error),
+      checkedAt: new Date().toISOString()
+    };
+  }
+
+  return rpcNode.lastHealth;
+}
+
+async function handleRpcTest(rpcId, response) {
+  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+  if (!rpcNode) {
+    sendJson(response, 404, { error: "RPC node not found" });
+    return;
+  }
+
+  const health = await testRpcNodeHealth(rpcNode);
+  await persistAppState();
+  emitState();
+  sendJson(response, 200, { ok: true, health });
+}
+
+async function handleRpcPoolTest(response) {
+  if (appState.rpcNodes.length === 0) {
+    sendJson(response, 400, { error: "No RPC nodes configured" });
+    return;
+  }
+
+  const results = [];
+  for (const rpcNode of appState.rpcNodes) {
+    results.push({
+      id: rpcNode.id,
+      name: rpcNode.name,
+      chainKey: rpcNode.chainKey,
+      health: await testRpcNodeHealth(rpcNode)
+    });
+  }
+
+  await persistAppState();
+  emitState();
+  sendJson(response, 200, {
+    ok: true,
+    summary: {
+      total: results.length,
+      healthy: results.filter((entry) => entry.health.status === "healthy").length,
+      error: results.filter((entry) => entry.health.status === "error").length
+    },
+    results
+  });
+}
+
+async function handleSettingsSave(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+
+    appState.settings = {
+      ...appState.settings,
+      profileName: String(payload.profileName || appState.settings.profileName || "local").trim(),
+      theme: String(payload.theme || appState.settings.theme || "quantum-operator").trim(),
+      resultsPath: String(
+        payload.resultsPath || appState.settings.resultsPath || "./dist/mint-results.json"
+      ).trim()
+    };
+
+    await persistAppState();
+    emitState();
+    sendJson(response, 200, { ok: true });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleRpcDelete(rpcId, response) {
+  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+  if (!rpcNode) {
+    sendJson(response, 404, { error: "RPC node not found" });
+    return;
+  }
+
+  if (rpcNode.source === "env") {
+    sendJson(response, 400, { error: "Env RPC nodes are managed through environment variables" });
+    return;
+  }
+
+  appState.rpcNodes = appState.rpcNodes.filter((node) => node.id !== rpcId);
+  appState.tasks = appState.tasks.map((task) => ({
+    ...task,
+    rpcNodeIds: (task.rpcNodeIds || []).filter((id) => id !== rpcId)
+  }));
+  await persistAppState();
+  await reloadAppState();
+  emitState();
+  sendJson(response, 200, { ok: true });
+}
+
+function findPriorityTaskForRun() {
+  return [...appState.tasks]
+    .filter((task) => !task.done)
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+    })
+    .find((task) => taskReadiness(task).health !== "blocked");
+}
+
+function buildSnapshot() {
+  return {
+    createdAt: new Date().toISOString(),
+    activeTask: findActiveTask() ? buildTaskResponse(findActiveTask()) : null,
+    taskCount: appState.tasks.length,
+    walletCount: appState.wallets.length,
+    rpcNodeCount: appState.rpcNodes.length,
+    runState: getRunState(),
+    telemetry: buildTelemetry()
+  };
+}
+
+function handleTelemetry(response) {
+  sendJson(response, 200, { ok: true, telemetry: buildTelemetry() });
+}
+
+async function handleRunPriority(response) {
+  const task = findPriorityTaskForRun();
+  if (!task) {
+    sendJson(response, 404, { error: "No runnable priority task found" });
+    return;
+  }
+
+  await handleTaskRun(task.id, response);
+}
+
+function handleSnapshot(response) {
+  const snapshot = buildSnapshot();
+  pushLog({
+    level: "info",
+    message: `Snapshot captured at ${snapshot.createdAt}`,
+    timestamp: new Date().toISOString()
+  });
+  emitState();
+  sendJson(response, 200, { ok: true, snapshot });
+}
+
+function handleAppState(response) {
+  sendJson(response, 200, buildPublicState(true));
+}
+
+async function getAuthenticatedUser(request) {
+  if (request.authenticatedUser !== undefined) {
+    return request.authenticatedUser;
+  }
+
+  if (!authIsRequired()) {
+    request.authenticatedUser = {
+      id: "local",
+      username: "local"
+    };
+    return request.authenticatedUser;
+  }
+
+  const token = parseCookies(request)[sessionCookieName];
+  if (!token) {
+    request.authenticatedUser = null;
+    return null;
+  }
+
+  const session = await database.getSessionByTokenHash(hashToken(token));
+  if (!session) {
+    request.authenticatedUser = null;
+    return null;
+  }
+
+  request.authenticatedUser = {
+    id: session.user_id,
+    username: session.username,
+    sessionId: session.id
+  };
+
+  void database.touchSession(session.id).catch(reportBackgroundError);
+  return request.authenticatedUser;
+}
+
+async function requireAuth(request, response) {
+  const user = await getAuthenticatedUser(request);
+  if (user) {
+    return true;
+  }
+
+  sendJson(response, 401, {
+    error: "Authentication required",
+    authenticated: false
+  });
+  return false;
+}
+
+async function handleSession(request, response) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    sendJson(response, 401, { authenticated: false, authRequired: authIsRequired() });
+    return;
+  }
+
+  sendJson(response, 200, {
+    authenticated: true,
+    authRequired: authIsRequired(),
+    user: {
+      id: user.id,
+      username: user.username
+    }
+  });
+}
+
+async function handleLogin(request, response) {
+  if (!authIsRequired()) {
+    sendJson(response, 200, {
+      ok: true,
+      user: {
+        id: "local",
+        username: "local"
+      }
+    });
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(request);
+    const username = String(payload.username || "").trim();
+    const password = String(payload.password || "");
+
+    if (!username || !password) {
+      throw new Error("Username and password are required");
+    }
+
+    const user = await database.getUserByUsername(username);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      sendJson(response, 401, { error: "Invalid username or password" });
+      return;
+    }
+
+    const token = generateSessionToken();
+    await database.createSession({
+      id: createId("session"),
+      userId: user.id,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + sessionTtlHours * 60 * 60 * 1000).toISOString()
+    });
+
+    appendSetCookie(response, buildSessionCookie(request, token, sessionTtlHours * 60 * 60));
+    sendJson(response, 200, {
+      ok: true,
+      user: {
+        id: user.id,
+        username: user.username
+      }
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleLogout(request, response) {
+  const token = parseCookies(request)[sessionCookieName];
+  if (token) {
+    await database.deleteSessionByTokenHash(hashToken(token));
+  }
+
+  clearSessionCookie(response, request);
+  sendJson(response, 200, { ok: true });
+}
+
+function parseRoute(pathname) {
+  return pathname.split("/").filter(Boolean);
+}
+
+const server = http.createServer(async (request, response) => {
+  try {
+    const url = new URL(request.url, `http://${request.headers.host}`);
+    const route = parseRoute(url.pathname);
+    const isApiRoute = url.pathname.startsWith("/api/");
+
+    if (request.method === "POST" && url.pathname === "/api/auth/login") {
+      await handleLogin(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+      await handleLogout(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/session") {
+      await handleSession(request, response);
+      return;
+    }
+
+    if (isApiRoute && !(await requireAuth(request, response))) {
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/app-state") {
+      handleAppState(response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/telemetry") {
+      handleTelemetry(response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/events") {
+      response.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-store",
+        Connection: "keep-alive"
+      });
+      response.write(`event: state\ndata: ${JSON.stringify(buildPublicState())}\n\n`);
+      clients.add(response);
+
+      request.on("close", () => {
+        clients.delete(response);
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/tasks") {
+      await handleTaskSave(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && route[0] === "api" && route[1] === "tasks" && route[3] === "run") {
+      await handleTaskRun(route[2], response);
+      return;
+    }
+
+    if (request.method === "POST" && route[0] === "api" && route[1] === "tasks" && route[3] === "done") {
+      await handleTaskDone(route[2], response);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      route[0] === "api" &&
+      route[1] === "tasks" &&
+      route[3] === "duplicate"
+    ) {
+      await handleTaskDuplicate(route[2], response);
+      return;
+    }
+
+    if (request.method === "DELETE" && route[0] === "api" && route[1] === "tasks" && route[2]) {
+      await handleTaskDelete(route[2], response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/run/stop") {
+      handleStopRun(response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/control/run-priority") {
+      await handleRunPriority(response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/control/test-rpc-pool") {
+      await handleRpcPoolTest(response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/control/snapshot") {
+      handleSnapshot(response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/wallets/import") {
+      await handleWalletImport(request, response);
+      return;
+    }
+
+    if (request.method === "DELETE" && route[0] === "api" && route[1] === "wallets" && route[2]) {
+      await handleWalletDelete(route[2], response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes") {
+      await handleRpcSave(request, response);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      route[0] === "api" &&
+      route[1] === "rpc-nodes" &&
+      route[3] === "test"
+    ) {
+      await handleRpcTest(route[2], response);
+      return;
+    }
+
+    if (request.method === "DELETE" && route[0] === "api" && route[1] === "rpc-nodes" && route[2]) {
+      await handleRpcDelete(route[2], response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/settings") {
+      await handleSettingsSave(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/") {
+      serveFile(response, path.join(webRoot, "index.html"));
+      return;
+    }
+
+    if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/styles.css")) {
+      serveFile(response, path.join(webRoot, url.pathname.slice(1)));
+      return;
+    }
+
+    response.writeHead(404);
+    response.end("Not found");
+  } catch (error) {
+    console.error("Server request failed:");
+    console.error(error);
+
+    if (!response.headersSent) {
+      sendJson(response, 500, { error: formatError(error) });
+      return;
+    }
+
+    response.end();
+  }
+});
+
+function resolveHost() {
+  if (process.env.HOST) {
+    return process.env.HOST;
+  }
+
+  return process.env.PORT ? "0.0.0.0" : "127.0.0.1";
+}
+
+function resolvePort() {
+  return Number(process.env.PORT || 3000);
+}
+
+async function startServer() {
+  if (server.listening) {
+    return server;
+  }
+
+  await initializeServer();
+
+  const host = resolveHost();
+  const port = resolvePort();
+
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("error", onError);
+      reject(error);
+    };
+
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      console.log(`Mint dashboard running at http://${host}:${port}`);
+      resolve(server);
+    });
+  });
+}
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error("Dashboard startup failed:");
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  resolveHost,
+  resolvePort,
+  startServer
+};

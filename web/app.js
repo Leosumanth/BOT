@@ -6,6 +6,7 @@ const state = {
   chains: [],
   telemetry: null,
   runState: { status: "idle", activeTaskId: null, logs: [], startedAt: null },
+  session: { authenticated: false, user: null, authRequired: true },
   currentView: "dashboard",
   walletGroupFilter: "All",
   taskSearch: "",
@@ -14,6 +15,11 @@ const state = {
 
 const body = document.body;
 const fxCanvas = document.getElementById("fx-canvas");
+const authOverlay = document.getElementById("auth-overlay");
+const loginForm = document.getElementById("login-form");
+const loginUsernameInput = document.getElementById("login-username-input");
+const loginPasswordInput = document.getElementById("login-password-input");
+const loginStatus = document.getElementById("login-status");
 const navButtons = [...document.querySelectorAll(".nav-button")];
 const views = [...document.querySelectorAll(".view")];
 const dashboardStats = document.getElementById("dashboard-stats");
@@ -65,6 +71,7 @@ const accountStatus = document.getElementById("account-status");
 const batchToggle = document.getElementById("batch-toggle");
 const batchStatus = document.getElementById("batch-status");
 const globalStopButton = document.getElementById("global-stop-button");
+const logoutButton = document.getElementById("logout-button");
 const toastStack = document.getElementById("toast-stack");
 
 const taskModal = document.getElementById("task-modal");
@@ -120,6 +127,7 @@ const taskDryRunToggle = document.getElementById("task-dry-run-toggle");
 const taskWarmupToggle = document.getElementById("task-warmup-toggle");
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
+let events = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -194,6 +202,118 @@ function priorityRank(priority) {
 
 function humanizePriority(priority) {
   return priority ? `${priority[0].toUpperCase()}${priority.slice(1)}` : "Standard";
+}
+
+function setLoginStatus(message) {
+  loginStatus.textContent = message;
+}
+
+function setAuthState(authenticated, user = null, authRequired = true) {
+  state.session = {
+    authenticated,
+    user,
+    authRequired
+  };
+
+  body.dataset.authState = authenticated || !authRequired ? "unlocked" : "locked";
+  authOverlay.classList.toggle("hidden", authenticated || !authRequired);
+  logoutButton.classList.toggle("hidden", !authenticated || !authRequired);
+
+  if (!authenticated && authRequired) {
+    accountLabel.textContent = "Secure Operator";
+    accountStatus.textContent = "Sign in required";
+    globalStopButton.disabled = true;
+    loginPasswordInput.value = "";
+    window.setTimeout(() => {
+      if (!authOverlay.classList.contains("hidden")) {
+        loginUsernameInput.focus();
+      }
+    }, 0);
+  }
+}
+
+function handleUnauthorized(message = "Session expired. Sign in again.") {
+  disconnectEvents();
+  setAuthState(false, null, true);
+  setLoginStatus(message);
+}
+
+function disconnectEvents() {
+  if (!events) {
+    return;
+  }
+
+  events.close();
+  events = null;
+}
+
+async function loadSession(options = {}) {
+  let response;
+  try {
+    response = await fetch("/api/session", { credentials: "same-origin" });
+  } catch (error) {
+    if (!options.silent) {
+      setLoginStatus(error.message || "Unable to reach the dashboard session endpoint.");
+    }
+    setAuthState(false, null, true);
+    return false;
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    setAuthState(false, null, payload.authRequired !== false);
+    if (!options.silent) {
+      setLoginStatus(payload.error || "Sign in to continue.");
+    }
+    return false;
+  }
+
+  setAuthState(true, payload.user || null, payload.authRequired !== false);
+  setLoginStatus("Authenticated. Secure state sync is active.");
+  return true;
+}
+
+async function syncSessionAfterEventError() {
+  disconnectEvents();
+  const authenticated = await loadSession({ silent: true });
+  if (authenticated) {
+    connectEvents();
+  }
+}
+
+function connectEvents() {
+  if (events || !state.session.authenticated) {
+    return;
+  }
+
+  events = new EventSource("/api/events");
+
+  events.addEventListener("state", (event) => {
+    const payload = JSON.parse(event.data);
+    const currentWalletSelection = selectedWalletIds();
+    const currentRpcSelection = selectedRpcIds();
+    applyAppState(payload);
+    populateChainSelectors();
+
+    if (!taskModal.classList.contains("hidden")) {
+      renderWalletSelector(currentWalletSelection);
+      renderRpcSelector(currentRpcSelection);
+    }
+  });
+
+  events.addEventListener("log", (event) => {
+    const payload = JSON.parse(event.data);
+    state.runState.logs = [...(state.runState.logs || []), payload].slice(-200);
+    renderLogs();
+  });
+
+  events.addEventListener("error", () => {
+    if (state.session.authenticated) {
+      window.setTimeout(() => {
+        void syncSessionAfterEventError();
+      }, 1200);
+    }
+  });
 }
 
 function activeTask() {
@@ -1206,11 +1326,15 @@ function renderWallets() {
             <div class="list-row">
               <div>
                 <strong>${escapeHtml(wallet.label)}</strong>
-                <p class="muted-copy">${escapeHtml(wallet.addressShort)} · ${escapeHtml(wallet.group || "Imported")}</p>
+                <p class="muted-copy">${escapeHtml(wallet.addressShort)} | ${escapeHtml(wallet.group || "Imported")} | ${escapeHtml(wallet.source || "stored")}</p>
               </div>
               <div class="task-actions">
                 <span class="wallet-chip">${escapeHtml(wallet.status)}</span>
-                <button class="mini-button danger fx-button" data-wallet-delete="${escapeHtml(wallet.id)}">Delete</button>
+                ${
+                  wallet.source === "env"
+                    ? '<span class="rpc-chip">env-managed</span>'
+                    : `<button class="mini-button danger fx-button" data-wallet-delete="${escapeHtml(wallet.id)}">Delete</button>`
+                }
               </div>
             </div>
           `
@@ -1248,12 +1372,16 @@ function renderRpcNodes() {
             <div class="list-row">
               <div>
                 <strong>${escapeHtml(node.name)}</strong>
-                <p class="muted-copy">${escapeHtml(chainLabel(node.chainKey))} · ${escapeHtml(node.url)}</p>
+                <p class="muted-copy">${escapeHtml(chainLabel(node.chainKey))} | ${escapeHtml(node.url)} | ${escapeHtml(node.source || "stored")}</p>
               </div>
               <div class="task-actions">
                 ${rpcHealthMarkup(node)}
                 <button class="mini-button fx-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
-                <button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>
+                ${
+                  node.source === "env"
+                    ? '<span class="rpc-chip">env-managed</span>'
+                    : `<button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>`
+                }
               </div>
             </div>
           `
@@ -1320,8 +1448,9 @@ function renderShellTelemetry() {
   const hasCriticalAlert = (telemetry.alerts || []).some((alert) => alert.severity === "critical");
 
   body.dataset.runState = state.runState.status;
-  accountLabel.textContent = state.settings.profileName || "Local Operator";
-  accountStatus.textContent = state.runState.status === "running" ? "Task running" : "Ready";
+  accountLabel.textContent =
+    state.session.user?.username || state.settings.profileName || "Local Operator";
+  accountStatus.textContent = state.runState.status === "running" ? "Task running" : "Authenticated";
   heroModeCopy.textContent = active
     ? `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
     : `Monitoring ${pluralize(state.tasks.length, "task")}, ${pluralize(state.wallets.length, "wallet")}, and ${pluralize(state.rpcNodes.length, "RPC node")} from one control surface.`;
@@ -1361,6 +1490,7 @@ function applyAppState(payload) {
   state.chains = payload.chains || [];
   state.telemetry = payload.telemetry || null;
   state.runState = payload.runState || state.runState;
+  state.session.authRequired = payload.authRequired !== false;
 
   batchStatus.textContent = batchToggle.checked
     ? "Batch mode is enabled for selection planning."
@@ -1520,7 +1650,10 @@ function buildTaskPayload() {
 async function request(url, options = {}) {
   let response;
   try {
-    response = await fetch(url, options);
+    response = await fetch(url, {
+      credentials: "same-origin",
+      ...options
+    });
   } catch (error) {
     pushLocalLog("error", error.message || "Network request failed");
     showToast(error.message || "Network request failed", "error");
@@ -1528,6 +1661,14 @@ async function request(url, options = {}) {
   }
 
   const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    const message = payload.error || "Session expired. Sign in again.";
+    handleUnauthorized(message);
+    pushLocalLog("error", message);
+    showToast(message, "error");
+    throw new Error(message);
+  }
+
   if (!response.ok) {
     const message = payload.error || "Request failed";
     pushLocalLog("error", message);
@@ -1547,6 +1688,26 @@ navButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setView(button.dataset.view);
   });
+});
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = await request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: loginUsernameInput.value,
+        password: loginPasswordInput.value
+      })
+    });
+
+    setAuthState(true, payload.user || null, true);
+    setLoginStatus("Authenticated. Secure state sync is active.");
+    await loadState();
+    connectEvents();
+    showToast("Authenticated successfully.", "success", "Access Granted");
+  } catch {}
 });
 
 taskSearchInput.addEventListener("input", () => {
@@ -1627,6 +1788,17 @@ globalStopButton.addEventListener("click", async () => {
     await request("/api/run/stop", { method: "POST" });
     showToast("Stop signal sent to the active run.", "info", "Run Control");
   } catch {}
+});
+
+logoutButton.addEventListener("click", async () => {
+  try {
+    await request("/api/auth/logout", { method: "POST" });
+  } catch {}
+
+  disconnectEvents();
+  setAuthState(false, null, true);
+  setLoginStatus("Signed out. Sign in again to resume secure state access.");
+  showToast("Session closed.", "info", "Signed Out");
 });
 
 walletImportForm.addEventListener("submit", async (event) => {
@@ -1757,37 +1929,24 @@ taskForm.addEventListener("submit", async (event) => {
   } catch {}
 });
 
-const events = new EventSource("/api/events");
-
-events.addEventListener("state", (event) => {
-  const payload = JSON.parse(event.data);
-  const currentWalletSelection = selectedWalletIds();
-  const currentRpcSelection = selectedRpcIds();
-  applyAppState(payload);
-  populateChainSelectors();
-
-  if (!taskModal.classList.contains("hidden")) {
-    renderWalletSelector(currentWalletSelection);
-    renderRpcSelector(currentRpcSelection);
-  }
-});
-
-events.addEventListener("log", (event) => {
-  const payload = JSON.parse(event.data);
-  state.runState.logs = [...(state.runState.logs || []), payload].slice(-200);
-  renderLogs();
-});
-
 updateClock();
 window.setInterval(updateClock, 1000);
 initializeCanvasScene();
 initializeMotionSurfaces(document);
 
-loadState()
-  .then(() => {
+setAuthState(false, null, true);
+
+loadSession()
+  .then(async (authenticated) => {
+    if (!authenticated) {
+      return;
+    }
+
+    await loadState();
     populateChainSelectors();
     renderWalletSelector([]);
     renderRpcSelector([]);
+    connectEvents();
     setView("dashboard");
     showToast("Advanced command surface online.", "success", "System Ready");
   })

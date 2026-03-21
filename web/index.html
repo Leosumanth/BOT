@@ -11,6 +11,27 @@
     <div class="noise-layer" aria-hidden="true"></div>
     <div class="scanline-layer" aria-hidden="true"></div>
 
+    <div id="auth-overlay" class="auth-overlay hidden">
+      <div class="auth-card hud-panel">
+        <p class="eyebrow">Secure Access</p>
+        <h2>Operator Login</h2>
+        <p id="login-status" class="view-subtitle">
+          Sign in with the configured admin account to unlock dashboard state, tasks, and encrypted wallet secrets.
+        </p>
+        <form id="login-form" class="stack-form auth-form">
+          <label>
+            <span>Username</span>
+            <input id="login-username-input" type="text" autocomplete="username" placeholder="admin" />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="login-password-input" type="password" autocomplete="current-password" placeholder="Password" />
+          </label>
+          <button class="primary-button fx-button" type="submit">Sign In</button>
+        </form>
+      </div>
+    </div>
+
     <div class="app-shell">
       <aside class="sidebar" data-tilt>
         <div class="sidebar-top">
@@ -52,6 +73,7 @@
             </div>
             <span class="status-dot"></span>
           </div>
+          <button id="logout-button" class="ghost-button fx-button" type="button">Sign Out</button>
           <button id="global-stop-button" class="danger-button fx-button" type="button">Stop Active Run</button>
         </div>
       </aside>

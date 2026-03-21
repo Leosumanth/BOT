@@ -24,6 +24,8 @@ It is designed as a reusable template for contracts that expose a mint function 
 - can export run results to a JSON file
 - calls your chosen mint function with custom JSON arguments
 - optionally waits for the transaction receipt
+- includes a Postgres-backed dashboard with admin login
+- encrypts dashboard-imported wallet secrets before storing them
 
 ## Setup
 
@@ -58,6 +60,15 @@ Copy-Item .env.example .env
 ## Environment variables
 
 - `BOT_MODE`: optional startup override, use `bot` for the CLI minter or `dashboard` for the web UI
+- `DATABASE_URL`: required for the dashboard, Postgres connection string
+- `ENCRYPTION_KEY`: required for the dashboard, used to encrypt stored wallet secrets
+- `ADMIN_USERNAME`: dashboard admin username, defaults to `admin`
+- `ADMIN_PASSWORD`: dashboard admin password for startup bootstrap
+- `ADMIN_PASSWORD_HASH`: optional pre-hashed admin password if you do not want a plain password in env
+- `AUTH_REQUIRED`: set to `false` only if you intentionally want to disable dashboard auth
+- `SESSION_TTL_HOURS`: dashboard session lifetime, defaults to `168`
+- `COOKIE_SECURE`: optional cookie override, use `true` behind HTTPS or `false` for plain local HTTP
+- `DEFAULT_RPC_CHAIN_KEY`: chain key assigned to env-provided RPC nodes inside the dashboard, defaults to `base_sepolia`
 - `RPC_URL`: a single JSON-RPC endpoint
 - `RPC_URLS`: optional comma-separated list of RPC endpoints for failover
 - `PRIVATE_KEY`: a single wallet private key
@@ -188,7 +199,13 @@ On Windows PowerShell:
 npm.cmd run ui
 ```
 
-Then open `http://127.0.0.1:3000`.
+The dashboard now requires:
+
+- `DATABASE_URL`
+- `ENCRYPTION_KEY`
+- `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`
+
+Then open `http://127.0.0.1:3000` and sign in with the configured admin account.
 
 Default startup:
 
@@ -203,7 +220,7 @@ npm start
 
 Set `BOT_MODE=bot` or `BOT_MODE=dashboard` if you want to force one mode explicitly.
 
-The dashboard is local-only by default, lets you paste ABI JSON directly, start and stop runs, watch live logs, and review result JSON after the run finishes.
+The dashboard now stores tasks, RPC nodes, sessions, and encrypted imported wallets in Postgres. Env-provided wallets and RPC URLs still load at runtime without being copied into the database.
 
 ## Important notes
 
