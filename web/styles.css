@@ -91,9 +91,15 @@ button:disabled {
 }
 
 body[data-auth-state="locked"] .app-shell {
-  filter: blur(10px) saturate(0.8);
+  opacity: 0.18;
   pointer-events: none;
   user-select: none;
+}
+
+body[data-auth-state="locked"] .fx-canvas,
+body[data-auth-state="locked"] .noise-layer,
+body[data-auth-state="locked"] .scanline-layer {
+  display: none;
 }
 
 .auth-overlay {
@@ -106,7 +112,6 @@ body[data-auth-state="locked"] .app-shell {
   background:
     radial-gradient(circle at 50% 20%, rgba(113, 224, 255, 0.12), transparent 30%),
     rgba(3, 7, 13, 0.76);
-  backdrop-filter: blur(18px);
 }
 
 .auth-card {
@@ -115,6 +120,10 @@ body[data-auth-state="locked"] .app-shell {
   border-radius: var(--radius-xl);
   display: grid;
   gap: 18px;
+  backdrop-filter: none;
+  background:
+    linear-gradient(180deg, rgba(15, 26, 40, 0.96), rgba(9, 17, 29, 0.98)),
+    linear-gradient(135deg, rgba(113, 224, 255, 0.04), transparent 45%);
 }
 
 .auth-card h2 {

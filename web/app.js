@@ -128,6 +128,7 @@ const taskWarmupToggle = document.getElementById("task-warmup-toggle");
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
+let canvasSceneInitialized = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -314,6 +315,15 @@ function connectEvents() {
       }, 1200);
     }
   });
+}
+
+function ensureCanvasScene() {
+  if (canvasSceneInitialized) {
+    return;
+  }
+
+  canvasSceneInitialized = true;
+  initializeCanvasScene();
 }
 
 function activeTask() {
@@ -1704,6 +1714,8 @@ loginForm.addEventListener("submit", async (event) => {
 
     setAuthState(true, payload.user || null, true);
     setLoginStatus("Authenticated. Secure state sync is active.");
+    ensureCanvasScene();
+    initializeMotionSurfaces(document);
     await loadState();
     connectEvents();
     showToast("Authenticated successfully.", "success", "Access Granted");
@@ -1931,8 +1943,6 @@ taskForm.addEventListener("submit", async (event) => {
 
 updateClock();
 window.setInterval(updateClock, 1000);
-initializeCanvasScene();
-initializeMotionSurfaces(document);
 
 setAuthState(false, null, true);
 
@@ -1942,6 +1952,8 @@ loadSession()
       return;
     }
 
+    ensureCanvasScene();
+    initializeMotionSurfaces(document);
     await loadState();
     populateChainSelectors();
     renderWalletSelector([]);
