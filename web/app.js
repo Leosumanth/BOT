@@ -4,6 +4,7 @@ const state = {
   rpcNodes: [],
   settings: {},
   chains: [],
+  telemetry: null,
   runState: { status: "idle", activeTaskId: null, logs: [], startedAt: null },
   currentView: "dashboard",
   walletGroupFilter: "All",
@@ -11,6 +12,8 @@ const state = {
   taskStatusFilter: "all"
 };
 
+const body = document.body;
+const fxCanvas = document.getElementById("fx-canvas");
 const navButtons = [...document.querySelectorAll(".nav-button")];
 const views = [...document.querySelectorAll(".view")];
 const dashboardStats = document.getElementById("dashboard-stats");
@@ -18,13 +21,28 @@ const dashboardRecentTasks = document.getElementById("dashboard-recent-tasks");
 const chainBreakdown = document.getElementById("chain-breakdown");
 const walletGroupBreakdown = document.getElementById("wallet-group-breakdown");
 const runInsights = document.getElementById("run-insights");
-const taskGrid = document.getElementById("task-grid");
 const tasksSubtitle = document.getElementById("tasks-subtitle");
+const taskGrid = document.getElementById("task-grid");
+const telemetrySummary = document.getElementById("telemetry-summary");
+const systemAlerts = document.getElementById("system-alerts");
+const priorityQueue = document.getElementById("priority-queue");
+const rpcHealthGrid = document.getElementById("rpc-health-grid");
+const commandScore = document.getElementById("command-score");
+const dashboardHealthPill = document.getElementById("dashboard-health-pill");
+const sidebarModeLabel = document.getElementById("sidebar-mode-label");
+const sidebarModeDot = document.getElementById("sidebar-mode-dot");
+const heroModeCopy = document.getElementById("hero-mode-copy");
+const liveClock = document.getElementById("live-clock");
 const logOutput = document.getElementById("log-output");
 const resultsOutput = document.getElementById("results-output");
 const runtimeOutput = document.getElementById("runtime-output");
 const refreshButton = document.getElementById("refresh-button");
+const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
+const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
+const runPriorityButton = document.getElementById("run-priority-button");
+const rpcPulseButton = document.getElementById("rpc-pulse-button");
+const snapshotButton = document.getElementById("snapshot-button");
 const clearLogsButton = document.getElementById("clear-logs-button");
 const taskSearchInput = document.getElementById("task-search-input");
 const taskStatusFilter = document.getElementById("task-status-filter");
@@ -47,12 +65,14 @@ const accountStatus = document.getElementById("account-status");
 const batchToggle = document.getElementById("batch-toggle");
 const batchStatus = document.getElementById("batch-status");
 const globalStopButton = document.getElementById("global-stop-button");
+const toastStack = document.getElementById("toast-stack");
 
 const taskModal = document.getElementById("task-modal");
 const modalTitle = document.getElementById("modal-title");
 const closeModalButton = document.getElementById("close-modal-button");
 const cancelTaskButton = document.getElementById("cancel-task-button");
 const taskForm = document.getElementById("task-form");
+const taskSubmitButton = taskForm.querySelector('button[type="submit"]');
 const taskIdInput = document.getElementById("task-id-input");
 const taskNameInput = document.getElementById("task-name-input");
 const taskPriorityInput = document.getElementById("task-priority-input");
@@ -118,6 +138,10 @@ function truncateMiddle(value, start = 8, end = 6) {
   return `${value.slice(0, start)}...${value.slice(-end)}`;
 }
 
+function pluralize(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function relativeTime(isoString) {
   if (!isoString) {
     return "Never";
@@ -141,6 +165,37 @@ function relativeTime(isoString) {
   return `${days}d ago`;
 }
 
+function formatDuration(ms) {
+  if (!ms || ms <= 0) {
+    return "0s";
+  }
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function priorityRank(priority) {
+  return {
+    critical: 3,
+    high: 2,
+    standard: 1
+  }[priority] || 0;
+}
+
+function humanizePriority(priority) {
+  return priority ? `${priority[0].toUpperCase()}${priority.slice(1)}` : "Standard";
+}
+
 function activeTask() {
   return state.tasks.find((task) => task.id === state.runState.activeTaskId) || null;
 }
@@ -149,28 +204,8 @@ function walletGroups() {
   return ["All", ...new Set(state.wallets.map((wallet) => wallet.group || "Imported"))];
 }
 
-function filteredTasks() {
-  return state.tasks.filter((task) => {
-    const matchesSearch = !state.taskSearch
-      || task.name.toLowerCase().includes(state.taskSearch.toLowerCase())
-      || task.contractAddress.toLowerCase().includes(state.taskSearch.toLowerCase())
-      || (task.tags || []).some((tag) => tag.toLowerCase().includes(state.taskSearch.toLowerCase()));
-
-    const matchesStatus =
-      state.taskStatusFilter === "all" || task.status === state.taskStatusFilter;
-
-    return matchesSearch && matchesStatus;
-  });
-}
-
-function setView(viewName) {
-  state.currentView = viewName;
-  navButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === viewName);
-  });
-  views.forEach((view) => {
-    view.classList.toggle("active", view.dataset.viewPanel === viewName);
-  });
+function chainLabel(chainKey) {
+  return state.chains.find((chain) => chain.key === chainKey)?.label || chainKey || "Unknown";
 }
 
 function selectedWalletIds() {
@@ -187,13 +222,459 @@ function selectedRpcIds() {
 
 function setWalletSelectionCount() {
   const count = selectedWalletIds().length;
-  walletSelectionCount.textContent = `${count} wallet${count === 1 ? "" : "s"} selected`;
+  walletSelectionCount.textContent = `${pluralize(count, "wallet")} selected`;
 }
 
 function setRpcSelectionCount() {
   const count = selectedRpcIds().length;
-  rpcSelectionCount.textContent = `${count} RPC node${count === 1 ? "" : "s"} selected`;
+  rpcSelectionCount.textContent = `${pluralize(count, "RPC node")} selected`;
   rpcSelectionCount.classList.toggle("warning", count === 0);
+}
+
+function computeSuccessRateNumeric() {
+  const summaries = state.tasks.map((task) => task.summary || {});
+  const total = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
+  const success = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
+  return total ? Math.round((success / total) * 100) : 0;
+}
+
+function getEligibleRpcCount(task) {
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  return state.rpcNodes.filter(
+    (node) =>
+      node.enabled &&
+      node.chainKey === task.chainKey &&
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+  ).length;
+}
+
+function taskReadiness(task) {
+  const issues = [];
+  let score = 0;
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+
+  if (task.contractAddress) {
+    score += 25;
+  } else {
+    issues.push("Missing contract address");
+  }
+
+  if (task.abiJson) {
+    score += 25;
+  } else {
+    issues.push("ABI not loaded");
+  }
+
+  if (walletIds.length > 0) {
+    score += 25;
+  } else {
+    issues.push("No wallets selected");
+  }
+
+  const rpcCount = getEligibleRpcCount(task);
+  if (rpcCount > 0) {
+    score += 25;
+  } else {
+    issues.push("No enabled RPC nodes");
+  }
+
+  let health = "blocked";
+  if (score >= 100) {
+    health = "armed";
+  } else if (score >= 50) {
+    health = "warming";
+  }
+
+  return {
+    score,
+    health,
+    rpcCount,
+    issues
+  };
+}
+
+function filteredTasks() {
+  return state.tasks.filter((task) => {
+    const search = state.taskSearch.toLowerCase();
+    const matchesSearch =
+      !search ||
+      (task.name || "").toLowerCase().includes(search) ||
+      (task.contractAddress || "").toLowerCase().includes(search) ||
+      (task.tags || []).some((tag) => tag.toLowerCase().includes(search));
+
+    const matchesStatus =
+      state.taskStatusFilter === "all" || task.status === state.taskStatusFilter;
+
+    return matchesSearch && matchesStatus;
+  });
+}
+
+function setStatusPill(element, tone, label) {
+  if (!element) {
+    return;
+  }
+
+  element.className = `status-pill${tone ? ` ${tone}` : ""}`;
+  element.textContent = label;
+}
+
+function deriveFallbackTelemetry() {
+  const active = activeTask();
+  const healthyRpcCount = state.rpcNodes.filter(
+    (node) => node.lastHealth?.status === "healthy"
+  ).length;
+  const unhealthyRpcCount = state.rpcNodes.filter(
+    (node) => node.lastHealth?.status === "error"
+  ).length;
+  const priorityTasks = [...state.tasks]
+    .filter((task) => !task.done)
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+    })
+    .slice(0, 5);
+
+  const priorityQueueItems = priorityTasks.map((task) => {
+    const readiness = taskReadiness(task);
+    const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+    return {
+      id: task.id,
+      name: task.name,
+      chainKey: task.chainKey,
+      chainLabel: chainLabel(task.chainKey),
+      priority: task.priority,
+      priorityLabel: humanizePriority(task.priority),
+      status: task.status,
+      statusLabel: task.status,
+      readinessScore: readiness.score,
+      health: readiness.health,
+      walletCount: walletIds.length,
+      rpcCount: readiness.rpcCount,
+      issues: readiness.issues,
+      updatedAt: task.updatedAt
+    };
+  });
+
+  const readinessScore = priorityQueueItems.length
+    ? Math.round(
+        priorityQueueItems.reduce((sum, task) => sum + task.readinessScore, 0) /
+          priorityQueueItems.length
+      )
+    : 0;
+
+  const latestRunTask = [...state.tasks]
+    .filter((task) => task.lastRunAt)
+    .sort((left, right) => new Date(right.lastRunAt) - new Date(left.lastRunAt))[0];
+
+  const chainLoad = Object.entries(
+    state.tasks.reduce((map, task) => {
+      map[task.chainKey] = (map[task.chainKey] || 0) + 1;
+      return map;
+    }, {})
+  )
+    .map(([chainKey, count]) => ({
+      chainKey,
+      label: chainLabel(chainKey),
+      count,
+      share: state.tasks.length ? Math.round((count / state.tasks.length) * 100) : 0
+    }))
+    .sort((left, right) => right.count - left.count);
+
+  const alerts = [];
+  if (state.wallets.length === 0) {
+    alerts.push({
+      severity: "critical",
+      title: "No wallet fleet loaded",
+      detail: "Import at least one wallet before attempting a run."
+    });
+  }
+  if (state.rpcNodes.length === 0) {
+    alerts.push({
+      severity: "critical",
+      title: "RPC mesh is empty",
+      detail: "Add RPC nodes to arm task execution paths."
+    });
+  }
+  if (unhealthyRpcCount > 0) {
+    alerts.push({
+      severity: "warning",
+      title: "RPC degradation detected",
+      detail: `${pluralize(unhealthyRpcCount, "RPC node")} reported an error on the last health check.`
+    });
+  }
+  if (active) {
+    alerts.push({
+      severity: "info",
+      title: "Run in progress",
+      detail: `${active.name} is currently executing with ${active.progress?.percent || 0}% completion.`
+    });
+  }
+  if (!alerts.length) {
+    alerts.push({
+      severity: "info",
+      title: "System standing by",
+      detail: "No immediate blockers detected in the current local operator stack."
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    readinessScore,
+    successRate: computeSuccessRateNumeric(),
+    healthyRpcCount,
+    unhealthyRpcCount,
+    walletGroupCount: walletGroups().filter((group) => group !== "All").length,
+    readyTaskCount: priorityQueueItems.filter((task) => task.health === "armed").length,
+    liveLogCount: (state.runState.logs || []).length,
+    runDurationMs:
+      state.runState.startedAt && state.runState.status === "running"
+        ? Date.now() - new Date(state.runState.startedAt).getTime()
+        : 0,
+    activeTaskName: active?.name || null,
+    topChainLabel: chainLoad[0]?.label || "No chain load",
+    lastRunTaskName: latestRunTask?.name || "No history",
+    lastRunAt: latestRunTask?.lastRunAt || null,
+    priorityQueue: priorityQueueItems,
+    chainLoad,
+    alerts,
+    rpcMatrix: state.rpcNodes.slice(0, 6).map((node) => ({
+      id: node.id,
+      name: node.name,
+      chainLabel: chainLabel(node.chainKey),
+      chainKey: node.chainKey,
+      status: node.lastHealth?.status || "unknown",
+      latencyMs: node.lastHealth?.latencyMs || null,
+      checkedAt: node.lastHealth?.checkedAt || null,
+      url: node.url
+    }))
+  };
+}
+
+function telemetryView() {
+  return {
+    ...deriveFallbackTelemetry(),
+    ...(state.telemetry || {})
+  };
+}
+
+function pushLocalLog(level, message) {
+  state.runState.logs = [
+    ...(state.runState.logs || []),
+    {
+      level,
+      message,
+      timestamp: new Date().toISOString()
+    }
+  ].slice(-200);
+  renderLogs();
+}
+
+function showToast(message, tone = "info", title = null) {
+  const toast = document.createElement("div");
+  toast.className = `toast ${tone}`;
+  toast.innerHTML = `
+    <strong>${escapeHtml(title || (tone === "error" ? "Request Error" : tone === "success" ? "Action Complete" : "Heads Up"))}</strong>
+    <p>${escapeHtml(message)}</p>
+  `;
+
+  toastStack.prepend(toast);
+  window.setTimeout(() => {
+    toast.remove();
+  }, 4200);
+}
+
+function animateNumberNodes(root = document) {
+  root.querySelectorAll("[data-animate-number]").forEach((node) => {
+    const target = Number(node.dataset.animateNumber || 0);
+    const precision = Number(node.dataset.precision || 0);
+    const prefix = node.dataset.prefix || "";
+    const suffix = node.dataset.suffix || "";
+
+    if (!Number.isFinite(target)) {
+      return;
+    }
+
+    const previous = Number(node.dataset.renderedValue || 0);
+    if (previous === target && node.dataset.hasAnimated === "true") {
+      node.textContent = `${prefix}${target.toFixed(precision)}${suffix}`;
+      return;
+    }
+
+    const start = performance.now();
+    const duration = 720;
+
+    const tick = (now) => {
+      const progress = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      const value = previous + (target - previous) * eased;
+      node.textContent = `${prefix}${value.toFixed(precision)}${suffix}`;
+
+      if (progress < 1) {
+        requestAnimationFrame(tick);
+        return;
+      }
+
+      node.dataset.renderedValue = String(target);
+      node.dataset.hasAnimated = "true";
+      node.textContent = `${prefix}${target.toFixed(precision)}${suffix}`;
+    };
+
+    requestAnimationFrame(tick);
+  });
+}
+
+function initializeMotionSurfaces(root = document) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+
+  root.querySelectorAll("[data-tilt]").forEach((element) => {
+    if (element.dataset.tiltBound === "true") {
+      return;
+    }
+
+    element.dataset.tiltBound = "true";
+
+    const reset = () => {
+      element.style.transform = "";
+    };
+
+    element.addEventListener("pointermove", (event) => {
+      const rect = element.getBoundingClientRect();
+      const pointerX = (event.clientX - rect.left) / rect.width;
+      const pointerY = (event.clientY - rect.top) / rect.height;
+      const rotateY = (pointerX - 0.5) * 10;
+      const rotateX = (0.5 - pointerY) * 8;
+      element.style.transform = `perspective(1400px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-2px)`;
+    });
+
+    element.addEventListener("pointerleave", reset);
+    element.addEventListener("pointercancel", reset);
+  });
+}
+
+function initializeCanvasScene() {
+  if (!fxCanvas || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+
+  const context = fxCanvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+
+  let width = 0;
+  let height = 0;
+  let horizon = 0;
+  let particles = [];
+  const pointer = { x: 0.5, y: 0.4 };
+
+  function createParticle(forceTop = false) {
+    return {
+      x: Math.random(),
+      y: forceTop ? -0.2 : Math.random() * 1.2,
+      z: Math.random() * 0.9 + 0.1,
+      speed: Math.random() * 0.012 + 0.004,
+      size: Math.random() * 2.2 + 0.6
+    };
+  }
+
+  function resize() {
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    horizon = height * 0.34;
+    fxCanvas.width = Math.floor(width * ratio);
+    fxCanvas.height = Math.floor(height * ratio);
+    fxCanvas.style.width = `${width}px`;
+    fxCanvas.style.height = `${height}px`;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    particles = Array.from({ length: Math.max(36, Math.floor(width / 34)) }, () => createParticle());
+  }
+
+  function drawGrid() {
+    context.save();
+    context.strokeStyle = "rgba(113, 224, 255, 0.08)";
+    context.lineWidth = 1;
+
+    for (let i = 0; i < 13; i += 1) {
+      const x = (width / 12) * i;
+      context.beginPath();
+      context.moveTo(x, height);
+      context.lineTo(width / 2 + (x - width / 2) * 0.18, horizon);
+      context.stroke();
+    }
+
+    for (let i = 0; i < 9; i += 1) {
+      const y = horizon + ((height - horizon) / 8) * i;
+      const scale = (y - horizon) / (height - horizon || 1);
+      context.beginPath();
+      context.moveTo(width * (0.5 - 0.5 * scale), y);
+      context.lineTo(width * (0.5 + 0.5 * scale), y);
+      context.stroke();
+    }
+
+    context.restore();
+  }
+
+  function drawGlow() {
+    const centerX = width * (0.18 + pointer.x * 0.12);
+    const centerY = height * (0.12 + pointer.y * 0.06);
+    const gradient = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, 240);
+    gradient.addColorStop(0, "rgba(113, 224, 255, 0.18)");
+    gradient.addColorStop(1, "rgba(113, 224, 255, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+  }
+
+  function render() {
+    context.clearRect(0, 0, width, height);
+    drawGlow();
+    drawGrid();
+
+    particles.forEach((particle) => {
+      particle.y += particle.speed * (0.45 + particle.z);
+      if (particle.y > 1.2) {
+        Object.assign(particle, createParticle(true));
+      }
+
+      const drift = (pointer.x - 0.5) * 110 * (1 - particle.z);
+      const x = particle.x * width + drift;
+      const y = horizon + particle.y * (height - horizon) * 0.92;
+      const size = particle.size * (0.6 + particle.z * 1.4);
+
+      context.fillStyle = `rgba(113, 224, 255, ${0.18 + particle.z * 0.4})`;
+      context.beginPath();
+      context.arc(x, y, size, 0, Math.PI * 2);
+      context.fill();
+
+      context.fillStyle = `rgba(79, 255, 210, ${0.08 + particle.z * 0.18})`;
+      context.fillRect(x - 0.45, y, 0.9, 18 * particle.z);
+    });
+
+    requestAnimationFrame(render);
+  }
+
+  window.addEventListener("pointermove", (event) => {
+    pointer.x = event.clientX / Math.max(window.innerWidth, 1);
+    pointer.y = event.clientY / Math.max(window.innerHeight, 1);
+  });
+
+  window.addEventListener("resize", resize);
+  resize();
+  render();
+}
+
+function updateClock() {
+  liveClock.textContent = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date());
 }
 
 function walletRowsMarkup(wallets, selectedIds) {
@@ -205,7 +686,7 @@ function walletRowsMarkup(wallets, selectedIds) {
           <input type="checkbox" value="${escapeHtml(wallet.id)}" ${checked ? "checked" : ""} />
           <div>
             <strong>${escapeHtml(wallet.label)}</strong>
-            <div class="muted-copy">${escapeHtml(wallet.addressShort)} - ${escapeHtml(wallet.group || "Imported")}</div>
+            <div class="muted-copy">${escapeHtml(wallet.addressShort)} · ${escapeHtml(wallet.group || "Imported")}</div>
           </div>
           <span class="wallet-chip">${escapeHtml(wallet.status || "ready")}</span>
         </label>
@@ -225,6 +706,7 @@ function rpcRowsMarkup(rpcNodes, selectedIds) {
           : healthStatus === "error"
             ? "error"
             : "untested";
+
       return `
         <label class="wallet-selector-item ${checked ? "selected" : ""}">
           <input type="checkbox" value="${escapeHtml(node.id)}" ${checked ? "checked" : ""} />
@@ -246,17 +728,6 @@ function bindSelectorCheckboxes(container, afterChange) {
       afterChange();
     });
   });
-}
-
-function chainLabel(chainKey) {
-  return state.chains.find((chain) => chain.key === chainKey)?.label || chainKey;
-}
-
-function computeSuccessRate() {
-  const summaries = state.tasks.map((task) => task.summary || {});
-  const total = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
-  const success = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
-  return total ? `${Math.round((success / total) * 100)}%` : "0%";
 }
 
 function renderWalletSelector(selectedIds = []) {
@@ -297,65 +768,227 @@ function renderWalletSelector(selectedIds = []) {
 }
 
 function renderRpcSelector(selectedIds = []) {
-  const chainKey = taskChainInput.value || "base_sepolia";
-  const rpcNodes = state.rpcNodes.filter((node) => node.chainKey === chainKey && node.enabled);
+  const activeChain = taskChainInput.value || state.chains[0]?.key || "base_sepolia";
+  const rpcNodes = state.rpcNodes.filter((node) => node.chainKey === activeChain && node.enabled);
 
   rpcSelector.innerHTML = rpcNodes.length
     ? rpcRowsMarkup(rpcNodes, selectedIds)
-    : `<div class="empty-state"><h3>No RPC nodes</h3><p>Add enabled nodes for ${escapeHtml(chainLabel(chainKey))} in the RPC view.</p></div>`;
+    : `<div class="empty-state"><h3>No RPC nodes</h3><p>Add enabled nodes for ${escapeHtml(chainLabel(activeChain))} in the RPC view.</p></div>`;
 
   setRpcSelectionCount();
   bindSelectorCheckboxes(rpcSelector, setRpcSelectionCount);
 }
 
-function renderDashboard() {
-  const runningTasks = state.tasks.filter((task) => task.status === "running").length;
-  const completedTasks = state.tasks.filter((task) => task.status === "completed").length;
-  const totalWallets = state.wallets.length;
-  const totalRpc = state.rpcNodes.length;
-  const active = activeTask();
+function renderLogs() {
+  logOutput.textContent = (state.runState.logs || [])
+    .map((entry) => {
+      const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--";
+      return `[${time}] [${entry.level}] ${entry.message}`;
+    })
+    .join("\n");
+  logOutput.scrollTop = logOutput.scrollHeight;
+}
 
-  dashboardStats.innerHTML = [
-    { label: "Tasks", value: state.tasks.length },
-    { label: "Running", value: runningTasks },
-    { label: "Wallets", value: totalWallets },
-    { label: "RPC Nodes", value: totalRpc }
+function renderTelemetrySummary(telemetry) {
+  telemetrySummary.innerHTML = [
+    {
+      label: "Readiness Score",
+      number: telemetry.readinessScore || 0,
+      suffix: "%",
+      subtext: `${pluralize(telemetry.readyTaskCount || 0, "armed task")}`
+    },
+    {
+      label: "Healthy RPC",
+      number: telemetry.healthyRpcCount || 0,
+      suffix: "",
+      subtext: `${pluralize(telemetry.unhealthyRpcCount || 0, "degraded node")}`
+    },
+    {
+      label: "Wallet Groups",
+      number: telemetry.walletGroupCount || 0,
+      suffix: "",
+      subtext: `${pluralize(state.wallets.length, "wallet")} loaded`
+    },
+    {
+      label: "Live Logs",
+      number: telemetry.liveLogCount || 0,
+      suffix: "",
+      subtext:
+        state.runState.status === "running"
+          ? `Runtime ${formatDuration(telemetry.runDurationMs || 0)}`
+          : "Awaiting next launch window"
+    }
   ]
     .map(
       (card) => `
-        <article class="stat-card">
-          <span class="muted-copy">${escapeHtml(card.label)}</span>
-          <strong>${card.value}</strong>
+        <article class="telemetry-card" data-tilt>
+          <span class="micro-label">${escapeHtml(card.label)}</span>
+          <strong data-animate-number="${card.number}" data-suffix="${escapeHtml(card.suffix)}">0</strong>
+          <p>${escapeHtml(card.subtext)}</p>
         </article>
       `
     )
     .join("");
 
-  const latestRunTask = [...state.tasks]
-    .filter((task) => task.lastRunAt)
-    .sort((a, b) => new Date(b.lastRunAt) - new Date(a.lastRunAt))[0];
+  animateNumberNodes(telemetrySummary);
+}
 
-  runInsights.innerHTML = [
+function renderSystemAlerts(telemetry) {
+  systemAlerts.innerHTML = telemetry.alerts?.length
+    ? telemetry.alerts
+        .slice(0, 4)
+        .map(
+          (alert) => `
+            <article class="alert-item ${escapeHtml(alert.severity)}">
+              <strong>${escapeHtml(alert.title)}</strong>
+              <p class="muted-copy">${escapeHtml(alert.detail)}</p>
+            </article>
+          `
+        )
+        .join("")
+    : `<div class="empty-state"><h3>No alerts</h3><p>Everything is quiet for now.</p></div>`;
+}
+
+function renderPriorityQueue(telemetry) {
+  const queue = telemetry.priorityQueue || [];
+
+  priorityQueue.innerHTML = queue.length
+    ? queue
+        .map(
+          (task) => `
+            <article class="queue-item">
+              <div class="queue-head">
+                <div>
+                  <strong>${escapeHtml(task.name)}</strong>
+                  <p class="muted-copy">${escapeHtml(task.chainLabel || chainLabel(task.chainKey))} · ${escapeHtml(task.priorityLabel || humanizePriority(task.priority))}</p>
+                </div>
+                <span class="queue-chip ${escapeHtml(task.health || "warming")}">${escapeHtml(task.health || "warming")}</span>
+              </div>
+              <div class="queue-meta">
+                <span class="wallet-chip">${pluralize(task.walletCount || 0, "wallet")}</span>
+                <span class="rpc-chip ${(task.health || "warming") === "armed" ? "healthy" : ""}">${pluralize(task.rpcCount || 0, "rpc")}</span>
+                <span class="wallet-chip">${escapeHtml(task.statusLabel || task.status || "draft")}</span>
+                <span class="wallet-chip">${task.readinessScore || 0}% ready</span>
+              </div>
+              <p class="muted-copy">${escapeHtml(task.issues?.[0] || "Ready for operator action with current configuration.")}</p>
+              <div class="queue-actions">
+                <button class="mini-button primary fx-button" data-command-action="run" data-task-id="${escapeHtml(task.id)}" ${task.health === "blocked" ? "disabled" : ""}>Run</button>
+                <button class="mini-button fx-button" data-command-action="edit" data-task-id="${escapeHtml(task.id)}">Open</button>
+              </div>
+            </article>
+          `
+        )
+        .join("")
+    : `<div class="empty-state"><h3>No queued tasks</h3><p>Create or re-enable tasks to populate the command center.</p></div>`;
+
+  priorityQueue.querySelectorAll("[data-command-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const taskId = button.dataset.taskId;
+      const task = state.tasks.find((entry) => entry.id === taskId);
+      if (!task) {
+        return;
+      }
+
+      if (button.dataset.commandAction === "edit") {
+        openTaskModal(task);
+        return;
+      }
+
+      try {
+        await request(`/api/tasks/${taskId}/run`, { method: "POST" });
+        showToast(`${task.name} is starting now.`, "success", "Task Launch");
+      } catch {}
+    });
+  });
+}
+
+function renderRpcHealthGrid(telemetry) {
+  rpcHealthGrid.innerHTML = telemetry.rpcMatrix?.length
+    ? telemetry.rpcMatrix
+        .map(
+          (node) => `
+            <div class="mesh-row">
+              <div>
+                <strong>${escapeHtml(node.name)}</strong>
+                <p class="muted-copy">${escapeHtml(node.chainLabel || chainLabel(node.chainKey))} · ${escapeHtml(truncateMiddle(node.url, 16, 12))}</p>
+              </div>
+              <div class="mesh-meta">
+                <span class="rpc-chip ${escapeHtml(node.status)}">${escapeHtml(node.status)}</span>
+                <span class="wallet-chip">${node.latencyMs ? `${node.latencyMs}ms` : "untested"}</span>
+              </div>
+            </div>
+          `
+        )
+        .join("")
+    : `<div class="empty-state"><h3>No mesh data</h3><p>Save or test RPC nodes to see live health signals.</p></div>`;
+}
+
+function renderDashboard() {
+  const telemetry = telemetryView();
+  const active = activeTask();
+  const completedTasks = state.tasks.filter((task) => task.status === "completed").length;
+  const runningTasks = state.tasks.filter((task) => task.status === "running").length;
+  const armedTasks = (telemetry.priorityQueue || []).filter((task) => task.health === "armed").length;
+
+  renderTelemetrySummary(telemetry);
+  renderSystemAlerts(telemetry);
+  renderPriorityQueue(telemetry);
+  renderRpcHealthGrid(telemetry);
+
+  dashboardStats.innerHTML = [
     {
-      label: "Success Rate",
-      value: computeSuccessRate(),
-      subtext: `${completedTasks} completed tasks`
+      label: "Task Library",
+      number: state.tasks.length,
+      subtext: `${pluralize(completedTasks, "completed task")}`
     },
     {
-      label: "Active Task",
-      value: active ? active.name : "None",
-      subtext: active ? `${active.progress?.phase || "Running"} - ${active.progress?.percent || 0}%` : "Idle"
+      label: "Hot Runs",
+      number: runningTasks,
+      subtext: active ? active.name : "No active task"
     },
     {
-      label: "Last Run",
-      value: latestRunTask ? latestRunTask.name : "No history",
-      subtext: latestRunTask ? relativeTime(latestRunTask.lastRunAt) : "Nothing executed yet"
+      label: "Armed Queue",
+      number: armedTasks,
+      subtext: `${pluralize((telemetry.priorityQueue || []).length, "priority task")}`
+    },
+    {
+      label: "Wallet Fleet",
+      number: state.wallets.length,
+      subtext: `${pluralize(telemetry.walletGroupCount || 0, "group")}`
     }
   ]
     .map(
       (card) => `
-        <article class="insight-card">
-          <span class="muted-copy">${escapeHtml(card.label)}</span>
+        <article class="stat-card" data-tilt>
+          <span class="micro-label">${escapeHtml(card.label)}</span>
+          <strong data-animate-number="${card.number}">0</strong>
+          <p class="muted-copy">${escapeHtml(card.subtext)}</p>
+        </article>
+      `
+    )
+    .join("");
+
+  runInsights.innerHTML = [
+    {
+      label: "Success Rate",
+      value: `${telemetry.successRate || 0}%`,
+      subtext: `${pluralize(completedTasks, "completed task")}`
+    },
+    {
+      label: "Top Chain",
+      value: telemetry.topChainLabel || "No load",
+      subtext: runningTasks ? "Live traffic detected" : "Standing by"
+    },
+    {
+      label: "Last Run",
+      value: telemetry.lastRunTaskName || "No history",
+      subtext: telemetry.lastRunAt ? relativeTime(telemetry.lastRunAt) : "Nothing executed yet"
+    }
+  ]
+    .map(
+      (card) => `
+        <article class="insight-card" data-tilt>
+          <span class="micro-label">${escapeHtml(card.label)}</span>
           <strong>${escapeHtml(card.value)}</strong>
           <p class="muted-copy">${escapeHtml(card.subtext)}</p>
         </article>
@@ -363,8 +996,21 @@ function renderDashboard() {
     )
     .join("");
 
+  animateNumberNodes(dashboardStats);
+  commandScore.textContent = `${telemetry.readinessScore || 0}%`;
+
+  if (state.runState.status === "running") {
+    setStatusPill(dashboardHealthPill, "running", "Live Run");
+  } else if ((telemetry.alerts || []).some((alert) => alert.severity === "critical")) {
+    setStatusPill(dashboardHealthPill, "failed", "Action Needed");
+  } else if ((telemetry.readyTaskCount || 0) > 0) {
+    setStatusPill(dashboardHealthPill, "completed", "Armed");
+  } else {
+    setStatusPill(dashboardHealthPill, "", "Standby");
+  }
+
   const recentTasks = [...state.tasks]
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .sort((left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0))
     .slice(0, 4);
 
   dashboardRecentTasks.innerHTML = recentTasks.length
@@ -374,7 +1020,7 @@ function renderDashboard() {
             <div class="list-row">
               <div>
                 <strong>${escapeHtml(task.name)}</strong>
-                <p>${escapeHtml(truncateMiddle(task.contractAddress || "No contract"))}</p>
+                <p class="muted-copy">${escapeHtml(truncateMiddle(task.contractAddress || "No contract set"))} · ${escapeHtml(humanizePriority(task.priority))}</p>
               </div>
               <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
             </div>
@@ -383,23 +1029,16 @@ function renderDashboard() {
         .join("")
     : `<div class="empty-state"><h3>No tasks created</h3><p>Create your first task from the Tasks view.</p></div>`;
 
-  const chainCounts = Object.entries(
-    state.tasks.reduce((map, task) => {
-      map[task.chainKey] = (map[task.chainKey] || 0) + 1;
-      return map;
-    }, {})
-  );
-
-  chainBreakdown.innerHTML = chainCounts.length
-    ? chainCounts
+  chainBreakdown.innerHTML = (telemetry.chainLoad || []).length
+    ? telemetry.chainLoad
         .map(
-          ([chainKey, count]) => `
+          (entry) => `
             <div class="list-row">
               <div>
-                <strong>${escapeHtml(chainLabel(chainKey))}</strong>
-                <p>${count} task${count === 1 ? "" : "s"}</p>
+                <strong>${escapeHtml(entry.label)}</strong>
+                <p class="muted-copy">${pluralize(entry.count, "task")} · ${entry.share}% share</p>
               </div>
-              <span class="status-pill">${count}</span>
+              <span class="wallet-chip">${entry.share}%</span>
             </div>
           `
         )
@@ -421,7 +1060,7 @@ function renderDashboard() {
             <div class="list-row">
               <div>
                 <strong>${escapeHtml(group)}</strong>
-                <p>${count} wallet${count === 1 ? "" : "s"}</p>
+                <p class="muted-copy">${pluralize(count, "wallet")}</p>
               </div>
               <span class="wallet-chip">${count}</span>
             </div>
@@ -440,31 +1079,29 @@ function renderTaskCard(task) {
   const tags = task.tags || [];
 
   return `
-    <article class="task-card ${escapeHtml(task.status)}" data-task-id="${escapeHtml(task.id)}">
+    <article class="task-card ${escapeHtml(task.status)}" data-task-id="${escapeHtml(task.id)}" data-tilt>
       <div class="task-head">
         <div>
+          <p class="eyebrow">${escapeHtml(chainLabel(task.chainKey))}</p>
           <h3>${escapeHtml(task.name)}</h3>
-          <p class="muted-copy">${escapeHtml(task.platform)} - ${escapeHtml(task.priority || "standard")}</p>
+          <p class="muted-copy">${escapeHtml(task.platform)} · ${escapeHtml(humanizePriority(task.priority || "standard"))}</p>
         </div>
-        <div class="task-actions">
-          <button class="mini-button" data-task-action="done">${task.done ? "Undone" : "Done"}</button>
-          <button class="mini-button ${active ? "" : "primary"}" data-task-action="${active ? "stop" : "run"}">${active ? "Stop" : "Run"}</button>
-          <button class="mini-button" data-task-action="edit">Edit</button>
-          <button class="mini-button" data-task-action="duplicate">Duplicate</button>
-          <button class="mini-button danger" data-task-action="delete">Delete</button>
-        </div>
+        <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
+      </div>
+
+      <div class="chip-row">
+        <span class="tag-chip">${escapeHtml(humanizePriority(task.priority || "standard"))}</span>
+        ${tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}
       </div>
 
       <div class="task-meta">
-        <div class="meta-item"><label>Contract</label><strong>${escapeHtml(truncateMiddle(task.contractAddress))}</strong></div>
+        <div class="meta-item"><label>Contract</label><strong>${escapeHtml(truncateMiddle(task.contractAddress || "Not set"))}</strong></div>
         <div class="meta-item"><label>Chain</label><strong>${escapeHtml(chainLabel(task.chainKey))}</strong></div>
         <div class="meta-item"><label>Wallets</label><strong>${task.walletCount}</strong></div>
         <div class="meta-item"><label>RPC</label><strong>${task.rpcCount}</strong></div>
         <div class="meta-item"><label>Qty</label><strong>${task.quantityPerWallet}</strong></div>
         <div class="meta-item"><label>Price</label><strong>${escapeHtml(task.priceEth)} ETH</strong></div>
       </div>
-
-      ${tags.length ? `<div class="chip-row">${tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
 
       <div class="task-stats">
         <div class="stat-box"><label>Total</label><strong>${summary.total ?? task.walletCount}</strong></div>
@@ -474,12 +1111,20 @@ function renderTaskCard(task) {
       </div>
 
       <div class="task-progress-row">
-        <span class="muted-copy">${escapeHtml(progress.phase)} - ${progress.percent ?? 0}%</span>
-        <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
+        <span class="muted-copy">${escapeHtml(progress.phase)} · ${progress.percent ?? 0}%</span>
+        <span class="wallet-chip">${active ? "Live task" : relativeTime(task.updatedAt)}</span>
       </div>
       <div class="progress-track"><div class="progress-bar" style="width:${Number(progress.percent || 0)}%"></div></div>
 
-      ${task.notes ? `<p class="muted-copy" style="margin-top:12px;">${escapeHtml(task.notes)}</p>` : ""}
+      ${task.notes ? `<p class="muted-copy">${escapeHtml(task.notes)}</p>` : ""}
+
+      <div class="task-actions">
+        <button class="mini-button fx-button" data-task-action="done">${task.done ? "Undone" : "Done"}</button>
+        <button class="mini-button ${active ? "" : "primary"} fx-button" data-task-action="${active ? "stop" : "run"}">${active ? "Stop" : "Run"}</button>
+        <button class="mini-button fx-button" data-task-action="edit">Edit</button>
+        <button class="mini-button fx-button" data-task-action="duplicate">Duplicate</button>
+        <button class="mini-button danger fx-button" data-task-action="delete">Delete</button>
+      </div>
 
       <div class="history-block">
         <div class="muted-copy">History (${task.history?.length || 0})</div>
@@ -488,7 +1133,7 @@ function renderTaskCard(task) {
             ? `
               <div class="history-item">
                 <strong>Last run: ${new Date(latestHistory.ranAt).toLocaleString()}</strong>
-                <p class="muted-copy">${latestHistory.summary.success} success - ${latestHistory.summary.failed} failed - ${latestHistory.summary.hashes.length} hashes</p>
+                <p class="muted-copy">${latestHistory.summary.success} success · ${latestHistory.summary.failed} failed · ${latestHistory.summary.hashes.length} hashes</p>
               </div>
             `
             : `<p class="muted-copy">No history recorded yet.</p>`
@@ -500,7 +1145,7 @@ function renderTaskCard(task) {
 
 function renderTasks() {
   const tasks = filteredTasks();
-  tasksSubtitle.textContent = `${tasks.length} task${tasks.length === 1 ? "" : "s"} shown`;
+  tasksSubtitle.textContent = `${pluralize(tasks.length, "task")} shown`;
 
   taskGrid.innerHTML = tasks.length
     ? tasks.map(renderTaskCard).join("")
@@ -511,35 +1156,41 @@ function renderTasks() {
       const card = button.closest("[data-task-id]");
       const taskId = card.dataset.taskId;
       const action = button.dataset.taskAction;
+      const task = state.tasks.find((entry) => entry.id === taskId);
 
       try {
         if (action === "edit") {
-          openTaskModal(state.tasks.find((task) => task.id === taskId));
+          openTaskModal(task);
           return;
         }
 
         if (action === "delete") {
           await request(`/api/tasks/${taskId}`, { method: "DELETE" });
+          showToast(`${task?.name || "Task"} deleted.`, "success", "Task Removed");
           return;
         }
 
         if (action === "done") {
           await request(`/api/tasks/${taskId}/done`, { method: "POST" });
+          showToast(`${task?.name || "Task"} status toggled.`, "success", "Task Updated");
           return;
         }
 
         if (action === "duplicate") {
           await request(`/api/tasks/${taskId}/duplicate`, { method: "POST" });
+          showToast(`${task?.name || "Task"} duplicated.`, "success", "Task Duplicated");
           return;
         }
 
         if (action === "run") {
           await request(`/api/tasks/${taskId}/run`, { method: "POST" });
+          showToast(`${task?.name || "Task"} launch requested.`, "success", "Task Launch");
           return;
         }
 
         if (action === "stop") {
           await request("/api/run/stop", { method: "POST" });
+          showToast("Active run stop requested.", "info", "Run Control");
         }
       } catch {}
     });
@@ -547,7 +1198,7 @@ function renderTasks() {
 }
 
 function renderWallets() {
-  walletCount.textContent = `${state.wallets.length} wallet${state.wallets.length === 1 ? "" : "s"}`;
+  walletCount.textContent = pluralize(state.wallets.length, "wallet");
   walletList.innerHTML = state.wallets.length
     ? state.wallets
         .map(
@@ -555,22 +1206,23 @@ function renderWallets() {
             <div class="list-row">
               <div>
                 <strong>${escapeHtml(wallet.label)}</strong>
-                <p>${escapeHtml(wallet.addressShort)} - ${escapeHtml(wallet.group || "Imported")}</p>
+                <p class="muted-copy">${escapeHtml(wallet.addressShort)} · ${escapeHtml(wallet.group || "Imported")}</p>
               </div>
               <div class="task-actions">
                 <span class="wallet-chip">${escapeHtml(wallet.status)}</span>
-                <button class="mini-button danger" data-wallet-delete="${escapeHtml(wallet.id)}">Delete</button>
+                <button class="mini-button danger fx-button" data-wallet-delete="${escapeHtml(wallet.id)}">Delete</button>
               </div>
             </div>
           `
         )
         .join("")
-    : `<div class="empty-state"><h3>No wallets imported</h3><p>Add wallets on the left to start creating tasks.</p></div>`;
+    : `<div class="empty-state"><h3>No wallets imported</h3><p>Add wallets to start building task groups.</p></div>`;
 
   walletList.querySelectorAll("[data-wallet-delete]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
         await request(`/api/wallets/${button.dataset.walletDelete}`, { method: "DELETE" });
+        showToast("Wallet removed from local storage.", "success", "Wallet Deleted");
       } catch {}
     });
   });
@@ -596,23 +1248,24 @@ function renderRpcNodes() {
             <div class="list-row">
               <div>
                 <strong>${escapeHtml(node.name)}</strong>
-                <p>${escapeHtml(chainLabel(node.chainKey))} - ${escapeHtml(node.url)}</p>
+                <p class="muted-copy">${escapeHtml(chainLabel(node.chainKey))} · ${escapeHtml(node.url)}</p>
               </div>
               <div class="task-actions">
                 ${rpcHealthMarkup(node)}
-                <button class="mini-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
-                <button class="mini-button danger" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>
+                <button class="mini-button fx-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
+                <button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>
               </div>
             </div>
           `
         )
         .join("")
-    : `<div class="empty-state"><h3>No RPC nodes saved</h3><p>Add chain endpoints to build a failover pool.</p></div>`;
+    : `<div class="empty-state"><h3>No RPC nodes saved</h3><p>Add chain endpoints to build a failover mesh.</p></div>`;
 
   rpcList.querySelectorAll("[data-rpc-delete]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
         await request(`/api/rpc-nodes/${button.dataset.rpcDelete}`, { method: "DELETE" });
+        showToast("RPC node removed from the mesh.", "success", "RPC Deleted");
       } catch {}
     });
   });
@@ -621,6 +1274,7 @@ function renderRpcNodes() {
     button.addEventListener("click", async () => {
       try {
         await request(`/api/rpc-nodes/${button.dataset.rpcTest}/test`, { method: "POST" });
+        showToast("RPC health test completed.", "success", "RPC Pulse");
       } catch {}
     });
   });
@@ -628,14 +1282,16 @@ function renderRpcNodes() {
 
 function renderSettings() {
   profileNameInput.value = state.settings.profileName || "local";
-  themeInput.value = state.settings.theme || "dark-panel";
+  themeInput.value = state.settings.theme || "quantum-operator";
   resultsPathInput.value = state.settings.resultsPath || "./dist/mint-results.json";
 }
 
 function renderRuntime() {
   runtimeOutput.textContent = JSON.stringify(
     {
+      view: state.currentView,
       runState: state.runState,
+      telemetry: telemetryView(),
       taskCount: state.tasks.length,
       walletCount: state.wallets.length,
       rpcNodeCount: state.rpcNodes.length
@@ -648,13 +1304,53 @@ function renderRuntime() {
 function renderResultsIfAvailable() {
   const latestCompletedTask = [...state.tasks]
     .filter((task) => task.history?.length)
-    .sort((a, b) => new Date(b.lastRunAt || 0) - new Date(a.lastRunAt || 0))[0];
+    .sort((left, right) => new Date(right.lastRunAt || 0) - new Date(left.lastRunAt || 0))[0];
 
   if (!latestCompletedTask) {
+    resultsOutput.textContent = "No results yet.";
     return;
   }
 
   resultsOutput.textContent = JSON.stringify(latestCompletedTask.history[0], null, 2);
+}
+
+function renderShellTelemetry() {
+  const telemetry = telemetryView();
+  const active = activeTask();
+  const hasCriticalAlert = (telemetry.alerts || []).some((alert) => alert.severity === "critical");
+
+  body.dataset.runState = state.runState.status;
+  accountLabel.textContent = state.settings.profileName || "Local Operator";
+  accountStatus.textContent = state.runState.status === "running" ? "Task running" : "Ready";
+  heroModeCopy.textContent = active
+    ? `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
+    : `Monitoring ${pluralize(state.tasks.length, "task")}, ${pluralize(state.wallets.length, "wallet")}, and ${pluralize(state.rpcNodes.length, "RPC node")} from one control surface.`;
+
+  if (state.runState.status === "running") {
+    sidebarModeLabel.textContent = "Live Run";
+    sidebarModeDot.className = "signal-dot hot";
+  } else if (hasCriticalAlert) {
+    sidebarModeLabel.textContent = "Alert";
+    sidebarModeDot.className = "signal-dot alert";
+  } else {
+    sidebarModeLabel.textContent = (telemetry.readyTaskCount || 0) > 0 ? "Armed" : "Standby";
+    sidebarModeDot.className = "signal-dot";
+  }
+
+  globalStopButton.disabled = state.runState.status !== "running";
+}
+
+function renderAll() {
+  renderShellTelemetry();
+  renderLogs();
+  renderDashboard();
+  renderTasks();
+  renderWallets();
+  renderRpcNodes();
+  renderSettings();
+  renderRuntime();
+  renderResultsIfAvailable();
+  initializeMotionSurfaces(document);
 }
 
 function applyAppState(payload) {
@@ -663,32 +1359,70 @@ function applyAppState(payload) {
   state.rpcNodes = payload.rpcNodes || [];
   state.settings = payload.settings || {};
   state.chains = payload.chains || [];
+  state.telemetry = payload.telemetry || null;
   state.runState = payload.runState || state.runState;
 
-  accountLabel.textContent = state.settings.profileName || "Local Operator";
-  accountStatus.textContent = state.runState.status === "running" ? "Task running" : "Ready";
-  globalStopButton.disabled = state.runState.status !== "running";
   batchStatus.textContent = batchToggle.checked
     ? "Batch mode is enabled for selection planning."
     : "Batch tools are available for visual planning.";
 
-  renderDashboard();
-  renderTasks();
-  renderWallets();
-  renderRpcNodes();
-  renderSettings();
+  renderAll();
+}
+
+function setView(viewName) {
+  state.currentView = viewName;
+  navButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === viewName);
+  });
+  views.forEach((view) => {
+    view.classList.toggle("active", view.dataset.viewPanel === viewName);
+  });
   renderRuntime();
-  renderResultsIfAvailable();
+}
+
+function populateChainSelectors() {
+  const options = state.chains
+    .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.label)}</option>`)
+    .join("");
+
+  taskChainInput.innerHTML = options;
+  rpcChainInput.innerHTML = options;
+
+  if (!state.chains.find((chain) => chain.key === taskChainInput.value)) {
+    taskChainInput.value = state.chains[0]?.key || "";
+  }
+
+  if (!state.chains.find((chain) => chain.key === rpcChainInput.value)) {
+    rpcChainInput.value = state.chains[0]?.key || "";
+  }
+}
+
+function updateAbiStatus() {
+  if (!taskAbiInput.value.trim()) {
+    abiStatus.textContent = "Paste JSON or load a file.";
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(taskAbiInput.value);
+    const abi = Array.isArray(parsed) ? parsed : parsed.abi || [];
+    const functionCount = abi.filter((item) => item.type === "function").length;
+    abiStatus.textContent = `ABI loaded · ${pluralize(functionCount, "function")}`;
+  } catch {
+    abiStatus.textContent = "ABI JSON is not valid yet.";
+  }
 }
 
 function openTaskModal(task = null) {
   modalTitle.textContent = task ? "Edit Task" : "New Task";
+  taskSubmitButton.textContent = task ? "Save Task" : "Create Task";
+
   taskIdInput.value = task?.id || "";
   taskNameInput.value = task?.name || "";
   taskPriorityInput.value = task?.priority || "standard";
   taskTagsInput.value = (task?.tags || []).join(", ");
   taskContractInput.value = task?.contractAddress || "";
-  taskChainInput.value = task?.chainKey || "base_sepolia";
+  taskChainInput.value = task?.chainKey || state.chains[0]?.key || "base_sepolia";
   taskQuantityInput.value = task?.quantityPerWallet || 1;
   taskPriceInput.value = task?.priceEth || "0";
   taskAbiInput.value = task?.abiJson || "";
@@ -726,26 +1460,11 @@ function openTaskModal(task = null) {
   renderWalletSelector(task?.walletIds || []);
   renderRpcSelector(task?.rpcNodeIds || []);
   taskModal.classList.remove("hidden");
+  initializeMotionSurfaces(taskModal);
 }
 
 function closeTaskModal() {
   taskModal.classList.add("hidden");
-}
-
-function updateAbiStatus() {
-  if (!taskAbiInput.value.trim()) {
-    abiStatus.textContent = "Paste JSON or load a file.";
-    return;
-  }
-
-  try {
-    const parsed = JSON.parse(taskAbiInput.value);
-    const abi = Array.isArray(parsed) ? parsed : parsed.abi || [];
-    const functionCount = abi.filter((item) => item.type === "function").length;
-    abiStatus.textContent = `ABI loaded - ${functionCount} functions`;
-  } catch {
-    abiStatus.textContent = "ABI JSON is not valid yet.";
-  }
 }
 
 function buildTaskPayload() {
@@ -798,18 +1517,22 @@ function buildTaskPayload() {
   };
 }
 
-function appendLog(line) {
-  logOutput.textContent += `${line}\n`;
-  logOutput.scrollTop = logOutput.scrollHeight;
-}
-
 async function request(url, options = {}) {
-  const response = await fetch(url, options);
-  const payload = await response.json().catch(() => ({}));
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    pushLocalLog("error", error.message || "Network request failed");
+    showToast(error.message || "Network request failed", "error");
+    throw error;
+  }
 
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    appendLog(`[error] ${payload.error || "Request failed"}`);
-    throw new Error(payload.error || "Request failed");
+    const message = payload.error || "Request failed";
+    pushLocalLog("error", message);
+    showToast(message, "error");
+    throw new Error(message);
   }
 
   return payload;
@@ -818,14 +1541,6 @@ async function request(url, options = {}) {
 async function loadState() {
   const payload = await request("/api/app-state");
   applyAppState(payload);
-}
-
-function populateChainSelectors() {
-  const options = state.chains
-    .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.label)}</option>`)
-    .join("");
-  taskChainInput.innerHTML = options;
-  rpcChainInput.innerHTML = options;
 }
 
 navButtons.forEach((button) => {
@@ -845,12 +1560,51 @@ taskStatusFilter.addEventListener("change", () => {
 });
 
 refreshButton.addEventListener("click", () => {
-  loadState().catch((error) => appendLog(`[error] ${error.message}`));
+  loadState()
+    .then(() => showToast("Application state refreshed.", "success", "Telemetry Synced"))
+    .catch(() => {});
+});
+
+dashboardRefreshButton.addEventListener("click", () => {
+  loadState()
+    .then(() => showToast("Advanced telemetry refreshed.", "success", "Dashboard Updated"))
+    .catch(() => {});
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());
+dashboardOpenTaskButton.addEventListener("click", () => openTaskModal());
+
+runPriorityButton.addEventListener("click", async () => {
+  try {
+    const payload = await request("/api/control/run-priority", { method: "POST" });
+    showToast(`${payload.task?.name || "Priority task"} launch requested.`, "success", "Priority Launch");
+  } catch {}
+});
+
+rpcPulseButton.addEventListener("click", async () => {
+  try {
+    const payload = await request("/api/control/test-rpc-pool", { method: "POST" });
+    const summary = payload.summary || {};
+    showToast(
+      `${summary.healthy || 0} healthy · ${summary.error || 0} error · ${summary.total || 0} total`,
+      "success",
+      "RPC Mesh Pulse"
+    );
+  } catch {}
+});
+
+snapshotButton.addEventListener("click", async () => {
+  try {
+    const payload = await request("/api/control/snapshot", { method: "POST" });
+    runtimeOutput.textContent = JSON.stringify(payload.snapshot, null, 2);
+    setView("admin");
+    showToast("Runtime snapshot captured.", "success", "Snapshot Ready");
+  } catch {}
+});
+
 closeModalButton.addEventListener("click", closeTaskModal);
 cancelTaskButton.addEventListener("click", closeTaskModal);
+
 taskModal.addEventListener("click", (event) => {
   if (event.target.dataset.closeModal === "true") {
     closeTaskModal();
@@ -858,7 +1612,8 @@ taskModal.addEventListener("click", (event) => {
 });
 
 clearLogsButton.addEventListener("click", () => {
-  logOutput.textContent = "";
+  state.runState.logs = [];
+  renderLogs();
 });
 
 batchToggle.addEventListener("change", () => {
@@ -870,6 +1625,7 @@ batchToggle.addEventListener("change", () => {
 globalStopButton.addEventListener("click", async () => {
   try {
     await request("/api/run/stop", { method: "POST" });
+    showToast("Stop signal sent to the active run.", "info", "Run Control");
   } catch {}
 });
 
@@ -885,7 +1641,11 @@ walletImportForm.addEventListener("submit", async (event) => {
       })
     });
     walletKeysInput.value = "";
-    appendLog(`[info] Wallet import complete - imported ${payload.imported}, skipped ${payload.skipped}`);
+    showToast(
+      `${payload.imported} imported · ${payload.skipped} skipped`,
+      "success",
+      "Wallet Import Complete"
+    );
   } catch {}
 });
 
@@ -903,6 +1663,7 @@ rpcForm.addEventListener("submit", async (event) => {
     });
     rpcNameInput.value = "";
     rpcUrlInput.value = "";
+    showToast("RPC node saved to the mesh.", "success", "RPC Added");
   } catch {}
 });
 
@@ -918,7 +1679,7 @@ settingsForm.addEventListener("submit", async (event) => {
         resultsPath: resultsPathInput.value
       })
     });
-    appendLog("[info] Settings saved");
+    showToast("Local operator settings saved.", "success", "Settings Updated");
   } catch {}
 });
 
@@ -948,6 +1709,7 @@ taskChainInput.addEventListener("change", () => {
 });
 
 taskAbiInput.addEventListener("input", updateAbiStatus);
+
 taskAbiFileInput.addEventListener("change", async () => {
   const file = taskAbiFileInput.files?.[0];
   if (!file) {
@@ -991,32 +1753,42 @@ taskForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(buildTaskPayload())
     });
     closeTaskModal();
+    showToast("Task preset saved locally.", "success", "Task Saved");
   } catch {}
 });
 
 const events = new EventSource("/api/events");
+
 events.addEventListener("state", (event) => {
   const payload = JSON.parse(event.data);
   const currentWalletSelection = selectedWalletIds();
   const currentRpcSelection = selectedRpcIds();
   applyAppState(payload);
   populateChainSelectors();
-  renderWalletSelector(currentWalletSelection);
-  renderRpcSelector(currentRpcSelection);
+
+  if (!taskModal.classList.contains("hidden")) {
+    renderWalletSelector(currentWalletSelection);
+    renderRpcSelector(currentRpcSelection);
+  }
 });
 
 events.addEventListener("log", (event) => {
   const payload = JSON.parse(event.data);
-  appendLog(`[${payload.level}] ${payload.message}`);
+  state.runState.logs = [...(state.runState.logs || []), payload].slice(-200);
+  renderLogs();
 });
+
+updateClock();
+window.setInterval(updateClock, 1000);
+initializeCanvasScene();
+initializeMotionSurfaces(document);
 
 loadState()
   .then(() => {
     populateChainSelectors();
     renderWalletSelector([]);
     renderRpcSelector([]);
-    setView("tasks");
+    setView("dashboard");
+    showToast("Advanced command surface online.", "success", "System Ready");
   })
-  .catch((error) => {
-    appendLog(`[error] ${error.message}`);
-  });
+  .catch(() => {});

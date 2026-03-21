@@ -274,7 +274,7 @@ function createInitialState() {
     rpcNodes: [],
     settings: {
       profileName: "local",
-      theme: "dark-panel",
+      theme: "quantum-operator",
       resultsPath: "./dist/mint-results.json"
     }
   };
@@ -320,24 +320,254 @@ function getRunState() {
 }
 
 function buildTaskResponse(task) {
-  const walletCount = task.walletIds.length;
-  const rpcCount = task.rpcNodeIds?.length || 0;
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  const walletCount = walletIds.length;
+  const rpcCount = rpcNodeIds.length;
   return {
     ...task,
+    walletIds,
+    rpcNodeIds,
     walletCount,
     rpcCount
   };
 }
 
-function emitState() {
-  broadcast("state", {
+function priorityRank(priority) {
+  return {
+    critical: 3,
+    high: 2,
+    standard: 1
+  }[priority] || 0;
+}
+
+function humanizePriority(priority) {
+  return priority ? `${priority[0].toUpperCase()}${priority.slice(1)}` : "Standard";
+}
+
+function findActiveTask() {
+  return activeTaskId ? appState.tasks.find((task) => task.id === activeTaskId) || null : null;
+}
+
+function getEligibleRpcNodes(task) {
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  return appState.rpcNodes.filter(
+    (node) =>
+      node.enabled &&
+      node.chainKey === task.chainKey &&
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+  );
+}
+
+function taskReadiness(task) {
+  const issues = [];
+  let score = 0;
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+
+  if (task.contractAddress) {
+    score += 25;
+  } else {
+    issues.push("Missing contract address");
+  }
+
+  if (task.abiJson) {
+    score += 25;
+  } else {
+    issues.push("ABI not loaded");
+  }
+
+  if (walletIds.length > 0) {
+    score += 25;
+  } else {
+    issues.push("No wallets selected");
+  }
+
+  const eligibleRpcNodes = getEligibleRpcNodes(task);
+  if (eligibleRpcNodes.length > 0) {
+    score += 25;
+  } else {
+    issues.push("No enabled RPC nodes");
+  }
+
+  let health = "blocked";
+  if (score >= 100) {
+    health = "armed";
+  } else if (score >= 50) {
+    health = "warming";
+  }
+
+  return {
+    score,
+    health,
+    rpcCount: eligibleRpcNodes.length,
+    issues
+  };
+}
+
+function buildTelemetry() {
+  const activeTask = findActiveTask();
+  const healthyRpcCount = appState.rpcNodes.filter(
+    (node) => node.lastHealth?.status === "healthy"
+  ).length;
+  const unhealthyRpcCount = appState.rpcNodes.filter(
+    (node) => node.lastHealth?.status === "error"
+  ).length;
+  const walletGroupCount = new Set(
+    appState.wallets.map((wallet) => wallet.group || "Imported")
+  ).size;
+
+  const summaries = appState.tasks.map((task) => task.summary || {});
+  const totalAttempts = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
+  const successfulAttempts = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
+  const successRate = totalAttempts ? Math.round((successfulAttempts / totalAttempts) * 100) : 0;
+
+  const priorityQueue = [...appState.tasks]
+    .filter((task) => !task.done)
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+    })
+    .slice(0, 5)
+    .map((task) => {
+      const readiness = taskReadiness(task);
+      return {
+        id: task.id,
+        name: task.name,
+        chainKey: task.chainKey,
+        chainLabel: chainCatalog.find((entry) => entry.key === task.chainKey)?.label || task.chainKey,
+        priority: task.priority,
+        priorityLabel: humanizePriority(task.priority),
+        status: task.status,
+        statusLabel: task.status,
+        readinessScore: readiness.score,
+        health: readiness.health,
+        walletCount: Array.isArray(task.walletIds) ? task.walletIds.length : 0,
+        rpcCount: readiness.rpcCount,
+        issues: readiness.issues,
+        updatedAt: task.updatedAt
+      };
+    });
+
+  const readinessScore = priorityQueue.length
+    ? Math.round(priorityQueue.reduce((sum, task) => sum + task.readinessScore, 0) / priorityQueue.length)
+    : 0;
+
+  const chainLoad = Object.entries(
+    appState.tasks.reduce((map, task) => {
+      map[task.chainKey] = (map[task.chainKey] || 0) + 1;
+      return map;
+    }, {})
+  )
+    .map(([chainKey, count]) => ({
+      chainKey,
+      label: chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey,
+      count,
+      share: appState.tasks.length ? Math.round((count / appState.tasks.length) * 100) : 0
+    }))
+    .sort((left, right) => right.count - left.count);
+
+  const latestRunTask = [...appState.tasks]
+    .filter((task) => task.lastRunAt)
+    .sort((left, right) => new Date(right.lastRunAt) - new Date(left.lastRunAt))[0];
+
+  const alerts = [];
+  if (appState.wallets.length === 0) {
+    alerts.push({
+      severity: "critical",
+      title: "No wallet fleet loaded",
+      detail: "Import at least one wallet before attempting a run."
+    });
+  }
+  if (appState.rpcNodes.length === 0) {
+    alerts.push({
+      severity: "critical",
+      title: "RPC mesh is empty",
+      detail: "Add RPC nodes to arm task execution paths."
+    });
+  }
+  if (unhealthyRpcCount > 0) {
+    alerts.push({
+      severity: "warning",
+      title: "RPC degradation detected",
+      detail: `${unhealthyRpcCount} node${unhealthyRpcCount === 1 ? "" : "s"} reported an error on the last health check.`
+    });
+  }
+  if (priorityQueue.some((task) => task.health === "blocked")) {
+    alerts.push({
+      severity: "warning",
+      title: "Blocked tasks detected",
+      detail: "One or more priority tasks are missing required inputs or RPC coverage."
+    });
+  }
+  if (activeTask) {
+    alerts.push({
+      severity: "info",
+      title: "Run in progress",
+      detail: `${activeTask.name} is currently executing with ${activeTask.progress?.percent || 0}% completion.`
+    });
+  }
+  if (!alerts.length) {
+    alerts.push({
+      severity: "info",
+      title: "System standing by",
+      detail: "No immediate blockers detected in the current local operator stack."
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    readinessScore,
+    successRate,
+    healthyRpcCount,
+    unhealthyRpcCount,
+    walletGroupCount,
+    readyTaskCount: priorityQueue.filter((task) => task.health === "armed").length,
+    liveLogCount: liveLogs.length,
+    runDurationMs: runStartedAt ? Date.now() - new Date(runStartedAt).getTime() : 0,
+    activeTaskName: activeTask?.name || null,
+    topChainLabel: chainLoad[0]?.label || "No chain load",
+    lastRunTaskName: latestRunTask?.name || "No history",
+    lastRunAt: latestRunTask?.lastRunAt || null,
+    priorityQueue,
+    chainLoad,
+    alerts,
+    rpcMatrix: appState.rpcNodes.slice(0, 6).map((node) => ({
+      id: node.id,
+      name: node.name,
+      chainKey: node.chainKey,
+      chainLabel: chainCatalog.find((entry) => entry.key === node.chainKey)?.label || node.chainKey,
+      status: node.lastHealth?.status || "unknown",
+      latencyMs: node.lastHealth?.latencyMs || null,
+      checkedAt: node.lastHealth?.checkedAt || null,
+      url: node.url
+    }))
+  };
+}
+
+function buildPublicState(includeDefaults = false) {
+  const payload = {
     tasks: appState.tasks.map(buildTaskResponse),
     wallets: appState.wallets.map(({ privateKey, ...wallet }) => wallet),
     rpcNodes: appState.rpcNodes,
     settings: appState.settings,
     chains: chainCatalog,
+    telemetry: buildTelemetry(),
     runState: getRunState()
-  });
+  };
+
+  if (includeDefaults) {
+    payload.defaults = defaultInputValues;
+  }
+
+  return payload;
+}
+
+function emitState() {
+  broadcast("state", buildPublicState());
 }
 
 function readBody(request) {
@@ -455,7 +685,8 @@ function updateTaskProgressFromLog(task, entry) {
     return;
   }
 
-  const total = Math.max(task.walletIds.length || 1, 1);
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const total = Math.max(walletIds.length || 1, 1);
   const summary = task.summary || { total: 0, success: 0, failed: 0, stopped: 0, hashes: [] };
   let phase = task.progress?.phase || "Preparing";
   let percent = task.progress?.percent || 8;
@@ -498,7 +729,9 @@ function getTaskById(taskId) {
 }
 
 function buildConfigForTask(task) {
-  const wallets = appState.wallets.filter((wallet) => task.walletIds.includes(wallet.id));
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  const wallets = appState.wallets.filter((wallet) => walletIds.includes(wallet.id));
   if (wallets.length === 0) {
     throw new Error("Select at least one wallet before running a task");
   }
@@ -507,7 +740,7 @@ function buildConfigForTask(task) {
     (node) =>
       node.enabled &&
       node.chainKey === task.chainKey &&
-      (task.rpcNodeIds.length === 0 || task.rpcNodeIds.includes(node.id))
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
   );
 
   if (configuredRpcNodes.length === 0) {
@@ -568,6 +801,7 @@ async function handleTaskRun(taskId, response) {
 
   try {
     const config = buildConfigForTask(task);
+    const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
     runController = new AbortController();
     activeTaskId = taskId;
     runStartedAt = new Date().toISOString();
@@ -580,7 +814,7 @@ async function handleTaskRun(taskId, response) {
         percent: 8
       },
       summary: {
-        total: task.walletIds.length,
+        total: walletIds.length,
         success: 0,
         failed: 0,
         stopped: 0,
@@ -683,7 +917,7 @@ async function handleTaskSave(request, response) {
       throw new Error("ABI JSON is required");
     }
 
-    if (task.walletIds.length === 0) {
+    if ((task.walletIds || []).length === 0) {
       throw new Error("Select at least one wallet");
     }
 
@@ -770,7 +1004,7 @@ function handleWalletDelete(walletId, response) {
   appState.wallets = appState.wallets.filter((wallet) => wallet.id !== walletId);
   appState.tasks = appState.tasks.map((task) => ({
     ...task,
-    walletIds: task.walletIds.filter((id) => id !== walletId)
+    walletIds: (task.walletIds || []).filter((id) => id !== walletId)
   }));
   writeStateFile();
   emitState();
@@ -811,13 +1045,7 @@ async function handleRpcSave(request, response) {
   }
 }
 
-async function handleRpcTest(rpcId, response) {
-  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
-  if (!rpcNode) {
-    sendJson(response, 404, { error: "RPC node not found" });
-    return;
-  }
-
+async function testRpcNodeHealth(rpcNode) {
   const started = Date.now();
 
   try {
@@ -831,19 +1059,57 @@ async function handleRpcTest(rpcId, response) {
       blockNumber,
       checkedAt: new Date().toISOString()
     };
-    writeStateFile();
-    emitState();
-    sendJson(response, 200, { ok: true, health: rpcNode.lastHealth });
   } catch (error) {
     rpcNode.lastHealth = {
       status: "error",
       error: formatError(error),
       checkedAt: new Date().toISOString()
     };
-    writeStateFile();
-    emitState();
-    sendJson(response, 200, { ok: true, health: rpcNode.lastHealth });
   }
+
+  return rpcNode.lastHealth;
+}
+
+async function handleRpcTest(rpcId, response) {
+  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+  if (!rpcNode) {
+    sendJson(response, 404, { error: "RPC node not found" });
+    return;
+  }
+
+  const health = await testRpcNodeHealth(rpcNode);
+  writeStateFile();
+  emitState();
+  sendJson(response, 200, { ok: true, health });
+}
+
+async function handleRpcPoolTest(response) {
+  if (appState.rpcNodes.length === 0) {
+    sendJson(response, 400, { error: "No RPC nodes configured" });
+    return;
+  }
+
+  const results = [];
+  for (const rpcNode of appState.rpcNodes) {
+    results.push({
+      id: rpcNode.id,
+      name: rpcNode.name,
+      chainKey: rpcNode.chainKey,
+      health: await testRpcNodeHealth(rpcNode)
+    });
+  }
+
+  writeStateFile();
+  emitState();
+  sendJson(response, 200, {
+    ok: true,
+    summary: {
+      total: results.length,
+      healthy: results.filter((entry) => entry.health.status === "healthy").length,
+      error: results.filter((entry) => entry.health.status === "error").length
+    },
+    results
+  });
 }
 
 async function handleSettingsSave(request, response) {
@@ -854,7 +1120,7 @@ async function handleSettingsSave(request, response) {
     appState.settings = {
       ...appState.settings,
       profileName: String(payload.profileName || appState.settings.profileName || "local").trim(),
-      theme: String(payload.theme || appState.settings.theme || "dark-panel").trim(),
+      theme: String(payload.theme || appState.settings.theme || "quantum-operator").trim(),
       resultsPath: String(
         payload.resultsPath || appState.settings.resultsPath || "./dist/mint-results.json"
       ).trim()
@@ -872,23 +1138,66 @@ function handleRpcDelete(rpcId, response) {
   appState.rpcNodes = appState.rpcNodes.filter((node) => node.id !== rpcId);
   appState.tasks = appState.tasks.map((task) => ({
     ...task,
-    rpcNodeIds: task.rpcNodeIds.filter((id) => id !== rpcId)
+    rpcNodeIds: (task.rpcNodeIds || []).filter((id) => id !== rpcId)
   }));
   writeStateFile();
   emitState();
   sendJson(response, 200, { ok: true });
 }
 
-function handleAppState(response) {
-  sendJson(response, 200, {
-    tasks: appState.tasks.map(buildTaskResponse),
-    wallets: appState.wallets.map(({ privateKey, ...wallet }) => wallet),
-    rpcNodes: appState.rpcNodes,
-    settings: appState.settings,
-    chains: chainCatalog,
-    defaults: defaultInputValues,
-    runState: getRunState()
+function findPriorityTaskForRun() {
+  return [...appState.tasks]
+    .filter((task) => !task.done)
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+    })
+    .find((task) => taskReadiness(task).health !== "blocked");
+}
+
+function buildSnapshot() {
+  return {
+    createdAt: new Date().toISOString(),
+    activeTask: findActiveTask() ? buildTaskResponse(findActiveTask()) : null,
+    taskCount: appState.tasks.length,
+    walletCount: appState.wallets.length,
+    rpcNodeCount: appState.rpcNodes.length,
+    runState: getRunState(),
+    telemetry: buildTelemetry()
+  };
+}
+
+function handleTelemetry(response) {
+  sendJson(response, 200, { ok: true, telemetry: buildTelemetry() });
+}
+
+function handleRunPriority(response) {
+  const task = findPriorityTaskForRun();
+  if (!task) {
+    sendJson(response, 404, { error: "No runnable priority task found" });
+    return;
+  }
+
+  handleTaskRun(task.id, response);
+}
+
+function handleSnapshot(response) {
+  const snapshot = buildSnapshot();
+  pushLog({
+    level: "info",
+    message: `Snapshot captured at ${snapshot.createdAt}`,
+    timestamp: new Date().toISOString()
   });
+  emitState();
+  sendJson(response, 200, { ok: true, snapshot });
+}
+
+function handleAppState(response) {
+  sendJson(response, 200, buildPublicState(true));
 }
 
 function parseRoute(pathname) {
@@ -906,22 +1215,18 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/telemetry") {
+    handleTelemetry(response);
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/events") {
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-store",
       Connection: "keep-alive"
     });
-    response.write(
-      `event: state\ndata: ${JSON.stringify({
-        tasks: appState.tasks.map(buildTaskResponse),
-        wallets: appState.wallets.map(({ privateKey, ...wallet }) => wallet),
-        rpcNodes: appState.rpcNodes,
-        settings: appState.settings,
-        chains: chainCatalog,
-        runState: getRunState()
-      })}\n\n`
-    );
+    response.write(`event: state\ndata: ${JSON.stringify(buildPublicState())}\n\n`);
     clients.add(response);
 
     request.on("close", () => {
@@ -962,6 +1267,21 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method === "POST" && url.pathname === "/api/run/stop") {
     handleStopRun(response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/control/run-priority") {
+    handleRunPriority(response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/control/test-rpc-pool") {
+    await handleRpcPoolTest(response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/control/snapshot") {
+    handleSnapshot(response);
     return;
   }
 

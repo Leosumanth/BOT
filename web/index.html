@@ -3,33 +3,48 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MintBot Local Dashboard</title>
+    <title>MintBot Quantum Dashboard</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <canvas id="fx-canvas" class="fx-canvas" aria-hidden="true"></canvas>
+    <div class="noise-layer" aria-hidden="true"></div>
+    <div class="scanline-layer" aria-hidden="true"></div>
+
     <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand-card">
-          <div class="brand-icon">MB</div>
-          <div>
-            <h1>MintBot</h1>
-            <p>Local Operator</p>
+      <aside class="sidebar" data-tilt>
+        <div class="sidebar-top">
+          <div class="brand-card hud-panel" data-tilt>
+            <div class="brand-icon">MB</div>
+            <div>
+              <p class="eyebrow">Quantum Control</p>
+              <h1>MintBot</h1>
+              <p>Advanced Local Operator Stack</p>
+            </div>
+            <span class="version-pill">v3.0</span>
           </div>
-          <span class="version-pill">v2.1</span>
+
+          <div class="sidebar-pulse hud-panel">
+            <div>
+              <span class="micro-label">System Mode</span>
+              <strong id="sidebar-mode-label">Standby</strong>
+            </div>
+            <span id="sidebar-mode-dot" class="signal-dot"></span>
+          </div>
+
+          <nav class="sidebar-nav">
+            <button class="nav-button active" data-view="dashboard" type="button">Dashboard</button>
+            <button class="nav-button" data-view="tasks" type="button">Tasks</button>
+            <button class="nav-button" data-view="wallets" type="button">Wallets</button>
+            <button class="nav-button" data-view="transfer" type="button">Transfer</button>
+            <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
+            <button class="nav-button" data-view="settings" type="button">Settings</button>
+            <button class="nav-button" data-view="admin" type="button">Admin</button>
+          </nav>
         </div>
 
-        <nav class="sidebar-nav">
-          <button class="nav-button active" data-view="dashboard">Dashboard</button>
-          <button class="nav-button" data-view="tasks">Tasks</button>
-          <button class="nav-button" data-view="wallets">Wallets</button>
-          <button class="nav-button" data-view="transfer">Transfer</button>
-          <button class="nav-button" data-view="rpc">RPC Nodes</button>
-          <button class="nav-button" data-view="settings">Settings</button>
-          <button class="nav-button" data-view="admin">Admin</button>
-        </nav>
-
         <div class="sidebar-footer">
-          <div class="account-card">
+          <div class="account-card hud-panel" data-tilt>
             <div class="account-avatar">0x</div>
             <div>
               <strong id="account-label">Local Operator</strong>
@@ -37,49 +52,137 @@
             </div>
             <span class="status-dot"></span>
           </div>
-          <button id="global-stop-button" class="danger-button" type="button">Stop Active Run</button>
+          <button id="global-stop-button" class="danger-button fx-button" type="button">Stop Active Run</button>
         </div>
       </aside>
 
       <main class="workspace">
-        <section class="view active" data-view-panel="dashboard">
-          <div class="view-header">
-            <div>
-              <h2>Dashboard</h2>
-              <p class="view-subtitle">Mission control for your local mint workflow.</p>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Adaptive Minting Interface</p>
+            <h2 class="topbar-title">Advanced Command Surface</h2>
+            <p id="hero-mode-copy" class="view-subtitle">
+              High-precision local operations across wallets, contracts, and RPC mesh nodes.
+            </p>
+          </div>
+          <div class="topbar-actions">
+            <div class="time-card hud-panel">
+              <span class="micro-label">Local Time</span>
+              <strong id="live-clock">--:--:--</strong>
             </div>
+            <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh Telemetry</button>
+            <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Launch Task Builder</button>
+          </div>
+        </header>
+
+        <section class="view active" data-view-panel="dashboard">
+          <div class="hero-grid">
+            <section class="surface hero-surface" data-tilt>
+              <div class="hero-copy">
+                <p class="eyebrow">Realtime Operations Matrix</p>
+                <h2>Neural Command Dashboard</h2>
+                <p class="view-subtitle">
+                  A high-tech control room for orchestrating mint tasks, wallet fleets, and RPC
+                  failover with richer telemetry and faster operator actions.
+                </p>
+              </div>
+
+              <div class="hero-action-row">
+                <button id="run-priority-button" class="primary-button fx-button" type="button">Run Priority Task</button>
+                <button id="rpc-pulse-button" class="ghost-button fx-button" type="button">Pulse RPC Mesh</button>
+                <button id="snapshot-button" class="ghost-button fx-button" type="button">Capture Snapshot</button>
+              </div>
+
+              <div id="telemetry-summary" class="telemetry-summary-grid"></div>
+            </section>
+
+            <section class="surface hero-visual" data-tilt>
+              <div class="orbital-stage">
+                <div class="orbital-core">
+                  <span class="ring ring-a"></span>
+                  <span class="ring ring-b"></span>
+                  <span class="ring ring-c"></span>
+                  <span class="ring ring-d"></span>
+                  <div class="core-chip">
+                    <span class="micro-label">Readiness</span>
+                    <strong id="command-score">0%</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="surface-header compact">
+                <div>
+                  <h3>System Alerts</h3>
+                  <p class="helper-copy">Backend-derived signals, risks, and launch readiness notes.</p>
+                </div>
+                <span id="dashboard-health-pill" class="status-pill">Standby</span>
+              </div>
+              <div id="system-alerts" class="alert-stack"></div>
+            </section>
           </div>
 
           <div class="dashboard-cards" id="dashboard-stats"></div>
           <div id="run-insights" class="dashboard-insights"></div>
 
-          <div class="content-grid">
-            <section class="surface">
+          <div class="content-grid command-grid">
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Recent Tasks</h3>
+                <div>
+                  <h3>Command Center</h3>
+                  <p class="helper-copy">Priority queue, launch posture, and actionable run controls.</p>
+                </div>
+              </div>
+              <div id="priority-queue" class="stack-list"></div>
+            </section>
+
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Recent Tasks</h3>
+                  <p class="helper-copy">Latest presets and task-level operator changes.</p>
+                </div>
               </div>
               <div id="dashboard-recent-tasks" class="stack-list"></div>
             </section>
+          </div>
 
-            <section class="surface">
+          <div class="content-grid overview-grid">
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Chain Breakdown</h3>
+                <div>
+                  <h3>Chain Breakdown</h3>
+                  <p class="helper-copy">Where the configured execution load is currently mapped.</p>
+                </div>
               </div>
               <div id="chain-breakdown" class="stack-list"></div>
+            </section>
+
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>RPC Mesh Health</h3>
+                  <p class="helper-copy">Latency, availability, and per-node status across the pool.</p>
+                </div>
+              </div>
+              <div id="rpc-health-grid" class="stack-list"></div>
             </section>
           </div>
 
           <div class="content-grid">
-            <section class="surface">
+            <section class="surface" data-tilt>
               <div class="surface-header">
                 <h3>Live Activity</h3>
-                <button id="clear-logs-button" class="ghost-button" type="button">Clear</button>
+                <button id="clear-logs-button" class="ghost-button fx-button" type="button">Clear Feed</button>
               </div>
               <pre id="log-output" class="terminal-panel"></pre>
             </section>
-            <section class="surface">
+
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Top Wallet Groups</h3>
+                <div>
+                  <h3>Top Wallet Groups</h3>
+                  <p class="helper-copy">Grouped fleet visibility for faster task routing.</p>
+                </div>
               </div>
               <div id="wallet-group-breakdown" class="stack-list"></div>
             </section>
@@ -101,13 +204,14 @@
                 <option value="completed">Completed</option>
                 <option value="failed">Failed</option>
                 <option value="done">Done</option>
+                <option value="stopped">Stopped</option>
               </select>
-              <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
-              <button id="new-task-button" class="primary-button" type="button">New Task</button>
+              <button id="refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
+              <button id="new-task-button" class="primary-button fx-button" type="button">New Task</button>
             </div>
           </div>
 
-          <div class="batch-bar">
+          <div class="batch-bar hud-panel">
             <label class="toggle-inline">
               <input id="batch-toggle" type="checkbox" />
               <span>Batch</span>
@@ -127,26 +231,32 @@
           </div>
 
           <div class="content-grid">
-            <section class="surface">
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Import Wallets</h3>
+                <div>
+                  <h3>Import Wallets</h3>
+                  <p class="helper-copy">Add private keys into local groups for targeted routing.</p>
+                </div>
               </div>
               <form id="wallet-import-form" class="stack-form">
                 <label>
                   <span>Group Name</span>
-                  <input id="wallet-group-input" type="text" placeholder="test" />
+                  <input id="wallet-group-input" type="text" placeholder="Team Alpha" />
                 </label>
                 <label>
                   <span>Private Keys</span>
                   <textarea id="wallet-keys-input" rows="8" placeholder="One private key per line"></textarea>
                 </label>
-                <button class="primary-button" type="submit">Import Wallets</button>
+                <button class="primary-button fx-button" type="submit">Import Wallets</button>
               </form>
             </section>
 
-            <section class="surface">
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Saved Wallets</h3>
+                <div>
+                  <h3>Saved Wallets</h3>
+                  <p class="helper-copy">Local operator fleet and grouped addresses.</p>
+                </div>
                 <span id="wallet-count" class="muted-copy"></span>
               </div>
               <div id="wallet-list" class="stack-list"></div>
@@ -161,12 +271,13 @@
               <p class="view-subtitle">Review transfer-ready tasks and post-mint routing options.</p>
             </div>
           </div>
-          <section class="surface">
+
+          <section class="surface" data-tilt>
             <div class="empty-state">
               <h3>Transfer routing stays local</h3>
               <p>
-                Tasks can store a post-mint transfer toggle and destination. This panel is a
-                planning board for those routes.
+                Tasks can store a post-mint transfer toggle and destination. This panel acts as a
+                planning board for those transfer paths.
               </p>
             </div>
           </section>
@@ -181,9 +292,12 @@
           </div>
 
           <div class="content-grid">
-            <section class="surface">
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Add RPC Node</h3>
+                <div>
+                  <h3>Add RPC Node</h3>
+                  <p class="helper-copy">Create a stronger mesh with multiple fallback nodes.</p>
+                </div>
               </div>
               <form id="rpc-form" class="stack-form">
                 <label>
@@ -198,13 +312,16 @@
                   <span>URL</span>
                   <input id="rpc-url-input" type="text" placeholder="https://..." />
                 </label>
-                <button class="primary-button" type="submit">Save RPC Node</button>
+                <button class="primary-button fx-button" type="submit">Save RPC Node</button>
               </form>
             </section>
 
-            <section class="surface">
+            <section class="surface" data-tilt>
               <div class="surface-header">
-                <h3>Configured Nodes</h3>
+                <div>
+                  <h3>Configured Nodes</h3>
+                  <p class="helper-copy">Live-tested RPC endpoints with latency visibility.</p>
+                </div>
               </div>
               <div id="rpc-list" class="stack-list"></div>
             </section>
@@ -218,7 +335,8 @@
               <p class="view-subtitle">Local profile details and result export path.</p>
             </div>
           </div>
-          <section class="surface">
+
+          <section class="surface" data-tilt>
             <form id="settings-form" class="settings-panel">
               <div class="settings-item">
                 <label>Profile</label>
@@ -232,7 +350,7 @@
                 <label>Results Path</label>
                 <input id="results-path-input" type="text" />
               </div>
-              <button id="save-settings-button" class="primary-button" type="submit">Save Settings</button>
+              <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
             </form>
           </section>
         </section>
@@ -244,14 +362,16 @@
               <p class="view-subtitle">Quick inspection of saved local data and runtime state.</p>
             </div>
           </div>
+
           <div class="content-grid">
-            <section class="surface">
+            <section class="surface" data-tilt>
               <div class="surface-header">
                 <h3>Runtime State</h3>
               </div>
               <pre id="runtime-output" class="code-panel"></pre>
             </section>
-            <section class="surface">
+
+            <section class="surface" data-tilt>
               <div class="surface-header">
                 <h3>Last Results</h3>
               </div>
@@ -270,7 +390,7 @@
             <h3 id="modal-title">New Task</h3>
             <p class="muted-copy">Build a reusable task preset for local mint runs.</p>
           </div>
-          <button id="close-modal-button" class="icon-button" type="button">x</button>
+          <button id="close-modal-button" class="icon-button fx-button" type="button">+</button>
         </div>
 
         <form id="task-form" class="modal-form">
@@ -359,7 +479,7 @@
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <h4>Wallets</h4>
-              <button id="select-all-wallets-button" class="ghost-button" type="button">Select All</button>
+              <button id="select-all-wallets-button" class="ghost-button fx-button" type="button">Select All</button>
             </div>
             <div id="wallet-group-tabs" class="group-tabs"></div>
             <div id="wallet-selector" class="wallet-selector"></div>
@@ -369,7 +489,7 @@
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <h4>RPC Nodes</h4>
-              <button id="select-all-rpc-button" class="ghost-button" type="button">Select All</button>
+              <button id="select-all-rpc-button" class="ghost-button fx-button" type="button">Select All</button>
             </div>
             <div id="rpc-selector" class="wallet-selector"></div>
             <p id="rpc-selection-count" class="selection-copy">0 RPC nodes selected</p>
@@ -526,12 +646,14 @@
           </div>
 
           <div class="modal-actions">
-            <button id="cancel-task-button" class="ghost-button" type="button">Cancel</button>
-            <button class="primary-button" type="submit">Create Task</button>
+            <button id="cancel-task-button" class="ghost-button fx-button" type="button">Cancel</button>
+            <button class="primary-button fx-button" type="submit">Create Task</button>
           </div>
         </form>
       </div>
     </div>
+
+    <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
     <script src="/app.js"></script>
   </body>
