@@ -202,6 +202,46 @@ async function buildRuntimeOverrides(config, provider) {
   return overrides;
 }
 
+function isSocketRpcUrl(rpcUrl) {
+  return /^wss?:\/\//i.test(String(rpcUrl || ""));
+}
+
+function createTransportProvider(rpcUrl) {
+  return isSocketRpcUrl(rpcUrl)
+    ? new ethers.WebSocketProvider(rpcUrl)
+    : new ethers.JsonRpcProvider(rpcUrl);
+}
+
+async function destroyProvider(provider) {
+  if (!provider?.destroy) {
+    return;
+  }
+
+  try {
+    await provider.destroy();
+  } catch {
+    // Best effort shutdown for websocket-backed providers.
+  }
+}
+
+function normalizeEventFragment(signature) {
+  const trimmed = String(signature || "").trim();
+  return trimmed.startsWith("event ") ? trimmed : `event ${trimmed}`;
+}
+
+function resolveMempoolSelector(signature) {
+  const trimmed = String(signature || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^0x[0-9a-fA-F]{8}$/.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+
+  return ethers.id(trimmed).slice(0, 10).toLowerCase();
+}
+
 function withoutValueOverride(overrides) {
   const { value, ...nextOverrides } = overrides;
   return nextOverrides;
@@ -337,12 +377,12 @@ function isTransactionReplacedError(error) {
 
 async function waitForManagedReceipt({
   tx,
-  signer,
   config,
   walletIndex,
   label,
   logger,
-  signal
+  signal,
+  submitReplacement
 }) {
   let currentTx = tx;
   let replacementCount = 0;
@@ -413,7 +453,7 @@ async function waitForManagedReceipt({
         );
       }
 
-      const feeOverrides = await buildReplacementFeeOverrides(config, signer.provider, currentTx);
+      const feeOverrides = await buildReplacementFeeOverrides(config, currentTx.provider, currentTx);
       const replacementRequest = buildReplacementRequest(currentTx, feeOverrides);
 
       logger.info(
@@ -425,7 +465,7 @@ async function waitForManagedReceipt({
       );
 
       try {
-        currentTx = await signer.sendTransaction(replacementRequest);
+        currentTx = await submitReplacement(replacementRequest);
         replacementCount += 1;
         logger.info(
           `[wallet ${walletIndex}] Submitted ${label.toLowerCase()} replacement tx ${replacementCount}/${config.replacementMaxAttempts}: ${currentTx.hash}`
@@ -450,7 +490,7 @@ async function waitForManagedReceipt({
 
 async function sendManagedTransaction({
   send,
-  signer,
+  submitReplacement,
   config,
   walletIndex,
   label,
@@ -472,12 +512,12 @@ async function sendManagedTransaction({
 
   const result = await waitForManagedReceipt({
     tx,
-    signer,
     config,
     walletIndex,
     label,
     logger,
-    signal
+    signal,
+    submitReplacement
   });
 
   logger.info(`[wallet ${walletIndex}] ${label} confirmed in block ${result.receipt.blockNumber}`);
@@ -624,13 +664,27 @@ async function transferMintedAssets({
         );
         result = await sendManagedTransaction({
           send: () =>
-            tokenContract.transferFrom(
-              walletAddress,
-              config.transferAddress,
-              asset.tokenId,
-              transferOverrides
-            ),
-          signer: wallet,
+            sendContractTransaction({
+              contractMethod: tokenContract.transferFrom,
+              args: [walletAddress, config.transferAddress, asset.tokenId],
+              overrides: transferOverrides,
+              wallet,
+              provider,
+              config,
+              walletIndex,
+              label: "Transfer",
+              logger
+            }),
+          submitReplacement: (txRequest) =>
+            submitTransactionWithRoute({
+              wallet,
+              provider,
+              config,
+              txRequest,
+              walletIndex,
+              label: "Transfer",
+              logger
+            }),
           config,
           walletIndex,
           label: "Transfer",
@@ -645,15 +699,27 @@ async function transferMintedAssets({
         );
         result = await sendManagedTransaction({
           send: () =>
-            tokenContract.safeTransferFrom(
-              walletAddress,
-              config.transferAddress,
-              asset.tokenId,
-              asset.amount,
-              "0x",
-              transferOverrides
-            ),
-          signer: wallet,
+            sendContractTransaction({
+              contractMethod: tokenContract.safeTransferFrom,
+              args: [walletAddress, config.transferAddress, asset.tokenId, asset.amount, "0x"],
+              overrides: transferOverrides,
+              wallet,
+              provider,
+              config,
+              walletIndex,
+              label: "Transfer",
+              logger
+            }),
+          submitReplacement: (txRequest) =>
+            submitTransactionWithRoute({
+              wallet,
+              provider,
+              config,
+              txRequest,
+              walletIndex,
+              label: "Transfer",
+              logger
+            }),
           config,
           walletIndex,
           label: "Transfer",
@@ -683,12 +749,24 @@ async function transferMintedAssets({
   return transferResults;
 }
 
-async function createProvider(config) {
+async function createProvider(config, options = {}) {
   const failures = [];
+  let rpcUrls = [...config.rpcUrls];
 
-  for (const rpcUrl of config.rpcUrls) {
+  if (options.requireSocket) {
+    rpcUrls = rpcUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl));
+    if (rpcUrls.length === 0) {
+      throw new Error("No websocket RPC URL is configured for this execution mode");
+    }
+  } else if (options.preferSocket) {
+    rpcUrls = rpcUrls.sort((left, right) => Number(isSocketRpcUrl(right)) - Number(isSocketRpcUrl(left)));
+  }
+
+  for (const rpcUrl of rpcUrls) {
+    let provider = null;
+
     try {
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      provider = createTransportProvider(rpcUrl);
       const network = await provider.getNetwork();
       const chainId = Number(network.chainId);
 
@@ -701,6 +779,7 @@ async function createProvider(config) {
       return { provider, rpcUrl, chainId };
     } catch (error) {
       failures.push(`${rpcUrl}: ${error.message}`);
+      await destroyProvider(provider);
     }
   }
 
@@ -742,6 +821,35 @@ function normalizeForComparison(value) {
   return value;
 }
 
+function matchesExpectedStructure(actual, expected) {
+  if (expected === undefined) {
+    return true;
+  }
+
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual)) {
+      return false;
+    }
+
+    return expected.every((entry, index) => matchesExpectedStructure(actual[index], entry));
+  }
+
+  if (expected && typeof expected === "object") {
+    if (!actual || typeof actual !== "object") {
+      return false;
+    }
+
+    return Object.entries(expected).every(([key, value]) =>
+      matchesExpectedStructure(actual[key], value)
+    );
+  }
+
+  return (
+    stringifyForLog(normalizeForComparison(actual)) ===
+    stringifyForLog(normalizeForComparison(expected))
+  );
+}
+
 function evaluateReadyState(config, value) {
   if (config.readyCheckMode === "truthy") {
     return Boolean(value);
@@ -777,6 +885,302 @@ function formatError(error) {
   }
 
   return error.shortMessage || error.reason || error.message || String(error);
+}
+
+function buildRelayRequestParams(config, signedTransaction) {
+  if (config.privateRelayMethod === "eth_sendPrivateTransaction") {
+    return [
+      {
+        tx: signedTransaction
+      }
+    ];
+  }
+
+  return [signedTransaction];
+}
+
+function extractRelayTransactionHash(result) {
+  if (!result) {
+    return null;
+  }
+
+  if (typeof result === "string") {
+    return result;
+  }
+
+  if (typeof result === "object") {
+    return result.txHash || result.hash || null;
+  }
+
+  return null;
+}
+
+async function sendRelayRpcRequest(config, signedTransaction) {
+  if (typeof fetch !== "function") {
+    throw new Error("Global fetch is unavailable. Use Node.js 18 or newer.");
+  }
+
+  const response = await fetch(config.privateRelayUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(config.privateRelayHeaders || {})
+    },
+    body: JSON.stringify({
+      id: Date.now(),
+      jsonrpc: "2.0",
+      method: config.privateRelayMethod,
+      params: buildRelayRequestParams(config, signedTransaction)
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.error) {
+    throw new Error(
+      payload.error?.message ||
+        payload.error?.data ||
+        payload.result ||
+        `Private relay request failed with status ${response.status}`
+    );
+  }
+
+  return payload.result;
+}
+
+async function wrapSignedTransactionResponse(provider, signedTransaction) {
+  const network = await provider.getNetwork();
+  const blockNumber = await provider.getBlockNumber();
+  const transaction = ethers.Transaction.from(signedTransaction);
+  return provider._wrapTransactionResponse(transaction, network).replaceableTransaction(blockNumber);
+}
+
+async function submitTransactionWithRoute({
+  wallet,
+  provider,
+  config,
+  txRequest,
+  walletIndex,
+  label,
+  logger
+}) {
+  if (!config.privateRelayEnabled) {
+    return wallet.sendTransaction(txRequest);
+  }
+
+  try {
+    const populatedTransaction = await wallet.populateTransaction(txRequest);
+    const signedTransaction = await wallet.signTransaction(populatedTransaction);
+    const relayResult = await sendRelayRpcRequest(config, signedTransaction);
+    const relayHash = extractRelayTransactionHash(relayResult);
+    const wrappedTransaction = await wrapSignedTransactionResponse(provider, signedTransaction);
+
+    logger.info(
+      `[wallet ${walletIndex}] ${label} submitted through private relay${
+        relayHash ? ` (${relayHash})` : ""
+      }`
+    );
+
+    return wrappedTransaction;
+  } catch (error) {
+    if (config.privateRelayOnly) {
+      throw new Error(`Private relay submission failed: ${formatError(error)}`);
+    }
+
+    logger.error(
+      `[wallet ${walletIndex}] Private relay submission failed, falling back to public RPC: ${formatError(error)}`
+    );
+    return wallet.sendTransaction(txRequest);
+  }
+}
+
+async function sendContractTransaction({
+  contractMethod,
+  args,
+  overrides,
+  wallet,
+  provider,
+  config,
+  walletIndex,
+  label,
+  logger
+}) {
+  if (!config.privateRelayEnabled) {
+    return contractMethod(...args, overrides);
+  }
+
+  const txRequest = await contractMethod.populateTransaction(...args, overrides);
+  return submitTransactionWithRoute({
+    wallet,
+    provider,
+    config,
+    txRequest,
+    walletIndex,
+    label,
+    logger
+  });
+}
+
+async function waitForEventTrigger(config, signal, logger) {
+  const { provider, rpcUrl } = await createProvider(config, { preferSocket: true });
+  const triggerAddress = ethers.getAddress(config.triggerContractAddress);
+  const triggerInterface = new ethers.Interface([normalizeEventFragment(config.triggerEventSignature)]);
+  const triggerEvent = triggerInterface.fragments.find((fragment) => fragment.type === "event");
+  const filter = {
+    address: triggerAddress,
+    topics: [triggerEvent.topicHash]
+  };
+
+  logger.info(
+    `Waiting for event trigger ${triggerEvent.format()} on ${triggerAddress} via ${rpcUrl}`
+  );
+
+  try {
+    await new Promise((resolve, reject) => {
+      let timeoutId = null;
+      let removeAbortListener = () => {};
+
+      const cleanup = () => {
+        provider.off(filter, onLog);
+        removeAbortListener();
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      };
+
+      const onLog = (log) => {
+        try {
+          const parsedLog = triggerInterface.parseLog(log);
+          if (!matchesExpectedStructure(parsedLog.args, config.triggerEventCondition)) {
+            return;
+          }
+
+          cleanup();
+          logger.info(
+            `Event trigger matched in tx ${log.transactionHash} at block ${log.blockNumber}`
+          );
+          resolve();
+        } catch {
+          // Ignore unrelated or malformed logs.
+        }
+      };
+
+      if (signal) {
+        const onAbort = () => {
+          cleanup();
+          reject(new AbortRunError());
+        };
+
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      }
+
+      if (config.triggerTimeoutMs) {
+        timeoutId = setTimeout(() => {
+          cleanup();
+          reject(
+            new Error(`Event trigger timed out after ${config.triggerTimeoutMs}ms`)
+          );
+        }, config.triggerTimeoutMs);
+      }
+
+      provider.on(filter, onLog);
+    });
+  } finally {
+    await destroyProvider(provider);
+  }
+}
+
+async function waitForMempoolTrigger(config, signal, logger) {
+  const { provider, rpcUrl } = await createProvider(config, { requireSocket: true });
+  const triggerAddress = ethers.getAddress(config.triggerContractAddress).toLowerCase();
+  const selector = resolveMempoolSelector(config.triggerMempoolSignature);
+  const seenHashes = new Set();
+
+  logger.info(
+    `Waiting for mempool trigger on ${triggerAddress}${
+      selector ? ` with selector ${selector}` : ""
+    } via ${rpcUrl}`
+  );
+
+  try {
+    await new Promise((resolve, reject) => {
+      let timeoutId = null;
+      let removeAbortListener = () => {};
+
+      const cleanup = () => {
+        provider.off("pending", onPending);
+        removeAbortListener();
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      };
+
+      const onPending = async (txHash) => {
+        if (!txHash || seenHashes.has(txHash)) {
+          return;
+        }
+
+        seenHashes.add(txHash);
+        if (seenHashes.size > 5000) {
+          seenHashes.clear();
+        }
+
+        try {
+          const transaction = await provider.getTransaction(txHash);
+          if (!transaction?.to || transaction.to.toLowerCase() !== triggerAddress) {
+            return;
+          }
+
+          if (
+            selector &&
+            String(transaction.data || "0x").slice(0, 10).toLowerCase() !== selector
+          ) {
+            return;
+          }
+
+          cleanup();
+          logger.info(`Mempool trigger matched pending tx ${txHash}`);
+          resolve();
+        } catch {
+          // Ignore transient pending transaction lookup failures.
+        }
+      };
+
+      if (signal) {
+        const onAbort = () => {
+          cleanup();
+          reject(new AbortRunError());
+        };
+
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      }
+
+      if (config.triggerTimeoutMs) {
+        timeoutId = setTimeout(() => {
+          cleanup();
+          reject(
+            new Error(`Mempool trigger timed out after ${config.triggerTimeoutMs}ms`)
+          );
+        }, config.triggerTimeoutMs);
+      }
+
+      provider.on("pending", onPending);
+    });
+  } finally {
+    await destroyProvider(provider);
+  }
+}
+
+async function waitForExecutionTrigger(config, signal, logger) {
+  if (config.executionTriggerMode === "event") {
+    await waitForEventTrigger(config, signal, logger);
+    return;
+  }
+
+  if (config.executionTriggerMode === "mempool") {
+    await waitForMempoolTrigger(config, signal, logger);
+  }
 }
 
 async function warmupProvider(provider, walletAddress, signal) {
@@ -892,147 +1296,172 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
   await maybeWaitJitter(config.startJitterMs, walletIndex, signal, logger);
 
   const { provider, rpcUrl, chainId } = await createProvider(config);
-  const wallet = new ethers.Wallet(privateKey, provider);
-  const walletAddress = await wallet.getAddress();
-  const contract = new ethers.Contract(config.contractAddress, config.abi, wallet);
-  const mintMethod = getContractMethod(contract, config.mintFunction);
-  const mintArgs = applyPlaceholders(config.mintArgsTemplate, {
-    walletAddress,
-    walletIndex,
-    timestamp: Date.now()
-  });
-  let nextPlannedNonce = (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
-
-  logger.info(`[wallet ${walletIndex}] Address: ${walletAddress}`);
-  logger.info(`[wallet ${walletIndex}] RPC: ${rpcUrl}`);
-  logger.info(`[wallet ${walletIndex}] Chain ID: ${chainId}`);
-  logger.info(`[wallet ${walletIndex}] Contract: ${config.contractAddress}`);
-  logger.info(`[wallet ${walletIndex}] Function: ${config.mintFunction}`);
-  logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
-  logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
-  logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
-
-  if (config.warmupRpc) {
-    await warmupProvider(provider, walletAddress, signal);
-    logger.info(`[wallet ${walletIndex}] Provider warmup complete`);
-  }
-
-  await ensureMinimumBalance(provider, walletAddress, config, walletIndex, logger);
-  await waitForReadyCheck(contract, config, walletIndex, signal, logger);
-
-  const reserveSubmittedNonce = (tx) => {
-    if (typeof tx?.nonce === "number" && tx.nonce >= nextPlannedNonce) {
-      nextPlannedNonce = tx.nonce + 1;
-    }
-  };
-
-  let mintResult = null;
-
-  for (let attempt = 1; attempt <= config.maxRetries; attempt += 1) {
-    throwIfAborted(signal);
-
-    try {
-      const overrides = await buildRuntimeOverrides(config, provider);
-
-      if (config.simulateTransaction) {
-        await mintMethod.staticCall(...mintArgs, overrides);
-        const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
-        logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
-      }
-
-      if (config.dryRun) {
-        logger.info(`[wallet ${walletIndex}] Dry run enabled, transaction not sent`);
-        return {
-          walletAddress,
-          walletIndex,
-          txHash: null,
-          status: "dry-run"
-        };
-      }
-
-      mintResult = await sendManagedTransaction({
-        send: () => mintMethod(...mintArgs, { ...overrides, nonce: nextPlannedNonce }),
-        signer: wallet,
-        config,
-        walletIndex,
-        label: "Mint",
-        logger,
-        signal,
-        onSubmitted: reserveSubmittedNonce
-      });
-      break;
-    } catch (error) {
-      if (error instanceof AbortRunError) {
-        throw error;
-      }
-
-      logger.error(
-        `[wallet ${walletIndex}] Attempt ${attempt}/${config.maxRetries} failed: ${formatError(error)}`
-      );
-
-      if (attempt >= config.maxRetries) {
-        throw error;
-      }
-
-      await sleep(config.retryDelayMs, signal);
-    }
-  }
-
-  if (!mintResult) {
-    throw new Error(`[wallet ${walletIndex}] Exhausted retries without a result`);
-  }
-
-  if (!config.waitForReceipt) {
-    return {
-      walletAddress,
-      walletIndex,
-      txHash: mintResult.tx.hash,
-      status: "submitted"
-    };
-  }
-
-  const result = {
-    walletAddress,
-    walletIndex,
-    txHash: mintResult.tx.hash,
-    mintTxHash: mintResult.tx.hash,
-    receipt: mintResult.receipt,
-    replacementCount: mintResult.replacementCount,
-    status: mintResult.receipt.status === 1 ? "success" : "failed"
-  };
-
-  if (!config.transferAfterMinted) {
-    return result;
-  }
-
   try {
-    const transferResults = await transferMintedAssets({
-      config,
-      provider,
-      wallet,
+    const wallet = new ethers.Wallet(privateKey, provider);
+    const walletAddress = await wallet.getAddress();
+    const contract = new ethers.Contract(config.contractAddress, config.abi, wallet);
+    const mintMethod = getContractMethod(contract, config.mintFunction);
+    const mintArgs = applyPlaceholders(config.mintArgsTemplate, {
       walletAddress,
       walletIndex,
-      receipt: mintResult.receipt,
-      logger,
-      signal,
-      getPlannedNonce: () => nextPlannedNonce,
-      reserveSubmittedNonce
+      timestamp: Date.now()
     });
+    let nextPlannedNonce =
+      (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
 
-    result.transfers = transferResults;
-    result.transferTxHashes = transferResults.map((entry) => entry.txHash);
-    result.replacementCount += transferResults.reduce(
-      (total, entry) => total + (entry.replacementCount || 0),
-      0
-    );
-    return result;
-  } catch (error) {
-    throw attachErrorContext(error, {
+    logger.info(`[wallet ${walletIndex}] Address: ${walletAddress}`);
+    logger.info(`[wallet ${walletIndex}] RPC: ${rpcUrl}`);
+    logger.info(`[wallet ${walletIndex}] Chain ID: ${chainId}`);
+    logger.info(`[wallet ${walletIndex}] Contract: ${config.contractAddress}`);
+    logger.info(`[wallet ${walletIndex}] Function: ${config.mintFunction}`);
+    logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
+    logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
+    logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
+
+    if (config.warmupRpc) {
+      await warmupProvider(provider, walletAddress, signal);
+      logger.info(`[wallet ${walletIndex}] Provider warmup complete`);
+    }
+
+    await ensureMinimumBalance(provider, walletAddress, config, walletIndex, logger);
+    await waitForReadyCheck(contract, config, walletIndex, signal, logger);
+
+    const reserveSubmittedNonce = (tx) => {
+      if (typeof tx?.nonce === "number" && tx.nonce >= nextPlannedNonce) {
+        nextPlannedNonce = tx.nonce + 1;
+      }
+    };
+
+    let mintResult = null;
+
+    for (let attempt = 1; attempt <= config.maxRetries; attempt += 1) {
+      throwIfAborted(signal);
+
+      try {
+        const overrides = await buildRuntimeOverrides(config, provider);
+
+        if (config.simulateTransaction) {
+          await mintMethod.staticCall(...mintArgs, overrides);
+          const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
+          logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
+        }
+
+        if (config.dryRun) {
+          logger.info(`[wallet ${walletIndex}] Dry run enabled, transaction not sent`);
+          return {
+            walletAddress,
+            walletIndex,
+            txHash: null,
+            status: "dry-run"
+          };
+        }
+
+        mintResult = await sendManagedTransaction({
+          send: () =>
+            sendContractTransaction({
+              contractMethod: mintMethod,
+              args: mintArgs,
+              overrides: { ...overrides, nonce: nextPlannedNonce },
+              wallet,
+              provider,
+              config,
+              walletIndex,
+              label: "Mint",
+              logger
+            }),
+          submitReplacement: (txRequest) =>
+            submitTransactionWithRoute({
+              wallet,
+              provider,
+              config,
+              txRequest,
+              walletIndex,
+              label: "Mint",
+              logger
+            }),
+          config,
+          walletIndex,
+          label: "Mint",
+          logger,
+          signal,
+          onSubmitted: reserveSubmittedNonce
+        });
+        break;
+      } catch (error) {
+        if (error instanceof AbortRunError) {
+          throw error;
+        }
+
+        logger.error(
+          `[wallet ${walletIndex}] Attempt ${attempt}/${config.maxRetries} failed: ${formatError(error)}`
+        );
+
+        if (attempt >= config.maxRetries) {
+          throw error;
+        }
+
+        await sleep(config.retryDelayMs, signal);
+      }
+    }
+
+    if (!mintResult) {
+      throw new Error(`[wallet ${walletIndex}] Exhausted retries without a result`);
+    }
+
+    if (!config.waitForReceipt) {
+      return {
+        walletAddress,
+        walletIndex,
+        txHash: mintResult.tx.hash,
+        status: "submitted"
+      };
+    }
+
+    const result = {
       walletAddress,
+      walletIndex,
       txHash: mintResult.tx.hash,
       mintTxHash: mintResult.tx.hash,
-      receipt: mintResult.receipt
-    });
+      receipt: mintResult.receipt,
+      replacementCount: mintResult.replacementCount,
+      status: mintResult.receipt.status === 1 ? "success" : "failed"
+    };
+
+    if (!config.transferAfterMinted) {
+      return result;
+    }
+
+    try {
+      const transferResults = await transferMintedAssets({
+        config,
+        provider,
+        wallet,
+        walletAddress,
+        walletIndex,
+        receipt: mintResult.receipt,
+        logger,
+        signal,
+        getPlannedNonce: () => nextPlannedNonce,
+        reserveSubmittedNonce
+      });
+
+      result.transfers = transferResults;
+      result.transferTxHashes = transferResults.map((entry) => entry.txHash);
+      result.replacementCount += transferResults.reduce(
+        (total, entry) => total + (entry.replacementCount || 0),
+        0
+      );
+      return result;
+    } catch (error) {
+      throw attachErrorContext(error, {
+        walletAddress,
+        txHash: mintResult.tx.hash,
+        mintTxHash: mintResult.tx.hash,
+        receipt: mintResult.receipt
+      });
+    }
+  } finally {
+    await destroyProvider(provider);
   }
 }
 
@@ -1047,8 +1476,11 @@ async function runMintBot(config, hooks = {}) {
   logger.info(`Dry run: ${config.dryRun ? "enabled" : "disabled"}`);
   logger.info(`Gas strategy: ${config.gasStrategy}`);
   logger.info(`Ready check: ${config.readyCheckFunction || "disabled"}`);
+  logger.info(`Execution trigger: ${config.executionTriggerMode}`);
+  logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
 
   await waitUntil(config.waitUntilIso, config.pollIntervalMs, signal, logger);
+  await waitForExecutionTrigger(config, signal, logger);
 
   const runners = config.privateKeys.map((privateKey, index) => () =>
     runSingleWallet(config, privateKey, index, { signal, logger })

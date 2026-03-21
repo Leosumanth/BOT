@@ -25,7 +25,10 @@ It is designed as a reusable template for contracts that expose a mint function 
 - calls your chosen mint function with custom JSON arguments
 - optionally waits for the transaction receipt
 - can automatically replace timed-out transactions with higher gas using the same nonce
+- can submit transactions through a configurable private relay with optional public RPC fallback
+- can arm execution from on-chain events or pending mempool transactions
 - can transfer freshly minted ERC-721 and ERC-1155 tokens to another wallet after confirmation
+- can enqueue dashboard runs into Redis for dedicated worker execution
 - includes a Postgres-backed dashboard with admin login
 - encrypts dashboard-imported wallet secrets before storing them
 - can send Telegram and Discord alerts for run lifecycle events
@@ -73,6 +76,11 @@ Copy-Item .env.example .env
 - `SESSION_TTL_HOURS`: dashboard session lifetime, defaults to `168`
 - `COOKIE_SECURE`: optional cookie override, use `true` behind HTTPS or `false` for plain local HTTP
 - `DEFAULT_RPC_CHAIN_KEY`: chain key assigned to env-provided RPC nodes inside the dashboard, defaults to `base_sepolia`
+- `QUEUE_MODE`: `local` or `redis`; set to `redis` to enqueue dashboard runs into Redis workers
+- `REDIS_URL`: Redis connection string used by the queue producer and worker
+- `REDIS_NAMESPACE`: queue key prefix, defaults to `mintbot`
+- `REDIS_BLOCK_TIMEOUT_SEC`: blocking pop timeout used by the worker loop, defaults to `5`
+- `WORKER_ID`: optional worker label that appears in distributed run state
 - `ETHERSCAN_API_KEY`: optional fallback explorer API key used for dashboard ABI fetches
 - `TELEGRAM_BOT_TOKEN`: optional fallback Telegram bot token for dashboard alerts
 - `TELEGRAM_CHAT_ID`: optional fallback Telegram chat ID for dashboard alerts
@@ -107,6 +115,11 @@ Copy-Item .env.example .env
 - `SMART_GAS_REPLACEMENT`: automatically reprice a timed-out transaction using the same nonce
 - `REPLACEMENT_BUMP_PERCENT`: fee bump applied to each replacement transaction
 - `REPLACEMENT_MAX_ATTEMPTS`: maximum number of replacement broadcasts after the initial send
+- `PRIVATE_RELAY_ENABLED`: submit signed transactions to a relay endpoint instead of the public RPC
+- `PRIVATE_RELAY_URL`: relay JSON-RPC endpoint used when `PRIVATE_RELAY_ENABLED=true`
+- `PRIVATE_RELAY_METHOD`: `eth_sendRawTransaction` or `eth_sendPrivateTransaction`
+- `PRIVATE_RELAY_HEADERS_JSON`: optional JSON object of relay HTTP headers, for example auth headers
+- `PRIVATE_RELAY_ONLY`: fail the run instead of falling back to the public RPC when relay submission fails
 - `START_JITTER_MS`: random startup delay per wallet, useful in parallel mode
 - `NONCE_OFFSET`: optional nonce offset if you deliberately want to skip ahead
 - `READY_CHECK_FUNCTION`: optional read function to poll before minting
@@ -114,6 +127,12 @@ Copy-Item .env.example .env
 - `READY_CHECK_EXPECTED`: JSON value used when `READY_CHECK_MODE=equals`
 - `READY_CHECK_MODE`: `truthy`, `falsey`, or `equals`
 - `READY_CHECK_INTERVAL_MS`: how often to poll the ready check
+- `EXECUTION_TRIGGER_MODE`: `standard`, `event`, or `mempool`
+- `TRIGGER_CONTRACT_ADDRESS`: optional trigger contract override, defaults to `CONTRACT_ADDRESS`
+- `TRIGGER_EVENT_SIGNATURE`: event fragment used when `EXECUTION_TRIGGER_MODE=event`
+- `TRIGGER_EVENT_CONDITION`: optional JSON subset match against decoded event args
+- `TRIGGER_MEMPOOL_SIGNATURE`: optional function signature or `0x` selector filter for pending tx matches
+- `TRIGGER_TIMEOUT_MS`: optional timeout for event or mempool arming
 - `WARMUP_RPC`: preload provider state before launch
 - `CONTINUE_ON_ERROR`: continue sequential runs after a wallet fails
 - `RESULTS_PATH`: optional JSON output path for a summary file
@@ -198,6 +217,44 @@ TRANSFER_AFTER_MINTED=true
 TRANSFER_ADDRESS=0xYourVaultAddress
 ```
 
+Arm execution from an event and only mint after it fires:
+
+```env
+EXECUTION_TRIGGER_MODE=event
+TRIGGER_CONTRACT_ADDRESS=0xSaleContract
+TRIGGER_EVENT_SIGNATURE=SaleStateChanged(bool isOpen)
+TRIGGER_EVENT_CONDITION={"isOpen":true}
+TRIGGER_TIMEOUT_MS=120000
+```
+
+Arm execution from the mempool when a matching function call appears:
+
+```env
+RPC_URLS=wss://mainnet.example,https://mainnet-backup.example
+EXECUTION_TRIGGER_MODE=mempool
+TRIGGER_CONTRACT_ADDRESS=0xSaleContract
+TRIGGER_MEMPOOL_SIGNATURE=setPublicSaleOpen(bool)
+TRIGGER_TIMEOUT_MS=60000
+```
+
+Use a private relay and only fall back to the public RPC if relay submission fails:
+
+```env
+PRIVATE_RELAY_ENABLED=true
+PRIVATE_RELAY_URL=https://relay.example/rpc
+PRIVATE_RELAY_METHOD=eth_sendRawTransaction
+PRIVATE_RELAY_HEADERS_JSON={"Authorization":"Bearer your-token"}
+PRIVATE_RELAY_ONLY=false
+```
+
+Enable Redis queue mode with a dedicated worker:
+
+```env
+QUEUE_MODE=redis
+REDIS_URL=redis://127.0.0.1:6379
+REDIS_NAMESPACE=mintbot
+```
+
 ## Run
 
 CLI:
@@ -224,6 +281,18 @@ On Windows PowerShell:
 npm.cmd run ui
 ```
 
+Queue worker:
+
+```bash
+npm run worker
+```
+
+On Windows PowerShell:
+
+```powershell
+npm.cmd run worker
+```
+
 The dashboard now requires:
 
 - `DATABASE_URL`
@@ -244,9 +313,11 @@ npm start
 - it starts the dashboard on hosted platforms that provide `PORT` but do not have a complete bot configuration
 
 Set `BOT_MODE=bot` or `BOT_MODE=dashboard` if you want to force one mode explicitly.
+Set `BOT_MODE=worker` if you want the process to boot directly into the Redis worker.
 
 The dashboard now stores tasks, RPC nodes, sessions, and encrypted imported wallets in Postgres. Env-provided wallets and RPC URLs still load at runtime without being copied into the database.
 Explorer keys and alert credentials can be supplied from `.env` or saved from the dashboard settings view. Dashboard-saved credentials are encrypted server-side and only their configured status is exposed back to the browser.
+When `QUEUE_MODE=redis`, the dashboard enqueues task launches into Redis and a separate worker process consumes them, publishes live log events, and writes runtime/history records back into Postgres.
 
 ## Important notes
 

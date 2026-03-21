@@ -1009,6 +1009,11 @@ body[data-auth-state="locked"] .scanline-layer {
   box-shadow: var(--shadow-panel), 0 0 46px rgba(47, 183, 255, 0.1);
 }
 
+.task-card.queued {
+  border-color: rgba(255, 203, 112, 0.24);
+  box-shadow: var(--shadow-panel), 0 0 34px rgba(255, 203, 112, 0.08);
+}
+
 .task-card.failed,
 .status-pill.failed,
 .status-pill.stopped {
@@ -1355,6 +1360,11 @@ select:focus {
 .status-pill.completed {
   color: #d0ffe5;
   background: rgba(98, 247, 167, 0.14);
+}
+
+.status-pill.queued {
+  color: #ffe7b0;
+  background: rgba(255, 190, 92, 0.16);
 }
 
 .status-pill.failed,

@@ -222,6 +222,7 @@
                 <option value="all">All Statuses</option>
                 <option value="draft">Draft</option>
                 <option value="running">Running</option>
+                <option value="queued">Queued</option>
                 <option value="completed">Completed</option>
                 <option value="failed">Failed</option>
                 <option value="done">Done</option>
@@ -711,6 +712,67 @@
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <h4>Ready Check and Routing</h4>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Execution Trigger</span>
+                <select id="task-trigger-mode-input">
+                  <option value="standard">Standard</option>
+                  <option value="event">Event Driven</option>
+                  <option value="mempool">Mempool Driven</option>
+                </select>
+              </label>
+              <label>
+                <span>Trigger Contract</span>
+                <input id="task-trigger-contract-input" type="text" placeholder="Defaults to mint contract" />
+              </label>
+              <label>
+                <span>Trigger Timeout ms</span>
+                <input id="task-trigger-timeout-input" type="number" placeholder="30000" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Event Signature</span>
+                <input id="task-trigger-event-signature-input" type="text" placeholder="SaleStateChanged(bool)" />
+              </label>
+              <label>
+                <span>Event Condition JSON</span>
+                <input id="task-trigger-event-condition-input" type="text" placeholder='{"0":true}' />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Mempool Function or Selector</span>
+                <input id="task-trigger-mempool-signature-input" type="text" placeholder="setSaleState(bool) or 0x12345678" />
+              </label>
+              <label>
+                <span>Private Relay URL</span>
+                <input id="task-private-relay-url-input" type="text" placeholder="https://relay.example/rpc" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Private Relay Method</span>
+                <select id="task-private-relay-method-input">
+                  <option value="eth_sendRawTransaction">eth_sendRawTransaction</option>
+                  <option value="eth_sendPrivateTransaction">eth_sendPrivateTransaction</option>
+                </select>
+              </label>
+              <label>
+                <span>Private Relay Headers JSON</span>
+                <input id="task-private-relay-headers-input" type="text" placeholder='{"Authorization":"Bearer ..."}' />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="toggle-card">
+                <input id="task-private-relay-toggle" type="checkbox" />
+                <span>Private Relay</span>
+              </label>
+              <label class="toggle-card">
+                <input id="task-private-relay-only-toggle" type="checkbox" />
+                <span>Relay Only</span>
+              </label>
             </div>
             <div class="form-grid three">
               <label>

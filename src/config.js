@@ -44,7 +44,18 @@ const defaultInputValues = {
   TRANSFER_ADDRESS: "",
   SMART_GAS_REPLACEMENT: false,
   REPLACEMENT_BUMP_PERCENT: "12",
-  REPLACEMENT_MAX_ATTEMPTS: "2"
+  REPLACEMENT_MAX_ATTEMPTS: "2",
+  PRIVATE_RELAY_ENABLED: false,
+  PRIVATE_RELAY_URL: "",
+  PRIVATE_RELAY_METHOD: "eth_sendRawTransaction",
+  PRIVATE_RELAY_HEADERS_JSON: "",
+  PRIVATE_RELAY_ONLY: false,
+  EXECUTION_TRIGGER_MODE: "standard",
+  TRIGGER_CONTRACT_ADDRESS: "",
+  TRIGGER_EVENT_SIGNATURE: "",
+  TRIGGER_EVENT_CONDITION: "",
+  TRIGGER_MEMPOOL_SIGNATURE: "",
+  TRIGGER_TIMEOUT_MS: ""
 };
 
 function isBlank(value) {
@@ -255,6 +266,47 @@ function loadReadyCheckMode(raw) {
   return mode;
 }
 
+function loadExecutionTriggerMode(raw) {
+  const mode = (optionalString(raw, "EXECUTION_TRIGGER_MODE") || "standard").toLowerCase();
+  const supportedModes = new Set(["standard", "event", "mempool"]);
+
+  if (!supportedModes.has(mode)) {
+    throw new Error("EXECUTION_TRIGGER_MODE must be standard, event, or mempool");
+  }
+
+  return mode;
+}
+
+function loadPrivateRelayMethod(raw) {
+  const method = optionalString(raw, "PRIVATE_RELAY_METHOD") || "eth_sendRawTransaction";
+  const supportedMethods = new Set(["eth_sendRawTransaction", "eth_sendPrivateTransaction"]);
+
+  if (!supportedMethods.has(method)) {
+    throw new Error(
+      "PRIVATE_RELAY_METHOD must be eth_sendRawTransaction or eth_sendPrivateTransaction"
+    );
+  }
+
+  return method;
+}
+
+function parseJsonObjectValue(value, name) {
+  if (value === undefined || value === null || value === "") {
+    return {};
+  }
+
+  const parsed = parseJsonValue(value, name);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${name} must be a JSON object`);
+  }
+
+  return parsed;
+}
+
+function hasSocketRpcUrl(rpcUrls) {
+  return rpcUrls.some((rpcUrl) => /^wss?:\/\//i.test(String(rpcUrl || "")));
+}
+
 function normalizeConfig(raw) {
   const abiPath = optionalString(raw, "ABI_PATH") || "./abi/contract.json";
   const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
@@ -299,7 +351,19 @@ function normalizeConfig(raw) {
     transferAddress: optionalString(raw, "TRANSFER_ADDRESS"),
     smartGasReplacement: optionalBoolean(raw, "SMART_GAS_REPLACEMENT", false),
     replacementBumpPercent: optionalNumber(raw, "REPLACEMENT_BUMP_PERCENT") || 12,
-    replacementMaxAttempts: optionalInteger(raw, "REPLACEMENT_MAX_ATTEMPTS") || 2
+    replacementMaxAttempts: optionalInteger(raw, "REPLACEMENT_MAX_ATTEMPTS") || 2,
+    privateRelayEnabled: optionalBoolean(raw, "PRIVATE_RELAY_ENABLED", false),
+    privateRelayUrl: optionalString(raw, "PRIVATE_RELAY_URL"),
+    privateRelayMethod: loadPrivateRelayMethod(raw),
+    privateRelayHeaders: parseJsonObjectValue(raw.PRIVATE_RELAY_HEADERS_JSON, "PRIVATE_RELAY_HEADERS_JSON"),
+    privateRelayOnly: optionalBoolean(raw, "PRIVATE_RELAY_ONLY", false),
+    executionTriggerMode: loadExecutionTriggerMode(raw),
+    triggerContractAddress:
+      optionalString(raw, "TRIGGER_CONTRACT_ADDRESS") || required(raw, "CONTRACT_ADDRESS"),
+    triggerEventSignature: optionalString(raw, "TRIGGER_EVENT_SIGNATURE"),
+    triggerEventCondition: parseJsonValue(raw.TRIGGER_EVENT_CONDITION, "TRIGGER_EVENT_CONDITION"),
+    triggerMempoolSignature: optionalString(raw, "TRIGGER_MEMPOOL_SIGNATURE"),
+    triggerTimeoutMs: optionalInteger(raw, "TRIGGER_TIMEOUT_MS")
   };
 
   if (normalized.transferAfterMinted && !normalized.transferAddress) {
@@ -324,6 +388,27 @@ function normalizeConfig(raw) {
 
   if (normalized.smartGasReplacement && normalized.replacementBumpPercent <= 0) {
     throw new Error("REPLACEMENT_BUMP_PERCENT must be greater than 0");
+  }
+
+  if (normalized.privateRelayEnabled && !normalized.privateRelayUrl) {
+    throw new Error("PRIVATE_RELAY_URL is required when PRIVATE_RELAY_ENABLED=true");
+  }
+
+  if (
+    normalized.privateRelayHeaders &&
+    Object.values(normalized.privateRelayHeaders).some((value) => typeof value !== "string")
+  ) {
+    throw new Error("PRIVATE_RELAY_HEADERS_JSON values must all be strings");
+  }
+
+  if (normalized.executionTriggerMode === "event" && !normalized.triggerEventSignature) {
+    throw new Error("TRIGGER_EVENT_SIGNATURE is required when EXECUTION_TRIGGER_MODE=event");
+  }
+
+  if (normalized.executionTriggerMode === "mempool" && !hasSocketRpcUrl(normalized.rpcUrls)) {
+    throw new Error(
+      "At least one ws:// or wss:// RPC URL is required when EXECUTION_TRIGGER_MODE=mempool"
+    );
   }
 
   return normalized;

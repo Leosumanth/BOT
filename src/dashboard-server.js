@@ -25,6 +25,7 @@ const {
   isBlank,
   verifyPassword
 } = require("./security");
+const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = require("./queue");
 
 const webRoot = path.resolve(process.cwd(), "web");
 const legacyStatePath = path.resolve(process.cwd(), "dist", "dashboard-state.json");
@@ -49,9 +50,21 @@ let runController = null;
 let activeTaskId = null;
 let liveLogs = [];
 let runStartedAt = null;
+let queueCoordinator = null;
+let distributedRunState = createIdleRunState(resolveQueueConfig());
+const distributedQueuedTaskIds = new Set();
+const distributedTaskPatches = new Map();
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getQueueConfig() {
+  return resolveQueueConfig(process.env);
+}
+
+function queueModeEnabled() {
+  return getQueueConfig().enabled;
 }
 
 function hashForId(value) {
@@ -199,6 +212,17 @@ function defaultTaskState() {
     smartGasReplacement: false,
     replacementBumpPercent: "12",
     replacementMaxAttempts: "2",
+    privateRelayEnabled: false,
+    privateRelayUrl: "",
+    privateRelayMethod: "eth_sendRawTransaction",
+    privateRelayHeadersJson: "",
+    privateRelayOnly: false,
+    executionTriggerMode: "standard",
+    triggerContractAddress: "",
+    triggerEventSignature: "",
+    triggerEventCondition: "",
+    triggerMempoolSignature: "",
+    triggerTimeoutMs: "",
     transferAfterMinted: false,
     transferAddress: "",
     status: "draft",
@@ -282,6 +306,31 @@ function sanitizeTaskInput(payload, existingTask = null) {
     replacementMaxAttempts: String(
       payload.replacementMaxAttempts ?? base.replacementMaxAttempts ?? "2"
     ).trim() || "2",
+    privateRelayEnabled: Boolean(payload.privateRelayEnabled ?? base.privateRelayEnabled ?? false),
+    privateRelayUrl: String(payload.privateRelayUrl ?? base.privateRelayUrl ?? "").trim(),
+    privateRelayMethod:
+      String(payload.privateRelayMethod ?? base.privateRelayMethod ?? "eth_sendRawTransaction").trim() ||
+      "eth_sendRawTransaction",
+    privateRelayHeadersJson: String(
+      payload.privateRelayHeadersJson ?? base.privateRelayHeadersJson ?? ""
+    ).trim(),
+    privateRelayOnly: Boolean(payload.privateRelayOnly ?? base.privateRelayOnly ?? false),
+    executionTriggerMode:
+      String(payload.executionTriggerMode ?? base.executionTriggerMode ?? "standard").trim() ||
+      "standard",
+    triggerContractAddress: String(
+      payload.triggerContractAddress ?? base.triggerContractAddress ?? ""
+    ).trim(),
+    triggerEventSignature: String(
+      payload.triggerEventSignature ?? base.triggerEventSignature ?? ""
+    ).trim(),
+    triggerEventCondition: String(
+      payload.triggerEventCondition ?? base.triggerEventCondition ?? ""
+    ).trim(),
+    triggerMempoolSignature: String(
+      payload.triggerMempoolSignature ?? base.triggerMempoolSignature ?? ""
+    ).trim(),
+    triggerTimeoutMs: String(payload.triggerTimeoutMs ?? base.triggerTimeoutMs ?? "").trim(),
     transferAfterMinted: Boolean(payload.transferAfterMinted ?? base.transferAfterMinted ?? false),
     transferAddress: String(payload.transferAddress ?? base.transferAddress ?? "").trim(),
     status: payload.status || base.status || "draft",
@@ -392,6 +441,24 @@ function mergeRpcInventories(storedRpcNodes, envRpcNodes) {
   return merged;
 }
 
+function mapTaskRuntimeEntries(entries = []) {
+  return entries.reduce((map, entry) => {
+    map[entry.taskId] = entry;
+    return map;
+  }, {});
+}
+
+function mapTaskHistoryEntries(entries = []) {
+  return entries.reduce((map, entry) => {
+    if (!map[entry.taskId]) {
+      map[entry.taskId] = [];
+    }
+
+    map[entry.taskId].push(entry);
+    return map;
+  }, {});
+}
+
 function chainLabel(chainKey) {
   return chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey || "Unknown";
 }
@@ -457,17 +524,112 @@ async function reloadAppState() {
   const storedWallets = await database.listWallets();
   const { records: envWallets } = buildEnvWalletEntries();
   const envRpcNodes = buildEnvRpcNodes();
+  const taskIds = persistentState.tasks.map((task) => task.id);
+  const [taskRuntimeEntries, taskHistoryEntries] = await Promise.all([
+    database.listTaskRuntime(taskIds),
+    database.listTaskHistory(taskIds, 8)
+  ]);
   await reloadIntegrationSecrets();
 
   appState = {
     ...persistentState,
     wallets: mergeWalletInventories(storedWallets, envWallets),
-    rpcNodes: mergeRpcInventories(persistentState.rpcNodes, envRpcNodes)
+    rpcNodes: mergeRpcInventories(persistentState.rpcNodes, envRpcNodes),
+    taskRuntimeById: mapTaskRuntimeEntries(taskRuntimeEntries),
+    taskHistoryByTaskId: mapTaskHistoryEntries(taskHistoryEntries)
   };
 }
 
 async function persistAppState() {
   await database.saveState(extractPersistentState());
+}
+
+async function syncDistributedQueueSnapshot() {
+  if (!queueCoordinator?.enabled) {
+    distributedRunState = createIdleRunState(getQueueConfig());
+    distributedQueuedTaskIds.clear();
+    return;
+  }
+
+  const [runState, queuedJobs] = await Promise.all([
+    queueCoordinator.getRunState(),
+    queueCoordinator.listQueuedJobs()
+  ]);
+
+  distributedRunState = runState || createIdleRunState(getQueueConfig());
+  distributedQueuedTaskIds.clear();
+  queuedJobs.forEach((job) => {
+    if (job?.taskId) {
+      distributedQueuedTaskIds.add(job.taskId);
+    }
+  });
+}
+
+function applyRunStateUpdate(runState) {
+  distributedRunState = runState || createIdleRunState(getQueueConfig());
+  if (!distributedRunState.activeTaskId) {
+    distributedTaskPatches.clear();
+  }
+  emitState();
+}
+
+async function refreshDistributedState() {
+  await reloadAppState();
+  await syncDistributedQueueSnapshot();
+  emitState();
+}
+
+async function initializeQueueMode() {
+  if (!queueModeEnabled() || queueCoordinator) {
+    if (!queueModeEnabled()) {
+      distributedRunState = createIdleRunState(getQueueConfig());
+    }
+    return;
+  }
+
+  queueCoordinator = await createRedisCoordinator(getQueueConfig(), {
+    subscribe: true
+  });
+  await syncDistributedQueueSnapshot();
+
+  await queueCoordinator.subscribeToEvents((message) => {
+    if (!message?.type) {
+      return;
+    }
+
+    if (message.type === "log" && message.payload?.entry) {
+      const task = getTaskById(message.payload.taskId);
+      pushLog(message.payload.entry);
+      updateTaskProgressFromLog(task, message.payload.entry);
+      return;
+    }
+
+    if (message.type === "run-state" && message.payload?.runState) {
+      if (message.payload.runState.activeTaskId) {
+        distributedQueuedTaskIds.delete(message.payload.runState.activeTaskId);
+      }
+      applyRunStateUpdate(message.payload.runState);
+      return;
+    }
+
+    if (message.type === "task-queued" && message.payload?.taskId) {
+      distributedQueuedTaskIds.add(message.payload.taskId);
+      clearDistributedTaskPatch(message.payload.taskId);
+      emitState();
+      return;
+    }
+
+    if (message.type === "task-dequeued" && message.payload?.taskId) {
+      distributedQueuedTaskIds.delete(message.payload.taskId);
+      emitState();
+      return;
+    }
+
+    if (message.type === "task-sync") {
+      clearDistributedTaskPatch(message.payload?.taskId);
+      void refreshDistributedState().catch(reportBackgroundError);
+    }
+  });
 }
 
 async function migrateLegacyStateIfNeeded() {
@@ -578,14 +740,26 @@ async function initializeServer() {
   await migrateLegacyStateIfNeeded();
   await ensureAdminUser();
   await reloadAppState();
+  await initializeQueueMode();
   initialized = true;
 }
 
 function getRunState() {
+  if (queueModeEnabled()) {
+    return {
+      ...distributedRunState,
+      queueMode: "redis",
+      queuedTaskIds: [...distributedQueuedTaskIds],
+      logs: liveLogs.slice(-200)
+    };
+  }
+
   return {
     status: runController ? "running" : "idle",
     activeTaskId,
     startedAt: runStartedAt,
+    queueMode: "local",
+    queuedTaskIds: [],
     logs: liveLogs.slice(-200)
   };
 }
@@ -593,14 +767,33 @@ function getRunState() {
 function buildTaskResponse(task) {
   const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
   const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  const runtime = appState.taskRuntimeById?.[task.id] || null;
+  const history = appState.taskHistoryByTaskId?.[task.id] || task.history || [];
+  const runtimePatch = distributedTaskPatches.get(task.id) || null;
 
-  return {
+  const response = {
     ...task,
     walletIds,
     rpcNodeIds,
     walletCount: walletIds.length,
-    rpcCount: rpcNodeIds.length
+    rpcCount: rpcNodeIds.length,
+    history,
+    status: runtime?.status || task.status,
+    progress: runtime?.progress || task.progress,
+    summary: runtime?.summary || task.summary,
+    lastRunAt: runtime?.lastRunAt || task.lastRunAt
   };
+
+  if (distributedQueuedTaskIds.has(task.id) && response.status !== "running") {
+    response.status = "queued";
+    response.progress = response.progress?.percent > 0 ? response.progress : { phase: "Queued", percent: 4 };
+  }
+
+  if (runtimePatch) {
+    Object.assign(response, runtimePatch);
+  }
+
+  return response;
 }
 
 function priorityRank(priority) {
@@ -616,7 +809,10 @@ function humanizePriority(priority) {
 }
 
 function findActiveTask() {
-  return activeTaskId ? appState.tasks.find((task) => task.id === activeTaskId) || null : null;
+  const currentRunState = getRunState();
+  return currentRunState.activeTaskId
+    ? appState.tasks.find((task) => task.id === currentRunState.activeTaskId) || null
+    : null;
 }
 
 function getEligibleRpcNodes(task) {
@@ -675,7 +871,8 @@ function taskReadiness(task) {
 }
 
 function buildTelemetry() {
-  const activeTask = findActiveTask();
+  const taskViews = appState.tasks.map(buildTaskResponse);
+  const activeTask = findActiveTask() ? buildTaskResponse(findActiveTask()) : null;
   const healthyRpcCount = appState.rpcNodes.filter(
     (node) => node.lastHealth?.status === "healthy"
   ).length;
@@ -686,12 +883,12 @@ function buildTelemetry() {
     appState.wallets.map((wallet) => wallet.group || "Imported")
   ).size;
 
-  const summaries = appState.tasks.map((task) => task.summary || {});
+  const summaries = taskViews.map((task) => task.summary || {});
   const totalAttempts = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
   const successfulAttempts = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
   const successRate = totalAttempts ? Math.round((successfulAttempts / totalAttempts) * 100) : 0;
 
-  const priorityQueue = [...appState.tasks]
+  const priorityQueue = [...taskViews]
     .filter((task) => !task.done)
     .sort((left, right) => {
       const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
@@ -727,7 +924,7 @@ function buildTelemetry() {
     : 0;
 
   const chainLoad = Object.entries(
-    appState.tasks.reduce((map, task) => {
+    taskViews.reduce((map, task) => {
       map[task.chainKey] = (map[task.chainKey] || 0) + 1;
       return map;
     }, {})
@@ -736,11 +933,11 @@ function buildTelemetry() {
       chainKey,
       label: chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey,
       count,
-      share: appState.tasks.length ? Math.round((count / appState.tasks.length) * 100) : 0
+      share: taskViews.length ? Math.round((count / taskViews.length) * 100) : 0
     }))
     .sort((left, right) => right.count - left.count);
 
-  const latestRunTask = [...appState.tasks]
+  const latestRunTask = [...taskViews]
     .filter((task) => task.lastRunAt)
     .sort((left, right) => new Date(right.lastRunAt) - new Date(left.lastRunAt))[0];
 
@@ -975,9 +1172,9 @@ function summarizeResults(results) {
   );
 }
 
-function updateTaskProgressFromLog(task, entry) {
+function deriveTaskProgressFromLog(task, entry) {
   if (!task) {
-    return;
+    return null;
   }
 
   const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
@@ -989,6 +1186,12 @@ function updateTaskProgressFromLog(task, entry) {
   if (entry.message.includes("Waiting for launch time")) {
     phase = "Scheduled";
     percent = 4;
+  } else if (
+    entry.message.includes("Waiting for event trigger") ||
+    entry.message.includes("Waiting for mempool trigger")
+  ) {
+    phase = "Arming";
+    percent = Math.max(percent, 10);
   } else if (entry.message.includes("Provider warmup complete")) {
     phase = "Pre-signing";
     percent = Math.max(percent, 18);
@@ -1011,12 +1214,48 @@ function updateTaskProgressFromLog(task, entry) {
     percent = Math.max(percent, 96);
   }
 
-  void updateTask(task.id, {
-    progress: {
-      phase,
-      percent
-    }
-  }).catch(reportBackgroundError);
+  return {
+    phase,
+    percent
+  };
+}
+
+function setDistributedTaskPatch(taskId, patch) {
+  if (!taskId) {
+    return;
+  }
+
+  const current = distributedTaskPatches.get(taskId) || {};
+  distributedTaskPatches.set(taskId, {
+    ...current,
+    ...patch
+  });
+}
+
+function clearDistributedTaskPatch(taskId) {
+  if (!taskId) {
+    return;
+  }
+
+  distributedTaskPatches.delete(taskId);
+}
+
+function updateTaskProgressFromLog(task, entry) {
+  const progress = deriveTaskProgressFromLog(task, entry);
+  if (!progress) {
+    return;
+  }
+
+  if (queueModeEnabled()) {
+    setDistributedTaskPatch(task.id, {
+      status: "running",
+      progress
+    });
+    emitState();
+    return;
+  }
+
+  void updateTask(task.id, { progress }).catch(reportBackgroundError);
 }
 
 function getTaskById(taskId) {
@@ -1107,6 +1346,17 @@ async function buildConfigForTask(task) {
     SMART_GAS_REPLACEMENT: task.smartGasReplacement,
     REPLACEMENT_BUMP_PERCENT: task.replacementBumpPercent,
     REPLACEMENT_MAX_ATTEMPTS: task.replacementMaxAttempts,
+    PRIVATE_RELAY_ENABLED: task.privateRelayEnabled,
+    PRIVATE_RELAY_URL: task.privateRelayUrl,
+    PRIVATE_RELAY_METHOD: task.privateRelayMethod,
+    PRIVATE_RELAY_HEADERS_JSON: task.privateRelayHeadersJson,
+    PRIVATE_RELAY_ONLY: task.privateRelayOnly,
+    EXECUTION_TRIGGER_MODE: task.executionTriggerMode,
+    TRIGGER_CONTRACT_ADDRESS: task.triggerContractAddress,
+    TRIGGER_EVENT_SIGNATURE: task.triggerEventSignature,
+    TRIGGER_EVENT_CONDITION: task.triggerEventCondition,
+    TRIGGER_MEMPOOL_SIGNATURE: task.triggerMempoolSignature,
+    TRIGGER_TIMEOUT_MS: task.triggerTimeoutMs,
     TRANSFER_AFTER_MINTED: task.transferAfterMinted,
     TRANSFER_ADDRESS: task.transferAddress,
     CHAIN_ID: chain ? String(chain.chainId) : "",
@@ -1114,7 +1364,40 @@ async function buildConfigForTask(task) {
   });
 }
 
-async function handleTaskRun(taskId, response) {
+function createEmptySummary(total = 0) {
+  return {
+    total,
+    success: 0,
+    failed: 0,
+    stopped: 0,
+    hashes: []
+  };
+}
+
+async function setTaskRuntimeRecord(taskId, patch) {
+  const current = appState.taskRuntimeById?.[taskId] || null;
+  const nextRecord = await database.upsertTaskRuntime({
+    taskId,
+    status: patch.status || current?.status || "draft",
+    progress: patch.progress || current?.progress || { phase: "Ready", percent: 0 },
+    summary: patch.summary || current?.summary || createEmptySummary(),
+    active: patch.active ?? current?.active ?? false,
+    queued: patch.queued ?? current?.queued ?? false,
+    error: patch.error === undefined ? current?.error || null : patch.error,
+    workerId: patch.workerId === undefined ? current?.workerId || null : patch.workerId,
+    startedAt: patch.startedAt === undefined ? current?.startedAt || null : patch.startedAt,
+    lastRunAt: patch.lastRunAt === undefined ? current?.lastRunAt || null : patch.lastRunAt
+  });
+
+  appState.taskRuntimeById = {
+    ...(appState.taskRuntimeById || {}),
+    [taskId]: nextRecord
+  };
+
+  return nextRecord;
+}
+
+async function handleTaskRunLocal(taskId, response) {
   if (runController) {
     sendJson(response, 409, { error: "A task is already running" });
     return;
@@ -1217,6 +1500,67 @@ async function handleTaskRun(taskId, response) {
   }
 }
 
+async function handleTaskRunQueued(taskId, response) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    sendJson(response, 404, { error: "Task not found" });
+    return;
+  }
+
+  if (distributedQueuedTaskIds.has(taskId) || distributedRunState.activeTaskId === taskId) {
+    sendJson(response, 409, { error: "Task is already queued or running" });
+    return;
+  }
+
+  try {
+    await buildConfigForTask(task);
+
+    const queuedAt = new Date().toISOString();
+    const walletCount = Array.isArray(task.walletIds) ? task.walletIds.length : 0;
+    const queueResult = await queueCoordinator.enqueueTask({
+      id: createId("job"),
+      taskId,
+      requestedAt: queuedAt
+    });
+
+    if (!queueResult.enqueued) {
+      sendJson(response, 409, { error: "Task is already queued" });
+      return;
+    }
+
+    distributedQueuedTaskIds.add(taskId);
+    clearDistributedTaskPatch(taskId);
+    await setTaskRuntimeRecord(taskId, {
+      status: "queued",
+      progress: {
+        phase: "Queued",
+        percent: 4
+      },
+      summary: createEmptySummary(walletCount),
+      active: false,
+      queued: true,
+      error: null,
+      workerId: null,
+      startedAt: null
+    });
+    emitState();
+
+    await queueCoordinator.publishEvent("task-sync", { taskId });
+    sendJson(response, 200, { ok: true, queued: true });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleTaskRun(taskId, response) {
+  if (queueModeEnabled()) {
+    await handleTaskRunQueued(taskId, response);
+    return;
+  }
+
+  await handleTaskRunLocal(taskId, response);
+}
+
 async function handleTaskDuplicate(taskId, response) {
   const task = getTaskById(taskId);
   if (!task) {
@@ -1232,6 +1576,34 @@ async function handleTaskDuplicate(taskId, response) {
 }
 
 function handleStopRun(response) {
+  if (queueModeEnabled()) {
+    const activeTask = distributedRunState.activeTaskId;
+    if (!activeTask || distributedRunState.status !== "running") {
+      sendJson(response, 409, { error: "No task is running" });
+      return;
+    }
+
+    queueCoordinator
+      .requestStop(activeTask)
+      .then(() => {
+        setDistributedTaskPatch(activeTask, {
+          progress: {
+            phase: "Stop requested",
+            percent: Math.max(
+              distributedTaskPatches.get(activeTask)?.progress?.percent || 0,
+              10
+            )
+          }
+        });
+        emitState();
+        sendJson(response, 200, { ok: true });
+      })
+      .catch((error) => {
+        sendJson(response, 400, { error: formatError(error) });
+      });
+    return;
+  }
+
   if (!runController) {
     sendJson(response, 409, { error: "No task is running" });
     return;
@@ -1283,6 +1655,31 @@ async function handleTaskSave(request, response) {
       throw new Error("Receipt timeout is required when smart gas replacement is enabled");
     }
 
+    if (task.privateRelayEnabled && !task.privateRelayUrl) {
+      throw new Error("Private relay URL is required when private relay mode is enabled");
+    }
+
+    if (task.privateRelayHeadersJson) {
+      let parsedHeaders;
+      try {
+        parsedHeaders = JSON.parse(task.privateRelayHeadersJson);
+      } catch (error) {
+        throw new Error(`Private relay headers JSON is invalid: ${formatError(error)}`);
+      }
+
+      if (!parsedHeaders || typeof parsedHeaders !== "object" || Array.isArray(parsedHeaders)) {
+        throw new Error("Private relay headers must be a JSON object");
+      }
+    }
+
+    if (task.triggerContractAddress && !ethers.isAddress(task.triggerContractAddress)) {
+      throw new Error("Trigger contract address must be a valid EVM address");
+    }
+
+    if (task.executionTriggerMode === "event" && !task.triggerEventSignature) {
+      throw new Error("Event signature is required for event-driven execution");
+    }
+
     if (existingTask) {
       const index = appState.tasks.findIndex((entry) => entry.id === task.id);
       appState.tasks[index] = task;
@@ -1299,6 +1696,12 @@ async function handleTaskSave(request, response) {
 }
 
 async function handleTaskDelete(taskId, response) {
+  const currentRunState = getRunState();
+  if (distributedQueuedTaskIds.has(taskId) || currentRunState.activeTaskId === taskId) {
+    sendJson(response, 409, { error: "Stop or dequeue the task before deleting it" });
+    return;
+  }
+
   const before = appState.tasks.length;
   appState.tasks = appState.tasks.filter((task) => task.id !== taskId);
 
@@ -1308,6 +1711,14 @@ async function handleTaskDelete(taskId, response) {
   }
 
   await persistAppState();
+  await database.deleteTaskArtifacts(taskId);
+  if (appState.taskRuntimeById) {
+    delete appState.taskRuntimeById[taskId];
+  }
+  if (appState.taskHistoryByTaskId) {
+    delete appState.taskHistoryByTaskId[taskId];
+  }
+  clearDistributedTaskPatch(taskId);
   emitState();
   sendJson(response, 200, { ok: true });
 }
@@ -1654,8 +2065,9 @@ async function handleRpcDelete(rpcId, response) {
 }
 
 function findPriorityTaskForRun() {
-  return [...appState.tasks]
-    .filter((task) => !task.done)
+  return appState.tasks
+    .map(buildTaskResponse)
+    .filter((task) => !task.done && !["queued", "running"].includes(task.status))
     .sort((left, right) => {
       const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
       if (priorityDelta !== 0) {

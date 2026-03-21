@@ -49,6 +49,39 @@ function mapUserRow(row) {
   };
 }
 
+function mapTaskRuntimeRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    taskId: row.task_id,
+    status: row.status,
+    progress: row.progress || null,
+    summary: row.summary || null,
+    active: Boolean(row.active),
+    queued: Boolean(row.queued),
+    error: row.error || null,
+    workerId: row.worker_id || null,
+    startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at,
+    lastRunAt: row.last_run_at instanceof Date ? row.last_run_at.toISOString() : row.last_run_at,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  };
+}
+
+function mapTaskHistoryRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    ranAt: row.ran_at instanceof Date ? row.ran_at.toISOString() : row.ran_at,
+    summary: row.summary || {}
+  };
+}
+
 function shouldUseSsl(connectionString) {
   if (process.env.DATABASE_SSL === "false" || process.env.PGSSLMODE === "disable") {
     return false;
@@ -123,6 +156,32 @@ function createDatabase() {
         secret_ciphertext text not null,
         created_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
+      )
+    `);
+
+    await query(`
+      create table if not exists task_runtime (
+        task_id text primary key,
+        status text not null,
+        progress jsonb not null default '{"phase":"Ready","percent":0}'::jsonb,
+        summary jsonb not null default '{"total":0,"success":0,"failed":0,"stopped":0,"hashes":[]}'::jsonb,
+        active boolean not null default false,
+        queued boolean not null default false,
+        error text,
+        worker_id text,
+        started_at timestamptz,
+        last_run_at timestamptz,
+        updated_at timestamptz not null default now()
+      )
+    `);
+
+    await query(`
+      create table if not exists task_history (
+        id text primary key,
+        task_id text not null,
+        ran_at timestamptz not null,
+        summary jsonb not null,
+        created_at timestamptz not null default now()
       )
     `);
   }
@@ -358,6 +417,225 @@ function createDatabase() {
     await query("delete from app_secrets where secret_key = $1", [secretKey]);
   }
 
+  async function listTaskRuntime(taskIds = null) {
+    if (Array.isArray(taskIds) && taskIds.length === 0) {
+      return [];
+    }
+
+    const result = Array.isArray(taskIds)
+      ? await query(
+          `
+            select
+              task_id,
+              status,
+              progress,
+              summary,
+              active,
+              queued,
+              error,
+              worker_id,
+              started_at,
+              last_run_at,
+              updated_at
+            from task_runtime
+            where task_id = any($1::text[])
+            order by updated_at desc
+          `,
+          [taskIds]
+        )
+      : await query(`
+          select
+            task_id,
+            status,
+            progress,
+            summary,
+            active,
+            queued,
+            error,
+            worker_id,
+            started_at,
+            last_run_at,
+            updated_at
+          from task_runtime
+          order by updated_at desc
+        `);
+
+    return result.rows.map(mapTaskRuntimeRow);
+  }
+
+  async function getTaskRuntime(taskId) {
+    const result = await query(
+      `
+        select
+          task_id,
+          status,
+          progress,
+          summary,
+          active,
+          queued,
+          error,
+          worker_id,
+          started_at,
+          last_run_at,
+          updated_at
+        from task_runtime
+        where task_id = $1
+        limit 1
+      `,
+      [taskId]
+    );
+
+    return mapTaskRuntimeRow(result.rows[0]);
+  }
+
+  async function upsertTaskRuntime(runtime) {
+    const result = await query(
+      `
+        insert into task_runtime (
+          task_id,
+          status,
+          progress,
+          summary,
+          active,
+          queued,
+          error,
+          worker_id,
+          started_at,
+          last_run_at,
+          updated_at
+        )
+        values (
+          $1,
+          $2,
+          $3::jsonb,
+          $4::jsonb,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9::timestamptz,
+          $10::timestamptz,
+          now()
+        )
+        on conflict (task_id)
+        do update set
+          status = excluded.status,
+          progress = excluded.progress,
+          summary = excluded.summary,
+          active = excluded.active,
+          queued = excluded.queued,
+          error = excluded.error,
+          worker_id = excluded.worker_id,
+          started_at = excluded.started_at,
+          last_run_at = excluded.last_run_at,
+          updated_at = now()
+        returning
+          task_id,
+          status,
+          progress,
+          summary,
+          active,
+          queued,
+          error,
+          worker_id,
+          started_at,
+          last_run_at,
+          updated_at
+      `,
+      [
+        runtime.taskId,
+        runtime.status,
+        JSON.stringify(runtime.progress || { phase: "Ready", percent: 0 }),
+        JSON.stringify(
+          runtime.summary || { total: 0, success: 0, failed: 0, stopped: 0, hashes: [] }
+        ),
+        runtime.active === true,
+        runtime.queued === true,
+        runtime.error || null,
+        runtime.workerId || null,
+        runtime.startedAt || null,
+        runtime.lastRunAt || null
+      ]
+    );
+
+    return mapTaskRuntimeRow(result.rows[0]);
+  }
+
+  async function clearTaskRuntime(taskId) {
+    await query("delete from task_runtime where task_id = $1", [taskId]);
+  }
+
+  async function listTaskHistory(taskIds = null, limitPerTask = 8) {
+    if (Array.isArray(taskIds) && taskIds.length === 0) {
+      return [];
+    }
+
+    const result = Array.isArray(taskIds)
+      ? await query(
+          `
+            select id, task_id, ran_at, summary
+            from task_history
+            where task_id = any($1::text[])
+            order by ran_at desc
+          `,
+          [taskIds]
+        )
+      : await query(`
+          select id, task_id, ran_at, summary
+          from task_history
+          order by ran_at desc
+        `);
+
+    const grouped = new Map();
+
+    for (const row of result.rows.map(mapTaskHistoryRow)) {
+      const bucket = grouped.get(row.taskId) || [];
+      if (bucket.length >= limitPerTask) {
+        continue;
+      }
+
+      bucket.push(row);
+      grouped.set(row.taskId, bucket);
+    }
+
+    return [...grouped.values()].flat();
+  }
+
+  async function insertTaskHistory(entry) {
+    const result = await query(
+      `
+        insert into task_history (id, task_id, ran_at, summary, created_at)
+        values ($1, $2, $3::timestamptz, $4::jsonb, now())
+        returning id, task_id, ran_at, summary
+      `,
+      [entry.id, entry.taskId, entry.ranAt, JSON.stringify(entry.summary || {})]
+    );
+
+    return mapTaskHistoryRow(result.rows[0]);
+  }
+
+  async function pruneTaskHistory(taskId, keep = 8) {
+    await query(
+      `
+        delete from task_history
+        where task_id = $1
+          and id not in (
+            select id
+            from task_history
+            where task_id = $1
+            order by ran_at desc
+            limit $2
+          )
+      `,
+      [taskId, keep]
+    );
+  }
+
+  async function deleteTaskArtifacts(taskId) {
+    await query("delete from task_runtime where task_id = $1", [taskId]);
+    await query("delete from task_history where task_id = $1", [taskId]);
+  }
+
   async function close() {
     await pool.end();
   }
@@ -367,20 +645,27 @@ function createDatabase() {
     createSession,
     deleteExpiredSessions,
     deleteSessionByTokenHash,
+    deleteTaskArtifacts,
     deleteWallet,
     ensureBaseState,
     ensureSchema,
     findWalletByAddress,
+    getTaskRuntime,
     getSecret,
     getSessionByTokenHash,
     getStoredWalletSecret,
     getUserByUsername,
     insertWallet,
+    insertTaskHistory,
+    listTaskHistory,
+    listTaskRuntime,
     listUsers,
     listWallets,
     loadState,
+    pruneTaskHistory,
     saveState,
     touchSession,
+    upsertTaskRuntime,
     upsertSecret,
     deleteSecret,
     upsertUser

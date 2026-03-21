@@ -133,6 +133,15 @@ const taskRetriesInput = document.getElementById("task-retries-input");
 const taskRetryDelayInput = document.getElementById("task-retry-delay-input");
 const taskJitterInput = document.getElementById("task-jitter-input");
 const taskMinBalanceInput = document.getElementById("task-min-balance-input");
+const taskTriggerModeInput = document.getElementById("task-trigger-mode-input");
+const taskTriggerContractInput = document.getElementById("task-trigger-contract-input");
+const taskTriggerTimeoutInput = document.getElementById("task-trigger-timeout-input");
+const taskTriggerEventSignatureInput = document.getElementById("task-trigger-event-signature-input");
+const taskTriggerEventConditionInput = document.getElementById("task-trigger-event-condition-input");
+const taskTriggerMempoolSignatureInput = document.getElementById("task-trigger-mempool-signature-input");
+const taskPrivateRelayUrlInput = document.getElementById("task-private-relay-url-input");
+const taskPrivateRelayMethodInput = document.getElementById("task-private-relay-method-input");
+const taskPrivateRelayHeadersInput = document.getElementById("task-private-relay-headers-input");
 const taskReadyFunctionInput = document.getElementById("task-ready-function-input");
 const taskReadyArgsInput = document.getElementById("task-ready-args-input");
 const taskReadyModeInput = document.getElementById("task-ready-mode-input");
@@ -143,6 +152,8 @@ const taskSimulateToggle = document.getElementById("task-simulate-toggle");
 const taskDryRunToggle = document.getElementById("task-dry-run-toggle");
 const taskWarmupToggle = document.getElementById("task-warmup-toggle");
 const taskSmartReplaceToggle = document.getElementById("task-smart-replace-toggle");
+const taskPrivateRelayToggle = document.getElementById("task-private-relay-toggle");
+const taskPrivateRelayOnlyToggle = document.getElementById("task-private-relay-only-toggle");
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
@@ -1003,6 +1014,8 @@ function renderDashboard() {
 
   if (state.runState.status === "running") {
     setStatusPill(dashboardHealthPill, "running", "Live Run");
+  } else if ((state.runState.queuedTaskIds || []).length > 0) {
+    setStatusPill(dashboardHealthPill, "queued", "Queue Armed");
   } else if ((telemetry.alerts || []).some((alert) => alert.severity === "critical")) {
     setStatusPill(dashboardHealthPill, "failed", "Action Needed");
   } else if ((telemetry.readyTaskCount || 0) > 0) {
@@ -1077,6 +1090,7 @@ function renderTaskCard(task) {
   const progress = task.progress || { phase: "Ready", percent: 0 };
   const latestHistory = task.history?.[0];
   const active = state.runState.activeTaskId === task.id && state.runState.status === "running";
+  const queued = task.status === "queued";
   const hashCount = summary.hashes?.length || 0;
   const tags = task.tags || [];
 
@@ -1122,7 +1136,7 @@ function renderTaskCard(task) {
 
       <div class="task-actions">
         <button class="mini-button fx-button" data-task-action="done">${task.done ? "Undone" : "Done"}</button>
-        <button class="mini-button ${active ? "" : "primary"} fx-button" data-task-action="${active ? "stop" : "run"}">${active ? "Stop" : "Run"}</button>
+        <button class="mini-button ${active ? "" : queued ? "" : "primary"} fx-button" data-task-action="${active ? "stop" : "run"}" ${queued ? "disabled" : ""}>${active ? "Stop" : queued ? "Queued" : "Run"}</button>
         <button class="mini-button fx-button" data-task-action="edit">Edit</button>
         <button class="mini-button fx-button" data-task-action="duplicate">Duplicate</button>
         <button class="mini-button danger fx-button" data-task-action="delete">Delete</button>
@@ -1369,14 +1383,24 @@ function renderShellTelemetry() {
   body.dataset.runState = state.runState.status;
   accountLabel.textContent =
     state.session.user?.username || state.settings.profileName || "Local Operator";
-  accountStatus.textContent = state.runState.status === "running" ? "Task running" : "Authenticated";
+  accountStatus.textContent =
+    state.runState.status === "running"
+      ? "Task running"
+      : (state.runState.queuedTaskIds || []).length > 0
+        ? "Queue armed"
+        : "Authenticated";
   heroModeCopy.textContent = active
     ? `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
+    : (state.runState.queuedTaskIds || []).length > 0
+      ? `${pluralize((state.runState.queuedTaskIds || []).length, "task")} queued for worker execution across the Redis lane.`
     : `Monitoring ${pluralize(state.tasks.length, "task")}, ${pluralize(state.wallets.length, "wallet")}, and ${pluralize(state.rpcNodes.length, "RPC node")} from one control surface.`;
 
   if (state.runState.status === "running") {
     sidebarModeLabel.textContent = "Live Run";
     sidebarModeDot.className = "signal-dot hot";
+  } else if ((state.runState.queuedTaskIds || []).length > 0) {
+    sidebarModeLabel.textContent = "Queued";
+    sidebarModeDot.className = "signal-dot alert";
   } else if (hasCriticalAlert) {
     sidebarModeLabel.textContent = "Alert";
     sidebarModeDot.className = "signal-dot alert";
@@ -1556,6 +1580,15 @@ function openTaskModal(task = null) {
   taskRetryDelayInput.value = task?.retryDelayMs || "1000";
   taskJitterInput.value = task?.startJitterMs || "0";
   taskMinBalanceInput.value = task?.minBalanceEth || "";
+  taskTriggerModeInput.value = task?.executionTriggerMode || "standard";
+  taskTriggerContractInput.value = task?.triggerContractAddress || "";
+  taskTriggerTimeoutInput.value = task?.triggerTimeoutMs || "";
+  taskTriggerEventSignatureInput.value = task?.triggerEventSignature || "";
+  taskTriggerEventConditionInput.value = task?.triggerEventCondition || "";
+  taskTriggerMempoolSignatureInput.value = task?.triggerMempoolSignature || "";
+  taskPrivateRelayUrlInput.value = task?.privateRelayUrl || "";
+  taskPrivateRelayMethodInput.value = task?.privateRelayMethod || "eth_sendRawTransaction";
+  taskPrivateRelayHeadersInput.value = task?.privateRelayHeadersJson || "";
   taskReadyFunctionInput.value = task?.readyCheckFunction || "";
   taskReadyArgsInput.value = task?.readyCheckArgs || "[]";
   taskReadyModeInput.value = task?.readyCheckMode || "truthy";
@@ -1566,6 +1599,8 @@ function openTaskModal(task = null) {
   taskDryRunToggle.checked = Boolean(task?.dryRun);
   taskWarmupToggle.checked = task?.warmupRpc ?? true;
   taskSmartReplaceToggle.checked = Boolean(task?.smartGasReplacement);
+  taskPrivateRelayToggle.checked = Boolean(task?.privateRelayEnabled);
+  taskPrivateRelayOnlyToggle.checked = Boolean(task?.privateRelayOnly);
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
   taskAbiFileInput.value = "";
@@ -1632,6 +1667,17 @@ function buildTaskPayload() {
     startJitterMs: taskJitterInput.value,
     minBalanceEth: taskMinBalanceInput.value,
     nonceOffset: "0",
+    privateRelayEnabled: taskPrivateRelayToggle.checked,
+    privateRelayUrl: taskPrivateRelayUrlInput.value,
+    privateRelayMethod: taskPrivateRelayMethodInput.value,
+    privateRelayHeadersJson: taskPrivateRelayHeadersInput.value,
+    privateRelayOnly: taskPrivateRelayOnlyToggle.checked,
+    executionTriggerMode: taskTriggerModeInput.value,
+    triggerContractAddress: taskTriggerContractInput.value,
+    triggerEventSignature: taskTriggerEventSignatureInput.value,
+    triggerEventCondition: taskTriggerEventConditionInput.value,
+    triggerMempoolSignature: taskTriggerMempoolSignatureInput.value,
+    triggerTimeoutMs: taskTriggerTimeoutInput.value,
     transferAfterMinted: taskTransferToggle.checked,
     transferAddress: taskTransferAddressInput.value
   };

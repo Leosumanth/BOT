@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/start.js",
     "bot": "node src/index.js",
-    "ui": "node src/server.js"
+    "ui": "node src/server.js",
+    "worker": "node src/worker.js"
   },
   "keywords": [
     "nft",
@@ -19,6 +20,7 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "ethers": "^6.13.2",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "redis": "^4.7.0"
   }
 }

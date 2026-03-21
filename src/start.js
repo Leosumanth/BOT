@@ -27,7 +27,11 @@ function normalizeMode(value) {
 function resolveStartMode(env = process.env) {
   const explicitMode = normalizeMode(env.BOT_MODE || env.APP_MODE || env.START_MODE);
 
-  if (["bot", "cli", "mint", "worker"].includes(explicitMode)) {
+  if (["worker", "queue-worker", "redis-worker"].includes(explicitMode)) {
+    return "worker";
+  }
+
+  if (["bot", "cli", "mint"].includes(explicitMode)) {
     return "bot";
   }
 
@@ -52,6 +56,12 @@ async function main() {
 
     const { startServer } = require("./server");
     await startServer();
+    return;
+  }
+
+  if (mode === "worker") {
+    const { main: startWorker } = require("./worker");
+    await startWorker();
     return;
   }
 
