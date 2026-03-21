@@ -39,7 +39,12 @@ const defaultInputValues = {
   WARMUP_RPC: true,
   CONTINUE_ON_ERROR: false,
   RESULTS_PATH: "./dist/mint-results.json",
-  MIN_BALANCE_ETH: ""
+  MIN_BALANCE_ETH: "",
+  TRANSFER_AFTER_MINTED: false,
+  TRANSFER_ADDRESS: "",
+  SMART_GAS_REPLACEMENT: false,
+  REPLACEMENT_BUMP_PERCENT: "12",
+  REPLACEMENT_MAX_ATTEMPTS: "2"
 };
 
 function isBlank(value) {
@@ -253,8 +258,7 @@ function loadReadyCheckMode(raw) {
 function normalizeConfig(raw) {
   const abiPath = optionalString(raw, "ABI_PATH") || "./abi/contract.json";
   const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
-
-  return {
+  const normalized = {
     rpcUrls: loadRpcUrls(raw),
     privateKeys: loadPrivateKeys(raw),
     contractAddress: required(raw, "CONTRACT_ADDRESS"),
@@ -290,8 +294,39 @@ function normalizeConfig(raw) {
     warmupRpc: optionalBoolean(raw, "WARMUP_RPC", true),
     continueOnError: optionalBoolean(raw, "CONTINUE_ON_ERROR", false),
     resultsPath: optionalString(raw, "RESULTS_PATH"),
-    minBalanceEth: optionalString(raw, "MIN_BALANCE_ETH")
+    minBalanceEth: optionalString(raw, "MIN_BALANCE_ETH"),
+    transferAfterMinted: optionalBoolean(raw, "TRANSFER_AFTER_MINTED", false),
+    transferAddress: optionalString(raw, "TRANSFER_ADDRESS"),
+    smartGasReplacement: optionalBoolean(raw, "SMART_GAS_REPLACEMENT", false),
+    replacementBumpPercent: optionalNumber(raw, "REPLACEMENT_BUMP_PERCENT") || 12,
+    replacementMaxAttempts: optionalInteger(raw, "REPLACEMENT_MAX_ATTEMPTS") || 2
   };
+
+  if (normalized.transferAfterMinted && !normalized.transferAddress) {
+    throw new Error("TRANSFER_ADDRESS is required when TRANSFER_AFTER_MINTED=true");
+  }
+
+  if (normalized.transferAfterMinted && !normalized.waitForReceipt) {
+    throw new Error("WAIT_FOR_RECEIPT must be true when TRANSFER_AFTER_MINTED=true");
+  }
+
+  if (normalized.smartGasReplacement && !normalized.waitForReceipt) {
+    throw new Error("WAIT_FOR_RECEIPT must be true when SMART_GAS_REPLACEMENT=true");
+  }
+
+  if (normalized.smartGasReplacement && !normalized.txTimeoutMs) {
+    throw new Error("TX_TIMEOUT_MS is required when SMART_GAS_REPLACEMENT=true");
+  }
+
+  if (normalized.smartGasReplacement && normalized.replacementMaxAttempts < 1) {
+    throw new Error("REPLACEMENT_MAX_ATTEMPTS must be at least 1");
+  }
+
+  if (normalized.smartGasReplacement && normalized.replacementBumpPercent <= 0) {
+    throw new Error("REPLACEMENT_BUMP_PERCENT must be greater than 0");
+  }
+
+  return normalized;
 }
 
 function loadConfig() {

@@ -122,10 +122,13 @@ const taskWalletModeInput = document.getElementById("task-wallet-mode-input");
 const taskGasStrategyInput = document.getElementById("task-gas-strategy-input");
 const taskGasLimitInput = document.getElementById("task-gas-limit-input");
 const taskPollIntervalInput = document.getElementById("task-poll-interval-input");
+const taskTxTimeoutInput = document.getElementById("task-tx-timeout-input");
 const taskMaxFeeInput = document.getElementById("task-max-fee-input");
 const taskPriorityFeeInput = document.getElementById("task-priority-fee-input");
 const taskGasBoostInput = document.getElementById("task-gas-boost-input");
 const taskPriorityBoostInput = document.getElementById("task-priority-boost-input");
+const taskReplaceBumpInput = document.getElementById("task-replace-bump-input");
+const taskReplaceAttemptsInput = document.getElementById("task-replace-attempts-input");
 const taskRetriesInput = document.getElementById("task-retries-input");
 const taskRetryDelayInput = document.getElementById("task-retry-delay-input");
 const taskJitterInput = document.getElementById("task-jitter-input");
@@ -139,6 +142,7 @@ const taskTransferAddressInput = document.getElementById("task-transfer-address-
 const taskSimulateToggle = document.getElementById("task-simulate-toggle");
 const taskDryRunToggle = document.getElementById("task-dry-run-toggle");
 const taskWarmupToggle = document.getElementById("task-warmup-toggle");
+const taskSmartReplaceToggle = document.getElementById("task-smart-replace-toggle");
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
@@ -1541,10 +1545,13 @@ function openTaskModal(task = null) {
   taskGasStrategyInput.value = task?.gasStrategy || "provider";
   taskGasLimitInput.value = task?.gasLimit || "";
   taskPollIntervalInput.value = task?.pollIntervalMs || "1000";
+  taskTxTimeoutInput.value = task?.txTimeoutMs || "";
   taskMaxFeeInput.value = task?.maxFeeGwei || "";
   taskPriorityFeeInput.value = task?.maxPriorityFeeGwei || "";
   taskGasBoostInput.value = task?.gasBoostPercent || "0";
   taskPriorityBoostInput.value = task?.priorityBoostPercent || "0";
+  taskReplaceBumpInput.value = task?.replacementBumpPercent || "12";
+  taskReplaceAttemptsInput.value = task?.replacementMaxAttempts || "2";
   taskRetriesInput.value = task?.maxRetries || "1";
   taskRetryDelayInput.value = task?.retryDelayMs || "1000";
   taskJitterInput.value = task?.startJitterMs || "0";
@@ -1558,6 +1565,7 @@ function openTaskModal(task = null) {
   taskSimulateToggle.checked = task?.simulateTransaction ?? true;
   taskDryRunToggle.checked = Boolean(task?.dryRun);
   taskWarmupToggle.checked = task?.warmupRpc ?? true;
+  taskSmartReplaceToggle.checked = Boolean(task?.smartGasReplacement);
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
   taskAbiFileInput.value = "";
@@ -1598,6 +1606,10 @@ function buildTaskPayload() {
     maxPriorityFeeGwei: taskPriorityFeeInput.value,
     gasBoostPercent: taskGasBoostInput.value,
     priorityBoostPercent: taskPriorityBoostInput.value,
+    txTimeoutMs: taskTxTimeoutInput.value,
+    smartGasReplacement: taskSmartReplaceToggle.checked,
+    replacementBumpPercent: taskReplaceBumpInput.value,
+    replacementMaxAttempts: taskReplaceAttemptsInput.value,
     simulateTransaction: taskSimulateToggle.checked,
     dryRun: taskDryRunToggle.checked,
     waitForReceipt: true,

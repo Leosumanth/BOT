@@ -24,6 +24,8 @@ It is designed as a reusable template for contracts that expose a mint function 
 - can export run results to a JSON file
 - calls your chosen mint function with custom JSON arguments
 - optionally waits for the transaction receipt
+- can automatically replace timed-out transactions with higher gas using the same nonce
+- can transfer freshly minted ERC-721 and ERC-1155 tokens to another wallet after confirmation
 - includes a Postgres-backed dashboard with admin login
 - encrypts dashboard-imported wallet secrets before storing them
 - can send Telegram and Discord alerts for run lifecycle events
@@ -102,6 +104,9 @@ Copy-Item .env.example .env
 - `CHAIN_ID`: optional expected chain ID safety check
 - `RECEIPT_CONFIRMATIONS`: number of confirmations to wait for
 - `TX_TIMEOUT_MS`: optional receipt wait timeout
+- `SMART_GAS_REPLACEMENT`: automatically reprice a timed-out transaction using the same nonce
+- `REPLACEMENT_BUMP_PERCENT`: fee bump applied to each replacement transaction
+- `REPLACEMENT_MAX_ATTEMPTS`: maximum number of replacement broadcasts after the initial send
 - `START_JITTER_MS`: random startup delay per wallet, useful in parallel mode
 - `NONCE_OFFSET`: optional nonce offset if you deliberately want to skip ahead
 - `READY_CHECK_FUNCTION`: optional read function to poll before minting
@@ -113,6 +118,8 @@ Copy-Item .env.example .env
 - `CONTINUE_ON_ERROR`: continue sequential runs after a wallet fails
 - `RESULTS_PATH`: optional JSON output path for a summary file
 - `MIN_BALANCE_ETH`: optional minimum wallet balance guard
+- `TRANSFER_AFTER_MINTED`: after a confirmed mint, transfer detected ERC-721 or ERC-1155 mints away from the sender wallet
+- `TRANSFER_ADDRESS`: destination wallet used when `TRANSFER_AFTER_MINTED=true`
 - `HOST`: optional web dashboard bind host, defaults to `127.0.0.1` locally and `0.0.0.0` when `PORT` is set
 - `PORT`: optional web dashboard port, defaults to `3000`
 
@@ -177,6 +184,18 @@ Use provider gas suggestions with a fee boost:
 GAS_STRATEGY=provider
 GAS_BOOST_PERCENT=15
 PRIORITY_BOOST_PERCENT=20
+```
+
+Enable timeout-based gas replacement and move minted tokens to a vault wallet:
+
+```env
+WAIT_FOR_RECEIPT=true
+TX_TIMEOUT_MS=45000
+SMART_GAS_REPLACEMENT=true
+REPLACEMENT_BUMP_PERCENT=12
+REPLACEMENT_MAX_ATTEMPTS=2
+TRANSFER_AFTER_MINTED=true
+TRANSFER_ADDRESS=0xYourVaultAddress
 ```
 
 ## Run

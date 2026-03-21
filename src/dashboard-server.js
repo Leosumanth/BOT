@@ -190,11 +190,15 @@ function defaultTaskState() {
     readyCheckExpected: "",
     readyCheckIntervalMs: "1000",
     pollIntervalMs: "1000",
+    txTimeoutMs: "",
     maxRetries: "1",
     retryDelayMs: "1000",
     startJitterMs: "0",
     minBalanceEth: "",
     nonceOffset: "0",
+    smartGasReplacement: false,
+    replacementBumpPercent: "12",
+    replacementMaxAttempts: "2",
     transferAfterMinted: false,
     transferAddress: "",
     status: "draft",
@@ -265,11 +269,19 @@ function sanitizeTaskInput(payload, existingTask = null) {
       payload.readyCheckIntervalMs ?? base.readyCheckIntervalMs ?? "1000"
     ).trim() || "1000",
     pollIntervalMs: String(payload.pollIntervalMs ?? base.pollIntervalMs ?? "1000").trim() || "1000",
+    txTimeoutMs: String(payload.txTimeoutMs ?? base.txTimeoutMs ?? "").trim(),
     maxRetries: String(payload.maxRetries ?? base.maxRetries ?? "1").trim() || "1",
     retryDelayMs: String(payload.retryDelayMs ?? base.retryDelayMs ?? "1000").trim() || "1000",
     startJitterMs: String(payload.startJitterMs ?? base.startJitterMs ?? "0").trim() || "0",
     minBalanceEth: String(payload.minBalanceEth ?? base.minBalanceEth ?? "").trim(),
     nonceOffset: String(payload.nonceOffset ?? base.nonceOffset ?? "0").trim() || "0",
+    smartGasReplacement: Boolean(payload.smartGasReplacement ?? base.smartGasReplacement ?? false),
+    replacementBumpPercent: String(
+      payload.replacementBumpPercent ?? base.replacementBumpPercent ?? "12"
+    ).trim() || "12",
+    replacementMaxAttempts: String(
+      payload.replacementMaxAttempts ?? base.replacementMaxAttempts ?? "2"
+    ).trim() || "2",
     transferAfterMinted: Boolean(payload.transferAfterMinted ?? base.transferAfterMinted ?? false),
     transferAddress: String(payload.transferAddress ?? base.transferAddress ?? "").trim(),
     status: payload.status || base.status || "draft",
@@ -1086,11 +1098,17 @@ async function buildConfigForTask(task) {
     READY_CHECK_EXPECTED: task.readyCheckExpected,
     READY_CHECK_INTERVAL_MS: task.readyCheckIntervalMs,
     POLL_INTERVAL_MS: task.pollIntervalMs,
+    TX_TIMEOUT_MS: task.txTimeoutMs,
     MAX_RETRIES: task.maxRetries,
     RETRY_DELAY_MS: task.retryDelayMs,
     START_JITTER_MS: task.startJitterMs,
     MIN_BALANCE_ETH: task.minBalanceEth,
     NONCE_OFFSET: task.nonceOffset,
+    SMART_GAS_REPLACEMENT: task.smartGasReplacement,
+    REPLACEMENT_BUMP_PERCENT: task.replacementBumpPercent,
+    REPLACEMENT_MAX_ATTEMPTS: task.replacementMaxAttempts,
+    TRANSFER_AFTER_MINTED: task.transferAfterMinted,
+    TRANSFER_ADDRESS: task.transferAddress,
     CHAIN_ID: chain ? String(chain.chainId) : "",
     RESULTS_PATH: appState.settings.resultsPath || "./dist/mint-results.json"
   });
@@ -1249,6 +1267,20 @@ async function handleTaskSave(request, response) {
 
     if ((task.walletIds || []).length === 0) {
       throw new Error("Select at least one wallet");
+    }
+
+    if (task.transferAfterMinted) {
+      if (!task.transferAddress) {
+        throw new Error("Transfer address is required when transfer-after-minted is enabled");
+      }
+
+      if (!ethers.isAddress(task.transferAddress)) {
+        throw new Error("Transfer address must be a valid EVM address");
+      }
+    }
+
+    if (task.smartGasReplacement && !task.txTimeoutMs) {
+      throw new Error("Receipt timeout is required when smart gas replacement is enabled");
     }
 
     if (existingTask) {

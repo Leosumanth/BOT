@@ -692,6 +692,20 @@
                 <input id="task-priority-boost-input" type="number" value="0" />
               </label>
             </div>
+            <div class="form-grid three">
+              <label>
+                <span>Receipt Timeout ms</span>
+                <input id="task-tx-timeout-input" type="number" placeholder="45000" />
+              </label>
+              <label>
+                <span>Replacement Bump %</span>
+                <input id="task-replace-bump-input" type="number" value="12" />
+              </label>
+              <label>
+                <span>Replacement Attempts</span>
+                <input id="task-replace-attempts-input" type="number" value="2" />
+              </label>
+            </div>
           </div>
 
           <div class="surface inset-surface">
@@ -732,7 +746,7 @@
             </div>
           </div>
 
-          <div class="form-grid four">
+          <div class="form-grid five">
             <label class="toggle-card">
               <input id="task-simulate-toggle" type="checkbox" checked />
               <span>Simulate</span>
@@ -744,6 +758,10 @@
             <label class="toggle-card">
               <input id="task-warmup-toggle" type="checkbox" checked />
               <span>Warmup RPC</span>
+            </label>
+            <label class="toggle-card">
+              <input id="task-smart-replace-toggle" type="checkbox" />
+              <span>Smart Gas Replace</span>
             </label>
             <label class="toggle-card">
               <input id="task-transfer-toggle" type="checkbox" />
