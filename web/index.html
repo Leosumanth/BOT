@@ -635,7 +635,7 @@
             </div>
           </div>
 
-          <div class="form-grid four">
+          <div class="form-grid five">
             <label>
               <span>Retries</span>
               <input id="task-retries-input" type="number" value="1" />
@@ -643,6 +643,10 @@
             <label>
               <span>Retry Delay ms</span>
               <input id="task-retry-delay-input" type="number" value="1000" />
+            </label>
+            <label>
+              <span>Retry Window min</span>
+              <input id="task-retry-window-input" type="number" min="0" value="30" />
             </label>
             <label>
               <span>Start Jitter ms</span>

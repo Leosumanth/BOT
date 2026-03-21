@@ -12,6 +12,7 @@ const defaultInputValues = {
   MINT_FUNCTION: "mint",
   MINT_ARGS: "[]",
   MINT_VALUE_ETH: "0",
+  RETRY_WINDOW_MS: "",
   GAS_LIMIT: "",
   MAX_FEE_GWEI: "",
   MAX_PRIORITY_FEE_GWEI: "",
@@ -310,6 +311,7 @@ function hasSocketRpcUrl(rpcUrls) {
 function normalizeConfig(raw) {
   const abiPath = optionalString(raw, "ABI_PATH") || "./abi/contract.json";
   const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
+  const retryWindowMs = Math.max(0, optionalInteger(raw, "RETRY_WINDOW_MS") || 0);
   const normalized = {
     rpcUrls: loadRpcUrls(raw),
     privateKeys: loadPrivateKeys(raw),
@@ -329,6 +331,7 @@ function normalizeConfig(raw) {
     dryRun: optionalBoolean(raw, "DRY_RUN", false),
     maxRetries: optionalInteger(raw, "MAX_RETRIES") || 1,
     retryDelayMs: optionalInteger(raw, "RETRY_DELAY_MS") || 1000,
+    retryWindowMs,
     walletMode: loadWalletMode(raw),
     requiredChainId: optionalInteger(raw, "CHAIN_ID"),
     receiptConfirmations: optionalInteger(raw, "RECEIPT_CONFIRMATIONS") || 1,

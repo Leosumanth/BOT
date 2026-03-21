@@ -31,6 +31,10 @@ const webRoot = path.resolve(process.cwd(), "web");
 const legacyStatePath = path.resolve(process.cwd(), "dist", "dashboard-state.json");
 const sessionCookieName = process.env.SESSION_COOKIE_NAME || "mintbot_session";
 const sessionTtlHours = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 168));
+const scheduledTaskPollIntervalMs = Math.max(
+  1000,
+  Number(process.env.SCHEDULE_POLL_INTERVAL_MS || 1000)
+);
 
 const clients = new Set();
 const chainCatalog = [
@@ -54,6 +58,8 @@ let queueCoordinator = null;
 let distributedRunState = createIdleRunState(resolveQueueConfig());
 const distributedQueuedTaskIds = new Set();
 const distributedTaskPatches = new Map();
+let scheduledTaskLoop = null;
+let scheduledTaskScanInFlight = false;
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -74,6 +80,12 @@ function hashForId(value) {
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(payload));
+}
+
+function createHttpError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function broadcast(type, payload) {
@@ -197,6 +209,7 @@ function defaultTaskState() {
     walletMode: "parallel",
     useSchedule: false,
     waitUntilIso: "",
+    schedulePending: false,
     readyCheckFunction: "",
     readyCheckArgs: "[]",
     readyCheckMode: "truthy",
@@ -206,6 +219,7 @@ function defaultTaskState() {
     txTimeoutMs: "",
     maxRetries: "1",
     retryDelayMs: "1000",
+    retryWindowMs: "1800000",
     startJitterMs: "0",
     minBalanceEth: "",
     nonceOffset: "0",
@@ -247,6 +261,19 @@ function defaultTaskState() {
 
 function sanitizeTaskInput(payload, existingTask = null) {
   const base = existingTask ? { ...existingTask } : defaultTaskState();
+  const useSchedule = Boolean(payload.useSchedule ?? base.useSchedule ?? false);
+  const waitUntilIso = String(payload.waitUntilIso ?? base.waitUntilIso ?? "").trim();
+  const retryWindowMs = String(payload.retryWindowMs ?? base.retryWindowMs ?? "1800000").trim() || "1800000";
+  const scheduleConfigChanged =
+    !existingTask ||
+    useSchedule !== Boolean(base.useSchedule) ||
+    waitUntilIso !== String(base.waitUntilIso || "").trim();
+  const schedulePending =
+    useSchedule && waitUntilIso
+      ? scheduleConfigChanged
+        ? true
+        : Boolean(base.schedulePending)
+      : false;
 
   return {
     ...base,
@@ -283,8 +310,9 @@ function sanitizeTaskInput(payload, existingTask = null) {
     warmupRpc: Boolean(payload.warmupRpc ?? base.warmupRpc ?? true),
     continueOnError: Boolean(payload.continueOnError ?? base.continueOnError ?? false),
     walletMode: String(payload.walletMode || base.walletMode || "parallel"),
-    useSchedule: Boolean(payload.useSchedule ?? base.useSchedule ?? false),
-    waitUntilIso: String(payload.waitUntilIso ?? base.waitUntilIso ?? "").trim(),
+    useSchedule,
+    waitUntilIso,
+    schedulePending,
     readyCheckFunction: String(payload.readyCheckFunction ?? base.readyCheckFunction ?? "").trim(),
     readyCheckArgs: String(payload.readyCheckArgs ?? base.readyCheckArgs ?? "[]").trim() || "[]",
     readyCheckMode: String(payload.readyCheckMode || base.readyCheckMode || "truthy"),
@@ -296,6 +324,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     txTimeoutMs: String(payload.txTimeoutMs ?? base.txTimeoutMs ?? "").trim(),
     maxRetries: String(payload.maxRetries ?? base.maxRetries ?? "1").trim() || "1",
     retryDelayMs: String(payload.retryDelayMs ?? base.retryDelayMs ?? "1000").trim() || "1000",
+    retryWindowMs,
     startJitterMs: String(payload.startJitterMs ?? base.startJitterMs ?? "0").trim() || "0",
     minBalanceEth: String(payload.minBalanceEth ?? base.minBalanceEth ?? "").trim(),
     nonceOffset: String(payload.nonceOffset ?? base.nonceOffset ?? "0").trim() || "0",
@@ -742,6 +771,7 @@ async function initializeServer() {
   await reloadAppState();
   await initializeQueueMode();
   initialized = true;
+  ensureScheduledTaskLoop();
 }
 
 function getRunState() {
@@ -1132,6 +1162,10 @@ function cloneTask(task) {
     name: `${task.name} Copy`,
     status: "draft",
     done: false,
+    schedulePending:
+      Boolean(task.useSchedule && task.waitUntilIso) &&
+      !Number.isNaN(new Date(task.waitUntilIso).getTime()) &&
+      new Date(task.waitUntilIso).getTime() > Date.now(),
     progress: {
       phase: "Ready",
       percent: 0
@@ -1340,6 +1374,7 @@ async function buildConfigForTask(task) {
     TX_TIMEOUT_MS: task.txTimeoutMs,
     MAX_RETRIES: task.maxRetries,
     RETRY_DELAY_MS: task.retryDelayMs,
+    RETRY_WINDOW_MS: task.retryWindowMs,
     START_JITTER_MS: task.startJitterMs,
     MIN_BALANCE_ETH: task.minBalanceEth,
     NONCE_OFFSET: task.nonceOffset,
@@ -1397,168 +1432,290 @@ async function setTaskRuntimeRecord(taskId, patch) {
   return nextRecord;
 }
 
-async function handleTaskRunLocal(taskId, response) {
-  if (runController) {
-    sendJson(response, 409, { error: "A task is already running" });
-    return;
+function scheduledTaskTimestamp(task) {
+  if (!task?.useSchedule || !task?.schedulePending || !task?.waitUntilIso || task?.done) {
+    return null;
   }
 
-  const task = getTaskById(taskId);
-  if (!task) {
-    sendJson(response, 404, { error: "Task not found" });
-    return;
+  const scheduledAt = new Date(task.waitUntilIso);
+  if (Number.isNaN(scheduledAt.getTime())) {
+    return null;
   }
 
-  try {
-    const config = await buildConfigForTask(task);
-    const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
-    runController = new AbortController();
-    activeTaskId = taskId;
-    runStartedAt = new Date().toISOString();
-    liveLogs = [];
-
-    await updateTask(taskId, {
-      status: "running",
-      progress: {
-        phase: "Preparing",
-        percent: 8
-      },
-      summary: {
-        total: walletIds.length,
-        success: 0,
-        failed: 0,
-        stopped: 0,
-        hashes: []
-      }
-    });
-
-    sendJson(response, 200, { ok: true });
-    void notifyRunEvent("run_start", {
-      task: getTaskById(taskId)
-    });
-
-    runMintBot(config, {
-      signal: runController.signal,
-      onLog(entry) {
-        pushLog(entry);
-        updateTaskProgressFromLog(getTaskById(taskId), entry);
-      }
-    })
-      .then(async (result) => {
-        const summary = summarizeResults(result.results);
-        const taskAfterRun = getTaskById(taskId);
-        await updateTask(taskId, {
-          status: "completed",
-          progress: {
-            phase: "Completed",
-            percent: 100
-          },
-          summary,
-          lastRunAt: new Date().toISOString(),
-          history: [
-            {
-              id: createId("history"),
-              ranAt: new Date().toISOString(),
-              summary
-            },
-            ...(taskAfterRun.history || [])
-          ].slice(0, 8)
-        });
-        await notifyRunEvent("run_success", {
-          task: getTaskById(taskId),
-          summary
-        });
-      })
-      .catch(async (error) => {
-        const stopped = error instanceof AbortRunError || runController?.signal.aborted;
-        await updateTask(taskId, {
-          status: stopped ? "stopped" : "failed",
-          progress: {
-            phase: stopped ? "Stopped" : "Failed",
-            percent: stopped ? 0 : 100
-          }
-        });
-        pushLog({
-          level: "error",
-          message: formatError(error),
-          timestamp: new Date().toISOString()
-        });
-        await notifyRunEvent(stopped ? "run_stopped" : "run_failure", {
-          task: getTaskById(taskId),
-          error: formatError(error)
-        });
-      })
-      .catch(reportBackgroundError)
-      .finally(() => {
-        runController = null;
-        activeTaskId = null;
-        runStartedAt = null;
-        emitState();
-      });
-  } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
-  }
+  return scheduledAt.getTime();
 }
 
-async function handleTaskRunQueued(taskId, response) {
+function listDueScheduledTasks() {
+  if (!appState?.tasks?.length) {
+    return [];
+  }
+
+  const now = Date.now();
+
+  return appState.tasks
+    .filter((task) => {
+      const scheduledAt = scheduledTaskTimestamp(task);
+      return scheduledAt != null && scheduledAt <= now;
+    })
+    .sort((left, right) => {
+      const timeDelta = scheduledTaskTimestamp(left) - scheduledTaskTimestamp(right);
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(left.createdAt || 0) - new Date(right.createdAt || 0);
+    });
+}
+
+async function markScheduledTaskLaunchFailure(taskId, error) {
   const task = getTaskById(taskId);
   if (!task) {
-    sendJson(response, 404, { error: "Task not found" });
     return;
   }
 
-  if (distributedQueuedTaskIds.has(taskId) || distributedRunState.activeTaskId === taskId) {
-    sendJson(response, 409, { error: "Task is already queued or running" });
+  await updateTask(taskId, {
+    schedulePending: false,
+    status: "failed",
+    progress: {
+      phase: "Schedule Failed",
+      percent: 100
+    }
+  });
+
+  pushLog({
+    level: "error",
+    message: `Scheduled launch failed for ${task.name}: ${formatError(error)}`,
+    timestamp: new Date().toISOString()
+  });
+}
+
+async function scanAndRunScheduledTasks() {
+  if (scheduledTaskScanInFlight || !initialized || !appState) {
     return;
   }
+
+  if (!queueModeEnabled() && runController) {
+    return;
+  }
+
+  scheduledTaskScanInFlight = true;
 
   try {
-    await buildConfigForTask(task);
-
-    const queuedAt = new Date().toISOString();
-    const walletCount = Array.isArray(task.walletIds) ? task.walletIds.length : 0;
-    const queueResult = await queueCoordinator.enqueueTask({
-      id: createId("job"),
-      taskId,
-      requestedAt: queuedAt
-    });
-
-    if (!queueResult.enqueued) {
-      sendJson(response, 409, { error: "Task is already queued" });
+    const dueTasks = listDueScheduledTasks();
+    if (dueTasks.length === 0) {
       return;
     }
 
-    distributedQueuedTaskIds.add(taskId);
-    clearDistributedTaskPatch(taskId);
-    await setTaskRuntimeRecord(taskId, {
-      status: "queued",
-      progress: {
-        phase: "Queued",
-        percent: 4
-      },
-      summary: createEmptySummary(walletCount),
-      active: false,
-      queued: true,
-      error: null,
-      workerId: null,
-      startedAt: null
-    });
-    emitState();
+    const tasksToLaunch = queueModeEnabled() ? dueTasks : dueTasks.slice(0, 1);
 
-    await queueCoordinator.publishEvent("task-sync", { taskId });
-    sendJson(response, 200, { ok: true, queued: true });
-  } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    for (const task of tasksToLaunch) {
+      if (queueModeEnabled()) {
+        if (distributedQueuedTaskIds.has(task.id) || distributedRunState.activeTaskId === task.id) {
+          continue;
+        }
+      }
+
+      pushLog({
+        level: "info",
+        message: `Auto-starting scheduled task ${task.name}`,
+        timestamp: new Date().toISOString()
+      });
+
+      try {
+        await requestTaskRun(task.id);
+      } catch (error) {
+        if (error?.statusCode === 409) {
+          continue;
+        }
+
+        await markScheduledTaskLaunchFailure(task.id, error);
+      }
+    }
+  } finally {
+    scheduledTaskScanInFlight = false;
   }
 }
 
-async function handleTaskRun(taskId, response) {
-  if (queueModeEnabled()) {
-    await handleTaskRunQueued(taskId, response);
+function ensureScheduledTaskLoop() {
+  if (scheduledTaskLoop) {
     return;
   }
 
-  await handleTaskRunLocal(taskId, response);
+  scheduledTaskLoop = setInterval(() => {
+    void scanAndRunScheduledTasks().catch(reportBackgroundError);
+  }, scheduledTaskPollIntervalMs);
+
+  void scanAndRunScheduledTasks().catch(reportBackgroundError);
+}
+
+async function startTaskRunLocal(taskId) {
+  if (runController) {
+    throw createHttpError("A task is already running", 409);
+  }
+
+  const task = getTaskById(taskId);
+  if (!task) {
+    throw createHttpError("Task not found", 404);
+  }
+
+  const config = await buildConfigForTask(task);
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  runController = new AbortController();
+  activeTaskId = taskId;
+  runStartedAt = new Date().toISOString();
+  liveLogs = [];
+
+  await updateTask(taskId, {
+    schedulePending: false,
+    status: "running",
+    progress: {
+      phase: "Preparing",
+      percent: 8
+    },
+    summary: {
+      total: walletIds.length,
+      success: 0,
+      failed: 0,
+      stopped: 0,
+      hashes: []
+    }
+  });
+
+  void notifyRunEvent("run_start", {
+    task: getTaskById(taskId)
+  });
+
+  runMintBot(config, {
+    signal: runController.signal,
+    onLog(entry) {
+      pushLog(entry);
+      updateTaskProgressFromLog(getTaskById(taskId), entry);
+    }
+  })
+    .then(async (result) => {
+      const summary = summarizeResults(result.results);
+      const taskAfterRun = getTaskById(taskId);
+      await updateTask(taskId, {
+        status: "completed",
+        progress: {
+          phase: "Completed",
+          percent: 100
+        },
+        summary,
+        lastRunAt: new Date().toISOString(),
+        history: [
+          {
+            id: createId("history"),
+            ranAt: new Date().toISOString(),
+            summary
+          },
+          ...(taskAfterRun.history || [])
+        ].slice(0, 8)
+      });
+      await notifyRunEvent("run_success", {
+        task: getTaskById(taskId),
+        summary
+      });
+    })
+    .catch(async (error) => {
+      const stopped = error instanceof AbortRunError || runController?.signal.aborted;
+      await updateTask(taskId, {
+        status: stopped ? "stopped" : "failed",
+        progress: {
+          phase: stopped ? "Stopped" : "Failed",
+          percent: stopped ? 0 : 100
+        }
+      });
+      pushLog({
+        level: "error",
+        message: formatError(error),
+        timestamp: new Date().toISOString()
+      });
+      await notifyRunEvent(stopped ? "run_stopped" : "run_failure", {
+        task: getTaskById(taskId),
+        error: formatError(error)
+      });
+    })
+    .catch(reportBackgroundError)
+    .finally(() => {
+      runController = null;
+      activeTaskId = null;
+      runStartedAt = null;
+      emitState();
+    });
+
+  return { ok: true };
+}
+
+async function startTaskRunQueued(taskId) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    throw createHttpError("Task not found", 404);
+  }
+
+  if (distributedQueuedTaskIds.has(taskId) || distributedRunState.activeTaskId === taskId) {
+    throw createHttpError("Task is already queued or running", 409);
+  }
+
+  await buildConfigForTask(task);
+
+  const queuedAt = new Date().toISOString();
+  const walletCount = Array.isArray(task.walletIds) ? task.walletIds.length : 0;
+  const queueResult = await queueCoordinator.enqueueTask({
+    id: createId("job"),
+    taskId,
+    requestedAt: queuedAt
+  });
+
+  if (!queueResult.enqueued) {
+    throw createHttpError("Task is already queued", 409);
+  }
+
+  await updateTask(taskId, {
+    schedulePending: false
+  });
+
+  distributedQueuedTaskIds.add(taskId);
+  clearDistributedTaskPatch(taskId);
+  await setTaskRuntimeRecord(taskId, {
+    status: "queued",
+    progress: {
+      phase: "Queued",
+      percent: 4
+    },
+    summary: createEmptySummary(walletCount),
+    active: false,
+    queued: true,
+    error: null,
+    workerId: null,
+    startedAt: null
+  });
+  emitState();
+
+  await queueCoordinator.publishEvent("task-sync", { taskId });
+  return { ok: true, queued: true };
+}
+
+async function requestTaskRun(taskId) {
+  if (queueModeEnabled()) {
+    return startTaskRunQueued(taskId);
+  }
+
+  return startTaskRunLocal(taskId);
+}
+
+async function handleTaskRun(taskId, response) {
+  try {
+    const payload = await requestTaskRun(taskId);
+    sendJson(response, 200, payload);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
+  }
 }
 
 async function handleTaskDuplicate(taskId, response) {
@@ -1641,6 +1798,22 @@ async function handleTaskSave(request, response) {
       throw new Error("Select at least one wallet");
     }
 
+    if (task.useSchedule) {
+      if (!task.waitUntilIso) {
+        throw new Error("Start time is required when schedule is enabled");
+      }
+
+      const scheduledAt = new Date(task.waitUntilIso);
+      if (Number.isNaN(scheduledAt.getTime())) {
+        throw new Error("Scheduled start time is invalid");
+      }
+    }
+
+    const retryWindowMs = Number(task.retryWindowMs || 0);
+    if (!Number.isInteger(retryWindowMs) || retryWindowMs < 0) {
+      throw new Error("Retry window must be a whole number of milliseconds");
+    }
+
     if (task.transferAfterMinted) {
       if (!task.transferAddress) {
         throw new Error("Transfer address is required when transfer-after-minted is enabled");
@@ -1670,6 +1843,10 @@ async function handleTaskSave(request, response) {
       if (!parsedHeaders || typeof parsedHeaders !== "object" || Array.isArray(parsedHeaders)) {
         throw new Error("Private relay headers must be a JSON object");
       }
+
+      if (Object.values(parsedHeaders).some((value) => typeof value !== "string")) {
+        throw new Error("Private relay header values must all be strings");
+      }
     }
 
     if (task.triggerContractAddress && !ethers.isAddress(task.triggerContractAddress)) {
@@ -1678,6 +1855,24 @@ async function handleTaskSave(request, response) {
 
     if (task.executionTriggerMode === "event" && !task.triggerEventSignature) {
       throw new Error("Event signature is required for event-driven execution");
+    }
+
+    if (task.executionTriggerMode === "mempool") {
+      const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+      const configuredRpcNodes = appState.rpcNodes.filter(
+        (node) =>
+          node.enabled &&
+          node.chainKey === task.chainKey &&
+          (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+      );
+
+      if (
+        !configuredRpcNodes.some((node) => /^wss?:\/\//i.test(String(node.url || "")))
+      ) {
+        throw new Error(
+          "Mempool execution requires at least one enabled ws:// or wss:// RPC URL for the selected chain"
+        );
+      }
     }
 
     if (existingTask) {

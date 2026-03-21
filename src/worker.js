@@ -293,6 +293,7 @@ async function buildConfigForTask(database, state, task) {
     TX_TIMEOUT_MS: task.txTimeoutMs,
     MAX_RETRIES: task.maxRetries,
     RETRY_DELAY_MS: task.retryDelayMs,
+    RETRY_WINDOW_MS: task.retryWindowMs,
     START_JITTER_MS: task.startJitterMs,
     MIN_BALANCE_ETH: task.minBalanceEth,
     NONCE_OFFSET: task.nonceOffset,

@@ -131,6 +131,7 @@ const taskReplaceBumpInput = document.getElementById("task-replace-bump-input");
 const taskReplaceAttemptsInput = document.getElementById("task-replace-attempts-input");
 const taskRetriesInput = document.getElementById("task-retries-input");
 const taskRetryDelayInput = document.getElementById("task-retry-delay-input");
+const taskRetryWindowInput = document.getElementById("task-retry-window-input");
 const taskJitterInput = document.getElementById("task-jitter-input");
 const taskMinBalanceInput = document.getElementById("task-min-balance-input");
 const taskTriggerModeInput = document.getElementById("task-trigger-mode-input");
@@ -1578,6 +1579,9 @@ function openTaskModal(task = null) {
   taskReplaceAttemptsInput.value = task?.replacementMaxAttempts || "2";
   taskRetriesInput.value = task?.maxRetries || "1";
   taskRetryDelayInput.value = task?.retryDelayMs || "1000";
+  taskRetryWindowInput.value = String(
+    Math.max(0, Math.round(Number(task?.retryWindowMs || 1800000) / 60000))
+  );
   taskJitterInput.value = task?.startJitterMs || "0";
   taskMinBalanceInput.value = task?.minBalanceEth || "";
   taskTriggerModeInput.value = task?.executionTriggerMode || "standard";
@@ -1664,6 +1668,7 @@ function buildTaskPayload() {
     pollIntervalMs: taskPollIntervalInput.value,
     maxRetries: taskRetriesInput.value,
     retryDelayMs: taskRetryDelayInput.value,
+    retryWindowMs: String(Math.max(0, Math.round(Number(taskRetryWindowInput.value || 0) * 60000))),
     startJitterMs: taskJitterInput.value,
     minBalanceEth: taskMinBalanceInput.value,
     nonceOffset: "0",

@@ -19,6 +19,7 @@ It is designed as a reusable template for contracts that expose a mint function 
 - optionally simulates the mint transaction before sending
 - supports dry-run mode for preflight checks
 - retries failed mint attempts with a configurable delay
+- can keep retrying failed mint attempts inside a retry window until one succeeds
 - can run wallets sequentially or in parallel
 - can poll a contract read function until mint is ready
 - can export run results to a JSON file
@@ -30,6 +31,7 @@ It is designed as a reusable template for contracts that expose a mint function 
 - can transfer freshly minted ERC-721 and ERC-1155 tokens to another wallet after confirmation
 - can enqueue dashboard runs into Redis for dedicated worker execution
 - includes a Postgres-backed dashboard with admin login
+- auto-starts saved dashboard tasks when their scheduled launch time arrives
 - encrypts dashboard-imported wallet secrets before storing them
 - can send Telegram and Discord alerts for run lifecycle events
 - can fetch verified contract ABI JSON from explorer APIs inside the dashboard
@@ -75,6 +77,7 @@ Copy-Item .env.example .env
 - `AUTH_REQUIRED`: set to `false` only if you intentionally want to disable dashboard auth
 - `SESSION_TTL_HOURS`: dashboard session lifetime, defaults to `168`
 - `COOKIE_SECURE`: optional cookie override, use `true` behind HTTPS or `false` for plain local HTTP
+- `SCHEDULE_POLL_INTERVAL_MS`: how often the dashboard checks for due scheduled tasks, defaults to `1000`
 - `DEFAULT_RPC_CHAIN_KEY`: chain key assigned to env-provided RPC nodes inside the dashboard, defaults to `base_sepolia`
 - `QUEUE_MODE`: `local` or `redis`; set to `redis` to enqueue dashboard runs into Redis workers
 - `REDIS_URL`: Redis connection string used by the queue producer and worker
@@ -108,6 +111,7 @@ Copy-Item .env.example .env
 - `DRY_RUN`: validate everything without broadcasting a transaction
 - `MAX_RETRIES`: number of send attempts per wallet
 - `RETRY_DELAY_MS`: wait time between retries
+- `RETRY_WINDOW_MS`: optional retry window in milliseconds; the bot keeps retrying inside this window even after `MAX_RETRIES` is exhausted
 - `WALLET_MODE`: `sequential` or `parallel`
 - `CHAIN_ID`: optional expected chain ID safety check
 - `RECEIPT_CONFIRMATIONS`: number of confirmations to wait for
@@ -186,6 +190,14 @@ MAX_RETRIES=3
 RETRY_DELAY_MS=1500
 SIMULATE_TRANSACTION=true
 START_JITTER_MS=250
+```
+
+Retry failed mints for up to 30 minutes:
+
+```env
+MAX_RETRIES=1
+RETRY_DELAY_MS=1500
+RETRY_WINDOW_MS=1800000
 ```
 
 Wait until a sale flag becomes live:
@@ -318,6 +330,30 @@ Set `BOT_MODE=worker` if you want the process to boot directly into the Redis wo
 The dashboard now stores tasks, RPC nodes, sessions, and encrypted imported wallets in Postgres. Env-provided wallets and RPC URLs still load at runtime without being copied into the database.
 Explorer keys and alert credentials can be supplied from `.env` or saved from the dashboard settings view. Dashboard-saved credentials are encrypted server-side and only their configured status is exposed back to the browser.
 When `QUEUE_MODE=redis`, the dashboard enqueues task launches into Redis and a separate worker process consumes them, publishes live log events, and writes runtime/history records back into Postgres.
+When a dashboard task has schedule enabled, the dashboard process polls for due tasks and auto-starts them. Keep the dashboard server online for scheduled launches, and keep the worker online too when `QUEUE_MODE=redis`.
+
+## Mint Requirements
+
+To mint successfully you typically need all of the following:
+
+- one or more funded EVM wallets with enough native gas token
+- at least one healthy RPC endpoint for the target chain
+- the NFT contract address
+- the correct contract ABI
+- the exact mint function name
+- the exact mint arguments in JSON form
+- the correct mint price in native token, if the mint is not free
+- the correct chain selection so the bot uses matching RPC nodes
+
+API and service requirements:
+
+- Required: JSON-RPC API for the chain you are minting on
+- Required for the dashboard: Postgres database
+- Optional: Redis if you want distributed queue workers
+- Optional: Etherscan API key for one-click ABI fetches in the dashboard
+- Optional: Telegram Bot API credentials for alerts
+- Optional: Discord webhook URL for alerts
+- Optional: private relay RPC if you want private transaction submission
 
 ## Important notes
 

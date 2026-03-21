@@ -278,6 +278,14 @@ function formatGwei(value) {
   return `${ethers.formatUnits(value, "gwei")} gwei`;
 }
 
+function hasRetryBudgetRemaining(config, attempt, retryWindowDeadline) {
+  if (attempt < config.maxRetries) {
+    return true;
+  }
+
+  return retryWindowDeadline != null && Date.now() < retryWindowDeadline;
+}
+
 function attachErrorContext(error, context) {
   if (!error || typeof error !== "object") {
     return error;
@@ -1090,6 +1098,23 @@ async function waitForEventTrigger(config, signal, logger) {
   }
 }
 
+async function getPendingTransactionWithRetry(provider, txHash, signal, attempts = 5, delayMs = 150) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    throwIfAborted(signal);
+
+    const transaction = await provider.getTransaction(txHash);
+    if (transaction) {
+      return transaction;
+    }
+
+    if (attempt < attempts) {
+      await sleep(delayMs, signal);
+    }
+  }
+
+  return null;
+}
+
 async function waitForMempoolTrigger(config, signal, logger) {
   const { provider, rpcUrl } = await createProvider(config, { requireSocket: true });
   const triggerAddress = ethers.getAddress(config.triggerContractAddress).toLowerCase();
@@ -1106,8 +1131,11 @@ async function waitForMempoolTrigger(config, signal, logger) {
     await new Promise((resolve, reject) => {
       let timeoutId = null;
       let removeAbortListener = () => {};
+      let settled = false;
+      const inFlightHashes = new Set();
 
       const cleanup = () => {
+        settled = true;
         provider.off("pending", onPending);
         removeAbortListener();
         if (timeoutId) {
@@ -1115,19 +1143,20 @@ async function waitForMempoolTrigger(config, signal, logger) {
         }
       };
 
-      const onPending = async (txHash) => {
-        if (!txHash || seenHashes.has(txHash)) {
-          return;
-        }
-
-        seenHashes.add(txHash);
-        if (seenHashes.size > 5000) {
-          seenHashes.clear();
-        }
-
+      const inspectPendingHash = async (txHash) => {
         try {
-          const transaction = await provider.getTransaction(txHash);
-          if (!transaction?.to || transaction.to.toLowerCase() !== triggerAddress) {
+          const transaction = await getPendingTransactionWithRetry(provider, txHash, signal);
+          if (!transaction || settled) {
+            return;
+          }
+
+          seenHashes.add(txHash);
+          if (seenHashes.size > 5000) {
+            seenHashes.clear();
+            seenHashes.add(txHash);
+          }
+
+          if (!transaction.to || transaction.to.toLowerCase() !== triggerAddress) {
             return;
           }
 
@@ -1141,9 +1170,22 @@ async function waitForMempoolTrigger(config, signal, logger) {
           cleanup();
           logger.info(`Mempool trigger matched pending tx ${txHash}`);
           resolve();
-        } catch {
-          // Ignore transient pending transaction lookup failures.
+        } catch (error) {
+          if (!(error instanceof AbortRunError)) {
+            // Ignore transient pending transaction lookup failures.
+          }
+        } finally {
+          inFlightHashes.delete(txHash);
         }
+      };
+
+      const onPending = (txHash) => {
+        if (!txHash || settled || seenHashes.has(txHash) || inFlightHashes.has(txHash)) {
+          return;
+        }
+
+        inFlightHashes.add(txHash);
+        void inspectPendingHash(txHash);
       };
 
       if (signal) {
@@ -1308,6 +1350,8 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     });
     let nextPlannedNonce =
       (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
+    const retryWindowDeadline =
+      config.retryWindowMs > 0 ? Date.now() + config.retryWindowMs : null;
 
     logger.info(`[wallet ${walletIndex}] Address: ${walletAddress}`);
     logger.info(`[wallet ${walletIndex}] RPC: ${rpcUrl}`);
@@ -1317,6 +1361,11 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
     logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
     logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
+    logger.info(
+      `[wallet ${walletIndex}] Retry policy: ${config.maxRetries} attempt(s) minimum${
+        retryWindowDeadline ? ` with a ${config.retryWindowMs}ms retry window` : ""
+      }`
+    );
 
     if (config.warmupRpc) {
       await warmupProvider(provider, walletAddress, signal);
@@ -1333,8 +1382,11 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     };
 
     let mintResult = null;
+    let lastAttemptError = null;
+    let attempt = 0;
 
-    for (let attempt = 1; attempt <= config.maxRetries; attempt += 1) {
+    while (attempt === 0 || hasRetryBudgetRemaining(config, attempt, retryWindowDeadline)) {
+      attempt += 1;
       throwIfAborted(signal);
 
       try {
@@ -1386,17 +1438,38 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
           signal,
           onSubmitted: reserveSubmittedNonce
         });
+
+        if (config.waitForReceipt && mintResult.receipt?.status !== 1) {
+          throw attachErrorContext(new Error("Mint transaction reverted on-chain"), {
+            walletAddress,
+            txHash: mintResult.tx.hash,
+            mintTxHash: mintResult.tx.hash,
+            receipt: mintResult.receipt
+          });
+        }
+
         break;
       } catch (error) {
         if (error instanceof AbortRunError) {
           throw error;
         }
 
+        lastAttemptError = error;
+        const willRetry = hasRetryBudgetRemaining(config, attempt, retryWindowDeadline);
+        const retryWindowRemainingMs =
+          retryWindowDeadline == null ? 0 : Math.max(0, retryWindowDeadline - Date.now());
+
         logger.error(
-          `[wallet ${walletIndex}] Attempt ${attempt}/${config.maxRetries} failed: ${formatError(error)}`
+          `[wallet ${walletIndex}] Attempt ${attempt} failed: ${formatError(error)}${
+            willRetry
+              ? retryWindowDeadline
+                ? ` - retrying in ${config.retryDelayMs}ms (${retryWindowRemainingMs}ms retry window remaining)`
+                : ` - retrying in ${config.retryDelayMs}ms`
+              : ""
+          }`
         );
 
-        if (attempt >= config.maxRetries) {
+        if (!willRetry) {
           throw error;
         }
 
@@ -1405,7 +1478,7 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     }
 
     if (!mintResult) {
-      throw new Error(`[wallet ${walletIndex}] Exhausted retries without a result`);
+      throw lastAttemptError || new Error(`[wallet ${walletIndex}] Exhausted retries without a result`);
     }
 
     if (!config.waitForReceipt) {
@@ -1424,7 +1497,7 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
       mintTxHash: mintResult.tx.hash,
       receipt: mintResult.receipt,
       replacementCount: mintResult.replacementCount,
-      status: mintResult.receipt.status === 1 ? "success" : "failed"
+      status: "success"
     };
 
     if (!config.transferAfterMinted) {
