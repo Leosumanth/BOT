@@ -1,75 +1,163 @@
 const fs = require("fs");
 const path = require("path");
 
-function required(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
+const defaultInputValues = {
+  RPC_URL: "",
+  RPC_URLS: "",
+  PRIVATE_KEY: "",
+  PRIVATE_KEYS: "",
+  CONTRACT_ADDRESS: "",
+  ABI_PATH: "./abi/contract.json",
+  ABI_JSON: "",
+  MINT_FUNCTION: "mint",
+  MINT_ARGS: "[]",
+  MINT_VALUE_ETH: "0",
+  GAS_LIMIT: "",
+  MAX_FEE_GWEI: "",
+  MAX_PRIORITY_FEE_GWEI: "",
+  GAS_STRATEGY: "provider",
+  GAS_BOOST_PERCENT: "0",
+  PRIORITY_BOOST_PERCENT: "0",
+  WAIT_UNTIL_ISO: "",
+  POLL_INTERVAL_MS: "1000",
+  WAIT_FOR_RECEIPT: true,
+  SIMULATE_TRANSACTION: true,
+  DRY_RUN: false,
+  MAX_RETRIES: "1",
+  RETRY_DELAY_MS: "1000",
+  WALLET_MODE: "sequential",
+  CHAIN_ID: "",
+  RECEIPT_CONFIRMATIONS: "1",
+  TX_TIMEOUT_MS: "",
+  START_JITTER_MS: "0",
+  NONCE_OFFSET: "0",
+  READY_CHECK_FUNCTION: "",
+  READY_CHECK_ARGS: "[]",
+  READY_CHECK_EXPECTED: "",
+  READY_CHECK_MODE: "truthy",
+  READY_CHECK_INTERVAL_MS: "1000",
+  WARMUP_RPC: true,
+  CONTINUE_ON_ERROR: false,
+  RESULTS_PATH: "./dist/mint-results.json",
+  MIN_BALANCE_ETH: ""
+};
+
+function isBlank(value) {
+  return value === undefined || value === null || String(value).trim() === "";
 }
 
-function optionalNumber(name) {
-  const value = process.env[name];
-  if (!value) {
+function required(raw, name) {
+  const value = raw[name];
+  if (isBlank(value)) {
+    throw new Error(`Missing required configuration value: ${name}`);
+  }
+
+  return String(value).trim();
+}
+
+function optionalString(raw, name) {
+  const value = raw[name];
+  if (isBlank(value)) {
     return undefined;
   }
 
-  const parsed = Number(value);
+  return String(value).trim();
+}
+
+function optionalNumber(raw, name) {
+  const value = raw[name];
+  if (isBlank(value)) {
+    return undefined;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(String(value).trim());
   if (Number.isNaN(parsed)) {
-    throw new Error(`Environment variable ${name} must be a number`);
+    throw new Error(`${name} must be a number`);
   }
 
   return parsed;
 }
 
-function optionalInteger(name) {
-  const value = optionalNumber(name);
+function optionalInteger(raw, name) {
+  const value = optionalNumber(raw, name);
   if (value === undefined) {
     return undefined;
   }
 
   if (!Number.isInteger(value)) {
-    throw new Error(`Environment variable ${name} must be an integer`);
+    throw new Error(`${name} must be an integer`);
   }
 
   return value;
 }
 
-function optionalBoolean(name, fallback = false) {
-  const value = process.env[name];
-  if (!value) {
+function optionalBoolean(raw, name, fallback = false) {
+  const value = raw[name];
+  if (value === undefined || value === null || value === "") {
     return fallback;
   }
 
-  return value.toLowerCase() === "true";
-}
-
-function optionalString(name) {
-  const value = process.env[name];
-  if (!value) {
-    return undefined;
+  if (typeof value === "boolean") {
+    return value;
   }
 
-  return value.trim();
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  throw new Error(`${name} must be true or false`);
 }
 
-function parseCsv(value) {
-  return value
-    .split(",")
+function parseList(value) {
+  return String(value)
+    .split(/[\r\n,]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
 
-function loadAbi(abiPath) {
-  const resolvedPath = path.resolve(process.cwd(), abiPath);
-  if (!fs.existsSync(resolvedPath)) {
-    throw new Error(`ABI file not found: ${resolvedPath}`);
+function parseJsonArrayValue(value, name, fallback = []) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
   }
 
-  const raw = fs.readFileSync(resolvedPath, "utf8");
-  const parsed = JSON.parse(raw);
+  if (Array.isArray(value)) {
+    return value;
+  }
 
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${name} must be a JSON array`);
+    }
+
+    return parsed;
+  } catch (error) {
+    throw new Error(`Unable to parse ${name}: ${error.message}`);
+  }
+}
+
+function parseJsonValue(value, name) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    return value;
+  }
+
+  try {
+    return JSON.parse(String(value));
+  } catch (error) {
+    throw new Error(`Unable to parse ${name}: ${error.message}`);
+  }
+}
+
+function normalizeAbiJson(parsed) {
   if (Array.isArray(parsed)) {
     return parsed;
   }
@@ -78,39 +166,38 @@ function loadAbi(abiPath) {
     return parsed.abi;
   }
 
-  throw new Error("ABI file must contain a JSON array or an object with an abi array");
+  throw new Error("ABI must be a JSON array or an object with an abi array");
 }
 
-function parseJsonArray(name, fallback = "[]") {
-  const raw = process.env[name] || fallback;
+function loadAbiFromPath(abiPath) {
+  const resolvedPath = path.resolve(process.cwd(), abiPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`ABI file not found: ${resolvedPath}`);
+  }
 
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      throw new Error(`${name} must be a JSON array`);
+  const raw = fs.readFileSync(resolvedPath, "utf8");
+  return normalizeAbiJson(JSON.parse(raw));
+}
+
+function loadAbi(raw, abiPath) {
+  if (raw.ABI !== undefined && raw.ABI !== null && raw.ABI !== "") {
+    return normalizeAbiJson(raw.ABI);
+  }
+
+  if (!isBlank(raw.ABI_JSON)) {
+    try {
+      return normalizeAbiJson(JSON.parse(String(raw.ABI_JSON)));
+    } catch (error) {
+      throw new Error(`Unable to parse ABI_JSON: ${error.message}`);
     }
-    return parsed;
-  } catch (error) {
-    throw new Error(`Unable to parse ${name}: ${error.message}`);
   }
+
+  return loadAbiFromPath(abiPath);
 }
 
-function parseJsonValue(name) {
-  const raw = process.env[name];
-  if (!raw) {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Unable to parse ${name}: ${error.message}`);
-  }
-}
-
-function loadRpcUrls() {
-  const raw = optionalString("RPC_URLS") || required("RPC_URL");
-  const rpcUrls = parseCsv(raw);
+function loadRpcUrls(raw) {
+  const source = optionalString(raw, "RPC_URLS") || required(raw, "RPC_URL");
+  const rpcUrls = parseList(source);
 
   if (rpcUrls.length === 0) {
     throw new Error("At least one RPC URL is required");
@@ -119,9 +206,9 @@ function loadRpcUrls() {
   return rpcUrls;
 }
 
-function loadPrivateKeys() {
-  const raw = optionalString("PRIVATE_KEYS") || required("PRIVATE_KEY");
-  const privateKeys = parseCsv(raw);
+function loadPrivateKeys(raw) {
+  const source = optionalString(raw, "PRIVATE_KEYS") || required(raw, "PRIVATE_KEY");
+  const privateKeys = parseList(source);
 
   if (privateKeys.length === 0) {
     throw new Error("At least one private key is required");
@@ -130,8 +217,8 @@ function loadPrivateKeys() {
   return privateKeys;
 }
 
-function loadWalletMode() {
-  const mode = (process.env.WALLET_MODE || "sequential").toLowerCase();
+function loadWalletMode(raw) {
+  const mode = (optionalString(raw, "WALLET_MODE") || "sequential").toLowerCase();
   const supportedModes = new Set(["sequential", "parallel"]);
 
   if (!supportedModes.has(mode)) {
@@ -141,8 +228,8 @@ function loadWalletMode() {
   return mode;
 }
 
-function loadGasStrategy() {
-  const strategy = (process.env.GAS_STRATEGY || "provider").toLowerCase();
+function loadGasStrategy(raw) {
+  const strategy = (optionalString(raw, "GAS_STRATEGY") || "provider").toLowerCase();
   const supportedStrategies = new Set(["manual", "provider"]);
 
   if (!supportedStrategies.has(strategy)) {
@@ -152,8 +239,8 @@ function loadGasStrategy() {
   return strategy;
 }
 
-function loadReadyCheckMode() {
-  const mode = (process.env.READY_CHECK_MODE || "truthy").toLowerCase();
+function loadReadyCheckMode(raw) {
+  const mode = (optionalString(raw, "READY_CHECK_MODE") || "truthy").toLowerCase();
   const supportedModes = new Set(["truthy", "falsey", "equals"]);
 
   if (!supportedModes.has(mode)) {
@@ -163,50 +250,56 @@ function loadReadyCheckMode() {
   return mode;
 }
 
-function loadConfig() {
-  const abiPath = process.env.ABI_PATH || "./abi/contract.json";
-  const pollIntervalMs = optionalNumber("POLL_INTERVAL_MS") || 1000;
+function normalizeConfig(raw) {
+  const abiPath = optionalString(raw, "ABI_PATH") || "./abi/contract.json";
+  const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
 
   return {
-    rpcUrls: loadRpcUrls(),
-    privateKeys: loadPrivateKeys(),
-    contractAddress: required("CONTRACT_ADDRESS"),
+    rpcUrls: loadRpcUrls(raw),
+    privateKeys: loadPrivateKeys(raw),
+    contractAddress: required(raw, "CONTRACT_ADDRESS"),
     abiPath,
-    abi: loadAbi(abiPath),
-    mintFunction: process.env.MINT_FUNCTION || "mint",
-    mintArgsTemplate: parseJsonArray("MINT_ARGS"),
-    mintValueEth: process.env.MINT_VALUE_ETH || "0",
-    gasLimit: optionalNumber("GAS_LIMIT"),
-    maxFeeGwei: optionalNumber("MAX_FEE_GWEI"),
-    maxPriorityFeeGwei: optionalNumber("MAX_PRIORITY_FEE_GWEI"),
-    waitUntilIso: process.env.WAIT_UNTIL_ISO,
+    abi: loadAbi(raw, abiPath),
+    mintFunction: optionalString(raw, "MINT_FUNCTION") || "mint",
+    mintArgsTemplate: parseJsonArrayValue(raw.MINT_ARGS, "MINT_ARGS", []),
+    mintValueEth: optionalString(raw, "MINT_VALUE_ETH") || "0",
+    gasLimit: optionalNumber(raw, "GAS_LIMIT"),
+    maxFeeGwei: optionalNumber(raw, "MAX_FEE_GWEI"),
+    maxPriorityFeeGwei: optionalNumber(raw, "MAX_PRIORITY_FEE_GWEI"),
+    waitUntilIso: optionalString(raw, "WAIT_UNTIL_ISO"),
     pollIntervalMs,
-    waitForReceipt: optionalBoolean("WAIT_FOR_RECEIPT", true),
-    simulateTransaction: optionalBoolean("SIMULATE_TRANSACTION", true),
-    dryRun: optionalBoolean("DRY_RUN", false),
-    maxRetries: optionalInteger("MAX_RETRIES") || 1,
-    retryDelayMs: optionalInteger("RETRY_DELAY_MS") || 1000,
-    walletMode: loadWalletMode(),
-    requiredChainId: optionalInteger("CHAIN_ID"),
-    receiptConfirmations: optionalInteger("RECEIPT_CONFIRMATIONS") || 1,
-    txTimeoutMs: optionalInteger("TX_TIMEOUT_MS"),
-    startJitterMs: optionalInteger("START_JITTER_MS") || 0,
-    nonceOffset: optionalInteger("NONCE_OFFSET") || 0,
-    gasStrategy: loadGasStrategy(),
-    gasBoostPercent: optionalNumber("GAS_BOOST_PERCENT") || 0,
-    priorityBoostPercent: optionalNumber("PRIORITY_BOOST_PERCENT") || 0,
-    readyCheckFunction: optionalString("READY_CHECK_FUNCTION"),
-    readyCheckArgs: parseJsonArray("READY_CHECK_ARGS"),
-    readyCheckExpected: parseJsonValue("READY_CHECK_EXPECTED"),
-    readyCheckMode: loadReadyCheckMode(),
-    readyCheckIntervalMs: optionalInteger("READY_CHECK_INTERVAL_MS") || pollIntervalMs,
-    warmupRpc: optionalBoolean("WARMUP_RPC", true),
-    continueOnError: optionalBoolean("CONTINUE_ON_ERROR", false),
-    resultsPath: optionalString("RESULTS_PATH"),
-    minBalanceEth: optionalString("MIN_BALANCE_ETH")
+    waitForReceipt: optionalBoolean(raw, "WAIT_FOR_RECEIPT", true),
+    simulateTransaction: optionalBoolean(raw, "SIMULATE_TRANSACTION", true),
+    dryRun: optionalBoolean(raw, "DRY_RUN", false),
+    maxRetries: optionalInteger(raw, "MAX_RETRIES") || 1,
+    retryDelayMs: optionalInteger(raw, "RETRY_DELAY_MS") || 1000,
+    walletMode: loadWalletMode(raw),
+    requiredChainId: optionalInteger(raw, "CHAIN_ID"),
+    receiptConfirmations: optionalInteger(raw, "RECEIPT_CONFIRMATIONS") || 1,
+    txTimeoutMs: optionalInteger(raw, "TX_TIMEOUT_MS"),
+    startJitterMs: optionalInteger(raw, "START_JITTER_MS") || 0,
+    nonceOffset: optionalInteger(raw, "NONCE_OFFSET") || 0,
+    gasStrategy: loadGasStrategy(raw),
+    gasBoostPercent: optionalNumber(raw, "GAS_BOOST_PERCENT") || 0,
+    priorityBoostPercent: optionalNumber(raw, "PRIORITY_BOOST_PERCENT") || 0,
+    readyCheckFunction: optionalString(raw, "READY_CHECK_FUNCTION"),
+    readyCheckArgs: parseJsonArrayValue(raw.READY_CHECK_ARGS, "READY_CHECK_ARGS", []),
+    readyCheckExpected: parseJsonValue(raw.READY_CHECK_EXPECTED, "READY_CHECK_EXPECTED"),
+    readyCheckMode: loadReadyCheckMode(raw),
+    readyCheckIntervalMs: optionalInteger(raw, "READY_CHECK_INTERVAL_MS") || pollIntervalMs,
+    warmupRpc: optionalBoolean(raw, "WARMUP_RPC", true),
+    continueOnError: optionalBoolean(raw, "CONTINUE_ON_ERROR", false),
+    resultsPath: optionalString(raw, "RESULTS_PATH"),
+    minBalanceEth: optionalString(raw, "MIN_BALANCE_ETH")
   };
 }
 
+function loadConfig() {
+  return normalizeConfig(process.env);
+}
+
 module.exports = {
-  loadConfig
+  defaultInputValues,
+  loadConfig,
+  normalizeConfig
 };
