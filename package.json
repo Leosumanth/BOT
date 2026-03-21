@@ -1,0 +1,21 @@
+{
+  "name": "nft-minting-bot",
+  "version": "1.0.0",
+  "description": "Configurable EVM NFT minting bot",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "keywords": [
+    "nft",
+    "mint",
+    "bot",
+    "ethers",
+    "ethereum"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2"
+  }
+}
