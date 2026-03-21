@@ -658,32 +658,8 @@ function animateNumberNodes(root = document) {
 }
 
 function initializeMotionSurfaces(root = document) {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    return;
-  }
-
   root.querySelectorAll("[data-tilt]").forEach((element) => {
-    if (element.dataset.tiltBound === "true") {
-      return;
-    }
-
-    element.dataset.tiltBound = "true";
-
-    const reset = () => {
-      element.style.transform = "";
-    };
-
-    element.addEventListener("pointermove", (event) => {
-      const rect = element.getBoundingClientRect();
-      const pointerX = (event.clientX - rect.left) / rect.width;
-      const pointerY = (event.clientY - rect.top) / rect.height;
-      const rotateY = (pointerX - 0.5) * 10;
-      const rotateX = (0.5 - pointerY) * 8;
-      element.style.transform = `perspective(1400px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-2px)`;
-    });
-
-    element.addEventListener("pointerleave", reset);
-    element.addEventListener("pointercancel", reset);
+    element.style.transform = "";
   });
 }
 

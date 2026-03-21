@@ -174,9 +174,7 @@ body[data-auth-state="locked"] .scanline-layer {
 }
 
 [data-tilt] {
-  transform-style: preserve-3d;
-  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
-  will-change: transform;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .sidebar,
@@ -378,7 +376,7 @@ body[data-auth-state="locked"] .scanline-layer {
   color: var(--text);
   background: rgba(255, 255, 255, 0.03);
   transition:
-    transform 180ms ease,
+    transform 220ms ease,
     box-shadow 180ms ease,
     border-color 180ms ease,
     background-color 180ms ease,
@@ -392,17 +390,17 @@ body[data-auth-state="locked"] .scanline-layer {
   content: "";
   position: absolute;
   inset: -40% auto -40% -22%;
-  width: 30%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.24), transparent);
-  transform: rotate(18deg) translateX(-180%);
-  transition: transform 420ms ease;
+  width: 24%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+  transform: rotate(18deg) translateX(-135%);
+  transition: transform 320ms ease;
 }
 
 .nav-button:hover::before,
 .fx-button:hover::before,
 .mini-button:hover::before,
 .group-tab:hover::before {
-  transform: rotate(18deg) translateX(520%);
+  transform: rotate(18deg) translateX(360%);
 }
 
 .nav-button {
@@ -422,7 +420,7 @@ body[data-auth-state="locked"] .scanline-layer {
   border-radius: 50%;
   background: rgba(113, 224, 255, 0.32);
   transform: translateY(-50%);
-  transition: transform 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+  transition: transform 220ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
 
 .nav-button:hover,
@@ -432,14 +430,14 @@ body[data-auth-state="locked"] .scanline-layer {
     linear-gradient(135deg, rgba(113, 224, 255, 0.12), rgba(47, 183, 255, 0.12)),
     rgba(255, 255, 255, 0.03);
   border-color: rgba(113, 224, 255, 0.34);
-  box-shadow: 0 12px 30px rgba(8, 18, 33, 0.3), var(--shadow-glow);
+  box-shadow: 0 8px 22px rgba(8, 18, 33, 0.24), 0 0 20px rgba(47, 183, 255, 0.12);
 }
 
 .nav-button:hover::after,
 .nav-button.active::after {
   background: var(--cyan);
-  box-shadow: 0 0 16px rgba(113, 224, 255, 0.8);
-  transform: translateY(-50%) scale(1.18);
+  box-shadow: 0 0 10px rgba(113, 224, 255, 0.55);
+  transform: translateY(-50%) scale(1.08);
 }
 
 .sidebar-footer {
@@ -503,8 +501,8 @@ body[data-auth-state="locked"] .scanline-layer {
 .icon-button:hover:not(:disabled),
 .mini-button:hover:not(:disabled),
 .group-tab:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.26), var(--shadow-glow);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2), 0 0 18px rgba(47, 183, 255, 0.12);
 }
 
 .icon-button {
