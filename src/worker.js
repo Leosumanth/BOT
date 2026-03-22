@@ -5,11 +5,6 @@ const { ethers } = require("ethers");
 const { AbortRunError, formatError, runMintBot } = require("./bot");
 const { defaultInputValues, normalizeConfig } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
-const {
-  resolveIntegrationSecrets,
-  secretStorageKeys,
-  sendConfiguredAlert
-} = require("./integrations");
 const { createRedisCoordinator, resolveQueueConfig } = require("./queue");
 const { decryptSecret } = require("./security");
 
@@ -151,10 +146,6 @@ function mergeRpcInventories(storedRpcNodes, envRpcNodes) {
   return merged;
 }
 
-function chainLabel(chainKey) {
-  return chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey || "Unknown";
-}
-
 function createEmptySummary(total = 0) {
   return {
     total,
@@ -185,21 +176,6 @@ function summarizeResults(results) {
     },
     createEmptySummary(0)
   );
-}
-
-async function loadIntegrationSecrets(database) {
-  const encryptedSecrets = {};
-
-  for (const [secretName, storageKey] of Object.entries(secretStorageKeys)) {
-    const ciphertext = await database.getSecret(storageKey);
-    if (!ciphertext) {
-      continue;
-    }
-
-    encryptedSecrets[secretName] = decryptSecret(ciphertext);
-  }
-
-  return resolveIntegrationSecrets(encryptedSecrets);
 }
 
 async function loadExecutionState(database) {
@@ -338,23 +314,6 @@ async function updateTaskRuntime(database, taskId, patch) {
   });
 }
 
-async function notifyRunEvent(database, state, eventType, context = {}) {
-  try {
-    const secrets = await loadIntegrationSecrets(database);
-    await sendConfiguredAlert({
-      settings: state.settings,
-      storedSecrets: secrets,
-      eventType,
-      task: context.task,
-      chainLabel: chainLabel(context.task?.chainKey),
-      summary: context.summary,
-      error: context.error
-    });
-  } catch (error) {
-    console.error(`Alert dispatch failed: ${formatError(error)}`);
-  }
-}
-
 async function executeQueuedJob({
   job,
   queue,
@@ -389,7 +348,6 @@ async function executeQueuedJob({
       startedAt
     });
     await queue.publishEvent("task-sync", { taskId: job.taskId });
-    await notifyRunEvent(database, state, "run_start", { task });
 
     const config = await buildConfigForTask(database, state, task);
     const result = await runMintBot(config, {
@@ -433,10 +391,6 @@ async function executeQueuedJob({
     });
     await database.pruneTaskHistory(job.taskId, 8);
     await queue.publishEvent("task-sync", { taskId: job.taskId });
-    await notifyRunEvent(database, state, "run_success", {
-      task,
-      summary
-    });
   } catch (error) {
     const stopped = error instanceof AbortRunError || Boolean(abortController.signal.aborted);
     const failedAt = new Date().toISOString();
@@ -465,13 +419,6 @@ async function executeQueuedJob({
       }
     });
     await queue.publishEvent("task-sync", { taskId: job.taskId });
-
-    if (state && task) {
-      await notifyRunEvent(database, state, stopped ? "run_stopped" : "run_failure", {
-        task,
-        error: formatError(error)
-      });
-    }
   }
 }
 

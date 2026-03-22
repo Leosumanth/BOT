@@ -13,8 +13,7 @@ const {
   fetchAbiFromExplorer,
   normalizeDashboardSettings,
   resolveIntegrationSecrets,
-  secretStorageKeys,
-  sendConfiguredAlert
+  secretStorageKeys
 } = require("./integrations");
 const {
   decryptSecret,
@@ -1149,30 +1148,6 @@ function buildPublicSettings() {
   return buildClientSettings(appState?.settings, integrationSecrets);
 }
 
-function hasDiscordAlertsConfigured() {
-  return Boolean(resolveIntegrationSecrets(integrationSecrets).discordWebhookUrl);
-}
-
-async function notifyRunEvent(eventType, context = {}) {
-  try {
-    await sendConfiguredAlert({
-      settings: appState.settings,
-      storedSecrets: integrationSecrets,
-      eventType,
-      task: context.task,
-      chainLabel: chainLabel(context.task?.chainKey),
-      summary: context.summary,
-      error: context.error
-    });
-  } catch (error) {
-    pushLog({
-      level: "error",
-      message: `Alert dispatch failed: ${formatError(error)}`,
-      timestamp: new Date().toISOString()
-    });
-  }
-}
-
 function extractPersistentState() {
   return normalizePersistentState({
     tasks: appState.tasks,
@@ -1661,13 +1636,6 @@ function buildTelemetry() {
       severity: "warning",
       title: "Blocked tasks detected",
       detail: "One or more priority tasks are missing required inputs or RPC coverage."
-    });
-  }
-  if (appState.settings.discordEnabled && !hasDiscordAlertsConfigured()) {
-    alerts.push({
-      severity: "warning",
-      title: "Discord alerts need a webhook",
-      detail: "Add a Discord webhook URL in settings before enabling Discord delivery."
     });
   }
   if (activeTask) {
@@ -2279,10 +2247,6 @@ async function startTaskRunLocal(taskId) {
       }
     });
 
-    void notifyRunEvent("run_start", {
-      task: getTaskById(taskId)
-    });
-
     runMintBot(config, {
       signal: runContext.controller.signal,
       onLog(entry) {
@@ -2314,10 +2278,6 @@ async function startTaskRunLocal(taskId) {
             ...(taskAfterRun.history || [])
           ].slice(0, 8)
         });
-        await notifyRunEvent("run_success", {
-          task: getTaskById(taskId),
-          summary
-        });
       })
       .catch(async (error) => {
         const stopped = error instanceof AbortRunError || runContext.controller.signal.aborted;
@@ -2333,10 +2293,6 @@ async function startTaskRunLocal(taskId) {
           taskId,
           message: `[task ${runContext.taskName}] ${formatError(error)}`,
           timestamp: new Date().toISOString()
-        });
-        await notifyRunEvent(stopped ? "run_stopped" : "run_failure", {
-          task: getTaskById(taskId),
-          error: formatError(error)
         });
       })
       .catch(reportBackgroundError)
@@ -2887,35 +2843,6 @@ async function handleRpcPoolTest(response) {
   });
 }
 
-async function handleAlertTest(response) {
-  try {
-    const result = await sendConfiguredAlert({
-      settings: appState.settings,
-      storedSecrets: integrationSecrets,
-      eventType: "test",
-      task: {
-        name: "Dashboard connectivity check",
-        chainKey: appState.tasks[0]?.chainKey || "base_sepolia",
-        contractAddress: "",
-        walletCount: appState.wallets.length
-      }
-    });
-
-    if (result.attempted === 0) {
-      throw new Error("Enable and configure Discord alerts in settings first.");
-    }
-
-    pushLog({
-      level: "info",
-      message: `Test alert sent via ${result.channels.join(", ")}`,
-      timestamp: new Date().toISOString()
-    });
-    sendJson(response, 200, { ok: true, result });
-  } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
-  }
-}
-
 async function handleExplorerAbiLookup(url, response) {
   try {
     const chainKey = String(url.searchParams.get("chainKey") || "").trim();
@@ -2997,17 +2924,11 @@ async function handleSettingsSave(request, response) {
       ...appState.settings,
       profileName: payload.profileName,
       theme: payload.theme,
-      resultsPath: payload.resultsPath,
-      discordEnabled: payload.discordEnabled,
-      alertOnRunStart: payload.alertOnRunStart,
-      alertOnRunSuccess: payload.alertOnRunSuccess,
-      alertOnRunFailure: payload.alertOnRunFailure,
-      alertOnRunStop: payload.alertOnRunStop
+      resultsPath: payload.resultsPath
     });
     const nextSecrets = resolveIntegrationSecrets(integrationSecrets);
     const secretInputs = {
-      explorerApiKey: String(payload.explorerApiKey || "").trim(),
-      discordWebhookUrl: String(payload.discordWebhookUrl || "").trim()
+      explorerApiKey: String(payload.explorerApiKey || "").trim()
     };
 
     Object.entries(secretInputs).forEach(([secretName, value]) => {
@@ -3017,10 +2938,6 @@ async function handleSettingsSave(request, response) {
 
       nextSecrets[secretName] = value;
     });
-
-    if (nextSettings.discordEnabled && !nextSecrets.discordWebhookUrl) {
-      throw new Error("Discord alerts require a webhook URL.");
-    }
 
     appState.settings = nextSettings;
 
@@ -3351,11 +3268,6 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/control/test-rpc-pool") {
       await handleRpcPoolTest(response);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/control/test-alerts") {
-      await handleAlertTest(response);
       return;
     }
 

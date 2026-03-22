@@ -72,14 +72,6 @@ const themeInput = document.getElementById("theme-input");
 const resultsPathInput = document.getElementById("results-path-input");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
-const discordEnabledInput = document.getElementById("discord-enabled-input");
-const discordWebhookUrlInput = document.getElementById("discord-webhook-url-input");
-const discordConfigStatus = document.getElementById("discord-config-status");
-const alertOnStartInput = document.getElementById("alert-on-start-input");
-const alertOnSuccessInput = document.getElementById("alert-on-success-input");
-const alertOnFailureInput = document.getElementById("alert-on-failure-input");
-const alertOnStopInput = document.getElementById("alert-on-stop-input");
-const testAlertsButton = document.getElementById("test-alerts-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const batchToggle = document.getElementById("batch-toggle");
@@ -1568,28 +1560,14 @@ function renderSettings() {
   themeInput.value = state.settings.theme || "quantum-operator";
   resultsPathInput.value = state.settings.resultsPath || "./dist/mint-results.json";
   explorerApiKeyInput.value = "";
-  discordWebhookUrlInput.value = "";
-  discordEnabledInput.checked = Boolean(state.settings.discordEnabled);
-  alertOnStartInput.checked = state.settings.alertOnRunStart !== false;
-  alertOnSuccessInput.checked = state.settings.alertOnRunSuccess !== false;
-  alertOnFailureInput.checked = state.settings.alertOnRunFailure !== false;
-  alertOnStopInput.checked = state.settings.alertOnRunStop !== false;
 
   explorerApiKeyInput.placeholder = state.settings.explorerApiKeyConfigured
     ? "Saved on server. Leave blank to keep it."
     : "Etherscan V2 API key";
-  discordWebhookUrlInput.placeholder = state.settings.discordWebhookUrlConfigured
-    ? "Saved on server. Leave blank to keep it."
-    : "https://discord.com/api/webhooks/...";
 
   explorerConfigStatus.textContent = state.settings.explorerApiKeyConfigured
     ? "Key available"
     : "Not configured";
-  discordConfigStatus.textContent = state.settings.discordConfigured
-    ? `Discord ready${state.settings.discordEnabled ? "" : " (disabled)"}`
-    : state.settings.discordEnabled
-      ? "Discord is enabled but still missing a webhook URL."
-      : "Discord is disabled.";
 }
 
 function renderRuntime() {
@@ -2733,29 +2711,11 @@ settingsForm.addEventListener("submit", async (event) => {
         profileName: profileNameInput.value,
         theme: themeInput.value,
         resultsPath: resultsPathInput.value,
-        explorerApiKey: explorerApiKeyInput.value,
-        discordEnabled: discordEnabledInput.checked,
-        discordWebhookUrl: discordWebhookUrlInput.value,
-        alertOnRunStart: alertOnStartInput.checked,
-        alertOnRunSuccess: alertOnSuccessInput.checked,
-        alertOnRunFailure: alertOnFailureInput.checked,
-        alertOnRunStop: alertOnStopInput.checked
+        explorerApiKey: explorerApiKeyInput.value
       })
     });
     explorerApiKeyInput.value = "";
-    discordWebhookUrlInput.value = "";
     showToast("Local operator settings and integrations saved.", "success", "Settings Updated");
-  } catch {}
-});
-
-testAlertsButton.addEventListener("click", async () => {
-  try {
-    const payload = await request("/api/control/test-alerts", { method: "POST" });
-    showToast(
-      `Delivered via ${(payload.result?.channels || []).join(", ") || "configured channels"}.`,
-      "success",
-      "Test Alert Sent"
-    );
   } catch {}
 });
 

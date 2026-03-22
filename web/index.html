@@ -393,60 +393,8 @@
                 </label>
               </section>
 
-              <section class="surface inset-surface">
-                <div class="surface-header compact">
-                  <div>
-                    <h4>Alert Channel</h4>
-                    <p class="helper-copy">Leave secret fields blank to keep their current server-side values.</p>
-                  </div>
-                </div>
-
-                <label class="toggle-card toggle-card-inline">
-                  <input id="discord-enabled-input" type="checkbox" />
-                  <span>Enable Discord Alerts</span>
-                </label>
-
-                <label>
-                  <span>Discord Webhook URL</span>
-                  <input
-                    id="discord-webhook-url-input"
-                    type="password"
-                    placeholder="https://discord.com/api/webhooks/..."
-                  />
-                </label>
-                <p id="discord-config-status" class="helper-copy">Discord is disabled.</p>
-              </section>
-
-              <section class="surface inset-surface">
-                <div class="surface-header compact">
-                  <div>
-                    <h4>Alert Events</h4>
-                    <p class="helper-copy">Choose which run milestones should trigger outbound notifications.</p>
-                  </div>
-                </div>
-                <div class="form-grid four">
-                  <label class="toggle-card toggle-card-inline">
-                    <input id="alert-on-start-input" type="checkbox" checked />
-                    <span>Run Start</span>
-                  </label>
-                  <label class="toggle-card toggle-card-inline">
-                    <input id="alert-on-success-input" type="checkbox" checked />
-                    <span>Run Success</span>
-                  </label>
-                  <label class="toggle-card toggle-card-inline">
-                    <input id="alert-on-failure-input" type="checkbox" checked />
-                    <span>Run Failure</span>
-                  </label>
-                  <label class="toggle-card toggle-card-inline">
-                    <input id="alert-on-stop-input" type="checkbox" checked />
-                    <span>Run Stop</span>
-                  </label>
-                </div>
-              </section>
-
               <div class="settings-actions">
                 <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
-                <button id="test-alerts-button" class="ghost-button fx-button" type="button">Send Test Alert</button>
               </div>
             </form>
           </section>
