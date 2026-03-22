@@ -1704,6 +1704,87 @@ function isIntegerAbiType(type) {
   return /^u?int(\d+)?$/i.test(String(type || ""));
 }
 
+const preferredMintFunctionNames = [
+  "mint",
+  "publicMint",
+  "safeMint",
+  "publicSaleMint",
+  "saleMint",
+  "presaleMint",
+  "allowlistMint",
+  "whitelistMint",
+  "mintAllowlist",
+  "mintWhitelist",
+  "mintPresale",
+  "mintPublic",
+  "mintTo",
+  "claim",
+  "buy",
+  "purchase",
+  "redeem"
+];
+
+const preferredMintFunctionNameSet = new Set(
+  preferredMintFunctionNames.map((name) => normalizeAbiName(name))
+);
+
+function writableAbiFunctionEntries(abiEntries) {
+  return abiEntries.filter(
+    (entry) =>
+      entry?.type === "function" &&
+      typeof entry.name === "string" &&
+      entry.name.trim() &&
+      !["view", "pure"].includes(String(entry.stateMutability || "").toLowerCase())
+  );
+}
+
+function mintFunctionCandidateScore(entry) {
+  const normalizedName = normalizeAbiName(entry?.name);
+  if (!normalizedName) {
+    return -1;
+  }
+
+  if (/^(set|get|is|has|supports|owner|admin|pause|unpause|toggle|update|edit|configure|config|withdraw)/.test(normalizedName)) {
+    return -1;
+  }
+
+  let score = 0;
+
+  if (preferredMintFunctionNameSet.has(normalizedName)) {
+    score += 1000;
+  }
+
+  if (/mint/.test(normalizedName)) {
+    score += 500;
+  }
+
+  if (/claim|buy|purchase|redeem/.test(normalizedName)) {
+    score += 450;
+  }
+
+  if (/public|sale|allowlist|whitelist|presale/.test(normalizedName)) {
+    score += 120;
+  }
+
+  if (/airdrop|reserve|owner|admin|team|dev|gift|promo|partner/.test(normalizedName)) {
+    score -= 250;
+  }
+
+  if (
+    /price|cost|fee|state|status|active|open|live|start|end|time|date|phase|paused|supply|limit|max|remaining|nonce|proof|signature|signer|root|baseuri|tokenuri|balanceof|ownerof/.test(
+      normalizedName
+    )
+  ) {
+    score -= 150;
+  }
+
+  if (String(entry.stateMutability || "").toLowerCase() === "payable") {
+    score += 50;
+  }
+
+  return score;
+}
+
 function detectMintFunctionsFromAbi(abiEntries) {
   const namesByLower = abiFunctionNames(abiEntries).reduce((map, name) => {
     const lowerName = name.toLowerCase();
@@ -1713,9 +1794,41 @@ function detectMintFunctionsFromAbi(abiEntries) {
     return map;
   }, new Map());
 
-  return ["mint", "publicMint", "safeMint"]
+  const explicitMatches = preferredMintFunctionNames
     .map((name) => namesByLower.get(name.toLowerCase()) || null)
     .filter((name, index, values) => Boolean(name) && values.indexOf(name) === index);
+  const inferredMatches = writableAbiFunctionEntries(abiEntries)
+    .map((entry) => ({
+      name: entry.name.trim(),
+      score: mintFunctionCandidateScore(entry)
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
+    .map((candidate) => candidate.name);
+
+  return [...explicitMatches, ...inferredMatches].filter(
+    (name, index, values) => Boolean(name) && values.indexOf(name) === index
+  );
+}
+
+function describeMintFunctionDetection(abiEntries, detectedFunctions) {
+  const functionCount = abiFunctionNames(abiEntries).length;
+  if (functionCount === 0) {
+    return "ABI contains 0 functions; load the contract ABI JSON.";
+  }
+
+  if (detectedFunctions.length > 0) {
+    return `detected ${detectedFunctions.join(", ")}`;
+  }
+
+  const availableWriteFunctions = writableAbiFunctionEntries(abiEntries)
+    .map((entry) => entry.name.trim())
+    .slice(0, 5);
+  if (availableWriteFunctions.length > 0) {
+    return `no common mint function detected; write functions include ${availableWriteFunctions.join(", ")}`;
+  }
+
+  return `ABI has ${pluralize(functionCount, "function")} but no writable mint candidates`;
 }
 
 function resolveMintFunctionFromAbi(abiEntries, requestedFunction = "") {
@@ -1938,7 +2051,7 @@ function updateAbiStatus(sourceLabel = "") {
     if (resolvedMintFunction.detectedFunctions.length > 0) {
       statusParts.push(`detected ${resolvedMintFunction.detectedFunctions.join(", ")}`);
     } else {
-      statusParts.push("no mint/publicMint/safeMint detected");
+      statusParts.push(describeMintFunctionDetection(abi, resolvedMintFunction.detectedFunctions));
     }
     if (sourceLabel) {
       statusParts.push(sourceLabel);

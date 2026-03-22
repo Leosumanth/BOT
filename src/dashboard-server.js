@@ -460,12 +460,130 @@ function abiFunctionNameMap(abiEntries) {
   }, new Map());
 }
 
+function abiFunctionEntries(abiEntries) {
+  return abiEntries
+    .filter((entry) => entry?.type === "function" && typeof entry.name === "string" && entry.name.trim())
+    .map((entry) => ({
+      ...entry,
+      name: entry.name.trim()
+    }));
+}
+
+function writableAbiFunctionEntries(abiEntries) {
+  return abiFunctionEntries(abiEntries).filter((entry) => {
+    const stateMutability = String(entry.stateMutability || "").toLowerCase();
+    return stateMutability !== "view" && stateMutability !== "pure";
+  });
+}
+
+const preferredMintFunctionNames = [
+  "mint",
+  "publicMint",
+  "safeMint",
+  "publicSaleMint",
+  "saleMint",
+  "presaleMint",
+  "allowlistMint",
+  "whitelistMint",
+  "mintAllowlist",
+  "mintWhitelist",
+  "mintPresale",
+  "mintPublic",
+  "mintTo",
+  "claim",
+  "buy",
+  "purchase",
+  "redeem"
+];
+
+const preferredMintFunctionNameSet = new Set(
+  preferredMintFunctionNames.map((name) => normalizeAbiName(name))
+);
+
+function mintFunctionCandidateScore(entry) {
+  const normalizedName = normalizeAbiName(entry?.name);
+  if (!normalizedName) {
+    return -1;
+  }
+
+  if (/^(set|get|is|has|supports|owner|admin|pause|unpause|toggle|update|edit|configure|config|withdraw)/.test(normalizedName)) {
+    return -1;
+  }
+
+  let score = 0;
+
+  if (preferredMintFunctionNameSet.has(normalizedName)) {
+    score += 1000;
+  }
+
+  if (/mint/.test(normalizedName)) {
+    score += 500;
+  }
+
+  if (/claim|buy|purchase|redeem/.test(normalizedName)) {
+    score += 450;
+  }
+
+  if (/public|sale|allowlist|whitelist|presale/.test(normalizedName)) {
+    score += 120;
+  }
+
+  if (/airdrop|reserve|owner|admin|team|dev|gift|promo|partner/.test(normalizedName)) {
+    score -= 250;
+  }
+
+  if (
+    /price|cost|fee|state|status|active|open|live|start|end|time|date|phase|paused|supply|limit|max|remaining|nonce|proof|signature|signer|root|baseuri|tokenuri|balanceof|ownerof/.test(
+      normalizedName
+    )
+  ) {
+    score -= 150;
+  }
+
+  if (String(entry.stateMutability || "").toLowerCase() === "payable") {
+    score += 50;
+  }
+
+  return score;
+}
+
 function detectMintFunctionsFromAbi(abiEntries) {
   const namesByLower = abiFunctionNameMap(abiEntries);
-
-  return ["mint", "publicMint", "safeMint"]
+  const explicitMatches = preferredMintFunctionNames
     .map((name) => namesByLower.get(name.toLowerCase()) || null)
     .filter((name, index, values) => Boolean(name) && values.indexOf(name) === index);
+  const inferredMatches = writableAbiFunctionEntries(abiEntries)
+    .map((entry) => ({
+      name: entry.name,
+      score: mintFunctionCandidateScore(entry)
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
+    .map((candidate) => candidate.name);
+
+  return [...explicitMatches, ...inferredMatches].filter(
+    (name, index, values) => Boolean(name) && values.indexOf(name) === index
+  );
+}
+
+function describeMintFunctionDetection(abiEntries, detectedFunctions) {
+  const functionCount = abiFunctionEntries(abiEntries).length;
+  if (functionCount === 0) {
+    return "The loaded ABI contains 0 functions. Load the correct contract ABI JSON first";
+  }
+
+  if (detectedFunctions.length > 0) {
+    return `Detected candidate mint functions: ${detectedFunctions.join(", ")}`;
+  }
+
+  const availableWriteFunctions = writableAbiFunctionEntries(abiEntries)
+    .map((entry) => entry.name)
+    .slice(0, 5);
+  if (availableWriteFunctions.length > 0) {
+    return `No common mint function was detected. Available write functions: ${availableWriteFunctions.join(", ")}`;
+  }
+
+  return `The ABI contains ${functionCount} functions, but no writable mint candidates were detected`;
 }
 
 function resolveMintFunctionFromAbi(abiEntries, requestedFunction = "") {
@@ -2437,11 +2555,11 @@ async function handleTaskSave(request, response) {
     const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, task.mintFunction);
     task.mintFunction = resolvedMintFunction.mintFunction;
     if (!task.mintFunction || !abiFunctionNameMap(abiEntries).has(task.mintFunction.toLowerCase())) {
-      const detectedLabel = resolvedMintFunction.detectedFunctions.length
-        ? resolvedMintFunction.detectedFunctions.join(", ")
-        : "none of mint/publicMint/safeMint";
       throw new Error(
-        `Mint function "${task.mintFunction || "(empty)"}" was not found in the ABI. Detected ${detectedLabel}.`
+        `Mint function "${task.mintFunction || "(empty)"}" was not found in the ABI. ${describeMintFunctionDetection(
+          abiEntries,
+          resolvedMintFunction.detectedFunctions
+        )}.`
       );
     }
 
