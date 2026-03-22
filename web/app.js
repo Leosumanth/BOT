@@ -116,6 +116,7 @@ const walletSelectionCount = document.getElementById("wallet-selection-count");
 const rpcSelector = document.getElementById("rpc-selector");
 const selectAllRpcButton = document.getElementById("select-all-rpc-button");
 const rpcSelectionCount = document.getElementById("rpc-selection-count");
+const taskLatencyProfileInput = document.getElementById("task-latency-profile-input");
 const taskScheduleToggle = document.getElementById("task-schedule-toggle");
 const taskStartTimeInput = document.getElementById("task-start-time-input");
 const taskWalletModeInput = document.getElementById("task-wallet-mode-input");
@@ -135,6 +136,7 @@ const taskRetryWindowInput = document.getElementById("task-retry-window-input");
 const taskJitterInput = document.getElementById("task-jitter-input");
 const taskMinBalanceInput = document.getElementById("task-min-balance-input");
 const taskTriggerModeInput = document.getElementById("task-trigger-mode-input");
+const taskTriggerBlockInput = document.getElementById("task-trigger-block-input");
 const taskTriggerContractInput = document.getElementById("task-trigger-contract-input");
 const taskTriggerTimeoutInput = document.getElementById("task-trigger-timeout-input");
 const taskTriggerEventSignatureInput = document.getElementById("task-trigger-event-signature-input");
@@ -161,6 +163,8 @@ const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
 let abiAutofillTimer = null;
 let abiAutofillRequestId = 0;
+let abiExplorerFetchTimer = null;
+let abiExplorerFetchRequestId = 0;
 let currentMintStartDetection = {
   enabled: false,
   config: null
@@ -199,6 +203,130 @@ function normalizeGasStrategyValue(value) {
   }
 
   return normalized || "normal";
+}
+
+function isLikelyEvmAddress(value) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(value || "").trim());
+}
+
+function buildTaskAbiLookupKey(chainKey = taskChainInput.value, address = taskContractInput.value) {
+  const normalizedChainKey = String(chainKey || "").trim();
+  const normalizedAddress = String(address || "").trim().toLowerCase();
+
+  if (!normalizedChainKey || !normalizedAddress) {
+    return "";
+  }
+
+  return `${normalizedChainKey}:${normalizedAddress}`;
+}
+
+function setTaskAbiOrigin(origin = "", lookupKey = "") {
+  if (origin) {
+    taskAbiInput.dataset.abiOrigin = origin;
+  } else {
+    delete taskAbiInput.dataset.abiOrigin;
+  }
+
+  if (lookupKey) {
+    taskAbiInput.dataset.abiLookupKey = lookupKey;
+  } else {
+    delete taskAbiInput.dataset.abiLookupKey;
+  }
+}
+
+function currentTaskAbiOrigin() {
+  return taskAbiInput.dataset.abiOrigin || "";
+}
+
+function applyLatencyProfile(profile) {
+  const normalized = String(profile || "").trim().toLowerCase();
+
+  if (normalized === "custom") {
+    return;
+  }
+
+  const profiles = {
+    balanced: {
+      walletMode: "parallel",
+      gasStrategy: "normal",
+      pollIntervalMs: "1000",
+      retries: "1",
+      retryDelayMs: "1000",
+      retryWindowMin: "30",
+      startJitterMs: "0",
+      txTimeoutMs: "",
+      gasBoostPercent: "0",
+      priorityBoostPercent: "0",
+      replacementBumpPercent: "12",
+      replacementAttempts: "2",
+      simulate: true,
+      dryRun: false,
+      warmupRpc: true,
+      multiRpcBroadcast: false,
+      smartGasReplacement: false
+    },
+    low_latency: {
+      walletMode: "parallel",
+      gasStrategy: "aggressive",
+      pollIntervalMs: "250",
+      retries: "1",
+      retryDelayMs: "400",
+      retryWindowMin: "5",
+      startJitterMs: "0",
+      txTimeoutMs: "45000",
+      gasBoostPercent: "0",
+      priorityBoostPercent: "0",
+      replacementBumpPercent: "12",
+      replacementAttempts: "2",
+      simulate: true,
+      dryRun: false,
+      warmupRpc: true,
+      multiRpcBroadcast: true,
+      smartGasReplacement: true
+    },
+    ultra_low_latency: {
+      walletMode: "parallel",
+      gasStrategy: "aggressive",
+      pollIntervalMs: "150",
+      retries: "1",
+      retryDelayMs: "250",
+      retryWindowMin: "5",
+      startJitterMs: "0",
+      txTimeoutMs: "25000",
+      gasBoostPercent: "8",
+      priorityBoostPercent: "10",
+      replacementBumpPercent: "15",
+      replacementAttempts: "3",
+      simulate: true,
+      dryRun: false,
+      warmupRpc: true,
+      multiRpcBroadcast: true,
+      smartGasReplacement: true
+    }
+  };
+
+  const selectedProfile = profiles[normalized];
+  if (!selectedProfile) {
+    return;
+  }
+
+  taskWalletModeInput.value = selectedProfile.walletMode;
+  taskGasStrategyInput.value = selectedProfile.gasStrategy;
+  taskPollIntervalInput.value = selectedProfile.pollIntervalMs;
+  taskRetriesInput.value = selectedProfile.retries;
+  taskRetryDelayInput.value = selectedProfile.retryDelayMs;
+  taskRetryWindowInput.value = selectedProfile.retryWindowMin;
+  taskJitterInput.value = selectedProfile.startJitterMs;
+  taskTxTimeoutInput.value = selectedProfile.txTimeoutMs;
+  taskGasBoostInput.value = selectedProfile.gasBoostPercent;
+  taskPriorityBoostInput.value = selectedProfile.priorityBoostPercent;
+  taskReplaceBumpInput.value = selectedProfile.replacementBumpPercent;
+  taskReplaceAttemptsInput.value = selectedProfile.replacementAttempts;
+  taskSimulateToggle.checked = selectedProfile.simulate;
+  taskDryRunToggle.checked = selectedProfile.dryRun;
+  taskWarmupToggle.checked = selectedProfile.warmupRpc;
+  taskMultiRpcBroadcastToggle.checked = selectedProfile.multiRpcBroadcast;
+  taskSmartReplaceToggle.checked = selectedProfile.smartGasReplacement;
 }
 
 function relativeTime(isoString) {
@@ -1792,7 +1920,9 @@ function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
 
 function updateAbiStatus(sourceLabel = "") {
   if (!taskAbiInput.value.trim()) {
-    abiStatus.textContent = "Paste JSON or load a file.";
+    abiStatus.textContent = state.settings.explorerApiKeyConfigured
+      ? "Enter a contract address to auto-fetch ABI, or paste JSON manually."
+      : "Paste JSON or load a file. Add an Etherscan API key in Settings to auto-fetch ABI.";
     return;
   }
 
@@ -1818,6 +1948,37 @@ function updateAbiStatus(sourceLabel = "") {
   } catch {
     abiStatus.textContent = "ABI JSON is not valid yet.";
   }
+}
+
+function scheduleExplorerAbiFetch(options = {}) {
+  const { force = false } = options;
+  window.clearTimeout(abiExplorerFetchTimer);
+
+  if (!state.settings.explorerApiKeyConfigured) {
+    return;
+  }
+
+  const chainKey = taskChainInput.value;
+  const address = taskContractInput.value.trim();
+  const lookupKey = buildTaskAbiLookupKey(chainKey, address);
+  const abiOrigin = currentTaskAbiOrigin();
+  const abiLookupKey = taskAbiInput.dataset.abiLookupKey || "";
+
+  if (!chainKey || !isLikelyEvmAddress(address)) {
+    return;
+  }
+
+  if (!force && taskAbiInput.value.trim() && abiOrigin !== "explorer") {
+    return;
+  }
+
+  if (!force && abiOrigin === "explorer" && abiLookupKey === lookupKey && taskAbiInput.value.trim()) {
+    return;
+  }
+
+  abiExplorerFetchTimer = window.setTimeout(() => {
+    fetchAbiForCurrentTask({ auto: true }).catch(() => {});
+  }, 450);
 }
 
 async function requestRemoteMintAutofill(abiEntries, options = {}) {
@@ -1928,49 +2089,81 @@ function applyAbiAutofillFromCurrentInput(options = {}) {
   }
 }
 
-async function fetchAbiForCurrentTask() {
+async function fetchAbiForCurrentTask(options = {}) {
+  const { auto = false } = options;
   const chainKey = taskChainInput.value;
   const address = taskContractInput.value.trim();
 
   if (!chainKey) {
-    showToast("Choose a chain before fetching ABI data.", "error", "Explorer ABI");
+    if (!auto) {
+      showToast("Choose a chain before fetching ABI data.", "error", "Explorer ABI");
+    }
     return;
   }
 
   if (!address) {
-    showToast("Enter a contract address before fetching ABI data.", "error", "Explorer ABI");
+    if (!auto) {
+      showToast("Enter a contract address before fetching ABI data.", "error", "Explorer ABI");
+    }
+    return;
+  }
+
+  if (auto && !state.settings.explorerApiKeyConfigured) {
     return;
   }
 
   const idleLabel = fetchAbiButton.textContent;
-  fetchAbiButton.disabled = true;
-  fetchAbiButton.textContent = "Fetching...";
+  const lookupKey = buildTaskAbiLookupKey(chainKey, address);
+  const requestId = ++abiExplorerFetchRequestId;
+
+  if (!auto) {
+    fetchAbiButton.disabled = true;
+    fetchAbiButton.textContent = "Fetching...";
+  }
   abiStatus.textContent = "Fetching ABI from explorer...";
 
   try {
     const payload = await request(
-      `/api/explorer/abi?chainKey=${encodeURIComponent(chainKey)}&address=${encodeURIComponent(address)}`
+      `/api/explorer/abi?chainKey=${encodeURIComponent(chainKey)}&address=${encodeURIComponent(address)}`,
+      { quiet: auto }
     );
+    if (requestId !== abiExplorerFetchRequestId) {
+      return;
+    }
+
     taskAbiInput.value = JSON.stringify(payload.abi, null, 2);
+    setTaskAbiOrigin("explorer", lookupKey);
     setMintStartDetectionState(payload.autofill?.mintStartDetection || null);
     applyMintAutofill(payload.autofill || buildLocalMintAutofill(payload.abi || [], taskFunctionInput.value));
-    updateAbiStatus(buildAbiStatusSourceLabel(payload.provider || "Explorer", payload.autofill));
-    showToast(
-      `ABI loaded from ${payload.provider || "the explorer"} and mint fields were auto-filled.`,
-      "success",
-      "ABI Loaded"
+    updateAbiStatus(
+      buildAbiStatusSourceLabel(
+        auto ? `${payload.provider || "Explorer"} auto-loaded` : payload.provider || "Explorer",
+        payload.autofill
+      )
     );
+    if (!auto) {
+      showToast(
+        `ABI loaded from ${payload.provider || "the explorer"} and mint fields were auto-filled.`,
+        "success",
+        "ABI Loaded"
+      );
+    }
   } catch {
-    updateAbiStatus();
+    if (requestId === abiExplorerFetchRequestId) {
+      updateAbiStatus();
+    }
   } finally {
-    fetchAbiButton.disabled = false;
-    fetchAbiButton.textContent = idleLabel;
+    if (!auto) {
+      fetchAbiButton.disabled = false;
+      fetchAbiButton.textContent = idleLabel;
+    }
   }
 }
 
 function openTaskModal(task = null) {
   modalTitle.textContent = task ? "Edit Task" : "New Task";
   taskSubmitButton.textContent = task ? "Save Task" : "Create Task";
+  window.clearTimeout(abiExplorerFetchTimer);
 
   taskIdInput.value = task?.id || "";
   taskNameInput.value = task?.name || "";
@@ -2005,6 +2198,7 @@ function openTaskModal(task = null) {
   taskJitterInput.value = task?.startJitterMs || "0";
   taskMinBalanceInput.value = task?.minBalanceEth || "";
   taskTriggerModeInput.value = task?.executionTriggerMode || "standard";
+  taskTriggerBlockInput.value = task?.triggerBlockNumber || "";
   taskTriggerContractInput.value = task?.triggerContractAddress || "";
   taskTriggerTimeoutInput.value = task?.triggerTimeoutMs || "";
   taskTriggerEventSignatureInput.value = task?.triggerEventSignature || "";
@@ -2028,6 +2222,7 @@ function openTaskModal(task = null) {
   taskPrivateRelayOnlyToggle.checked = Boolean(task?.privateRelayOnly);
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
+  taskLatencyProfileInput.value = task ? "custom" : "low_latency";
   setMintStartDetectionState({
     enabled: task?.mintStartDetectionEnabled,
     ...(task?.mintStartDetectionConfig && typeof task.mintStartDetectionConfig === "object"
@@ -2035,8 +2230,19 @@ function openTaskModal(task = null) {
       : {})
   });
   taskAbiFileInput.value = "";
+  setTaskAbiOrigin(
+    task?.abiJson ? "manual" : "",
+    task?.contractAddress ? buildTaskAbiLookupKey(task?.chainKey, task?.contractAddress) : ""
+  );
   fetchAbiButton.disabled = false;
   fetchAbiButton.textContent = "Fetch from Explorer";
+
+  if (!task) {
+    applyLatencyProfile(taskLatencyProfileInput.value);
+    if (state.settings.explorerApiKeyConfigured && isLikelyEvmAddress(taskContractInput.value)) {
+      scheduleExplorerAbiFetch({ force: true });
+    }
+  }
 
   updateAbiStatus();
   renderWalletSelector(task?.walletIds || []);
@@ -2109,6 +2315,7 @@ function buildTaskPayload() {
     privateRelayHeadersJson: taskPrivateRelayHeadersInput.value,
     privateRelayOnly: taskPrivateRelayOnlyToggle.checked,
     executionTriggerMode: taskTriggerModeInput.value,
+    triggerBlockNumber: taskTriggerBlockInput.value,
     triggerContractAddress: taskTriggerContractInput.value,
     triggerEventSignature: taskTriggerEventSignatureInput.value,
     triggerEventCondition: taskTriggerEventConditionInput.value,
@@ -2120,15 +2327,18 @@ function buildTaskPayload() {
 }
 
 async function request(url, options = {}) {
+  const { quiet = false, ...fetchOptions } = options;
   let response;
   try {
     response = await fetch(url, {
       credentials: "same-origin",
-      ...options
+      ...fetchOptions
     });
   } catch (error) {
-    pushLocalLog("error", error.message || "Network request failed");
-    showToast(error.message || "Network request failed", "error");
+    if (!quiet) {
+      pushLocalLog("error", error.message || "Network request failed");
+      showToast(error.message || "Network request failed", "error");
+    }
     throw error;
   }
 
@@ -2136,15 +2346,19 @@ async function request(url, options = {}) {
   if (response.status === 401) {
     const message = payload.error || "Session expired. Sign in again.";
     handleUnauthorized(message);
-    pushLocalLog("error", message);
-    showToast(message, "error");
+    if (!quiet) {
+      pushLocalLog("error", message);
+      showToast(message, "error");
+    }
     throw new Error(message);
   }
 
   if (!response.ok) {
     const message = payload.error || "Request failed";
-    pushLocalLog("error", message);
-    showToast(message, "error");
+    if (!quiet) {
+      pushLocalLog("error", message);
+      showToast(message, "error");
+    }
     throw new Error(message);
   }
 
@@ -2369,6 +2583,10 @@ selectAllRpcButton.addEventListener("click", () => {
   setRpcSelectionCount();
 });
 
+taskLatencyProfileInput.addEventListener("change", () => {
+  applyLatencyProfile(taskLatencyProfileInput.value);
+});
+
 taskChainInput.addEventListener("change", () => {
   renderRpcSelector(
     selectedRpcIds().filter((rpcId) => {
@@ -2376,6 +2594,17 @@ taskChainInput.addEventListener("change", () => {
       return node?.chainKey === taskChainInput.value;
     })
   );
+
+  const lookupKey = buildTaskAbiLookupKey();
+  if (currentTaskAbiOrigin() === "explorer" && taskAbiInput.dataset.abiLookupKey !== lookupKey) {
+    taskAbiInput.value = "";
+    setTaskAbiOrigin("", "");
+    setMintStartDetectionState(null);
+  }
+
+  scheduleExplorerAbiFetch({
+    force: currentTaskAbiOrigin() === "explorer" || !taskAbiInput.value.trim()
+  });
 
   if (taskAbiInput.value.trim()) {
     applyAbiAutofillFromCurrentInput({
@@ -2389,7 +2618,25 @@ taskChainInput.addEventListener("change", () => {
   }
 });
 
+taskContractInput.addEventListener("input", () => {
+  const lookupKey = buildTaskAbiLookupKey();
+  if (currentTaskAbiOrigin() === "explorer" && taskAbiInput.dataset.abiLookupKey !== lookupKey) {
+    taskAbiInput.value = "";
+    setTaskAbiOrigin("", "");
+    setMintStartDetectionState(null);
+    updateAbiStatus();
+  }
+
+  scheduleExplorerAbiFetch({
+    force: currentTaskAbiOrigin() === "explorer" || !taskAbiInput.value.trim()
+  });
+});
+
 taskContractInput.addEventListener("change", () => {
+  scheduleExplorerAbiFetch({
+    force: currentTaskAbiOrigin() === "explorer" || !taskAbiInput.value.trim()
+  });
+
   if (taskAbiInput.value.trim()) {
     applyAbiAutofillFromCurrentInput({
       sourceLabel: "Contract updated",
@@ -2417,6 +2664,7 @@ taskFunctionInput.addEventListener("change", () => {
 });
 
 taskAbiInput.addEventListener("input", () => {
+  setTaskAbiOrigin(taskAbiInput.value.trim() ? "manual" : "", buildTaskAbiLookupKey());
   applyAbiAutofillFromCurrentInput({
     sourceLabel: "Manual ABI",
     includeFunction: true,
@@ -2438,6 +2686,7 @@ taskAbiFileInput.addEventListener("change", async () => {
   }
 
   taskAbiInput.value = await file.text();
+  setTaskAbiOrigin("manual", buildTaskAbiLookupKey());
   applyAbiAutofillFromCurrentInput({
     sourceLabel: "ABI file",
     includeFunction: true,
@@ -2469,6 +2718,7 @@ abiDropzone.addEventListener("drop", async (event) => {
   }
 
   taskAbiInput.value = await file.text();
+  setTaskAbiOrigin("manual", buildTaskAbiLookupKey());
   applyAbiAutofillFromCurrentInput({
     sourceLabel: "Dropped ABI",
     includeFunction: true,

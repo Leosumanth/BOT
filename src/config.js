@@ -59,6 +59,7 @@ const defaultInputValues = {
   TRIGGER_EVENT_SIGNATURE: "",
   TRIGGER_EVENT_CONDITION: "",
   TRIGGER_MEMPOOL_SIGNATURE: "",
+  TRIGGER_BLOCK_NUMBER: "",
   TRIGGER_TIMEOUT_MS: ""
 };
 
@@ -325,10 +326,10 @@ function loadReadyCheckMode(raw) {
 
 function loadExecutionTriggerMode(raw) {
   const mode = (optionalString(raw, "EXECUTION_TRIGGER_MODE") || "standard").toLowerCase();
-  const supportedModes = new Set(["standard", "event", "mempool"]);
+  const supportedModes = new Set(["standard", "event", "mempool", "block"]);
 
   if (!supportedModes.has(mode)) {
-    throw new Error("EXECUTION_TRIGGER_MODE must be standard, event, or mempool");
+    throw new Error("EXECUTION_TRIGGER_MODE must be standard, event, mempool, or block");
   }
 
   return mode;
@@ -434,6 +435,7 @@ function normalizeConfig(raw) {
     triggerEventSignature: optionalString(raw, "TRIGGER_EVENT_SIGNATURE"),
     triggerEventCondition: parseJsonValue(raw.TRIGGER_EVENT_CONDITION, "TRIGGER_EVENT_CONDITION"),
     triggerMempoolSignature: optionalString(raw, "TRIGGER_MEMPOOL_SIGNATURE"),
+    triggerBlockNumber: optionalInteger(raw, "TRIGGER_BLOCK_NUMBER"),
     triggerTimeoutMs: optionalInteger(raw, "TRIGGER_TIMEOUT_MS")
   };
 
@@ -489,6 +491,12 @@ function normalizeConfig(raw) {
     throw new Error(
       "At least one ws:// or wss:// RPC URL is required when EXECUTION_TRIGGER_MODE=mempool"
     );
+  }
+
+  if (normalized.executionTriggerMode === "block") {
+    if (!normalized.triggerBlockNumber || normalized.triggerBlockNumber < 1) {
+      throw new Error("TRIGGER_BLOCK_NUMBER must be a positive integer when EXECUTION_TRIGGER_MODE=block");
+    }
   }
 
   if (

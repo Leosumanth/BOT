@@ -1703,6 +1703,77 @@ async function waitForMempoolTrigger(config, signal, logger) {
   }
 }
 
+async function waitForBlockTrigger(config, signal, logger) {
+  const { provider, rpcUrl } = await createProvider(config, { preferSocket: true });
+  const targetBlockNumber = Number(config.triggerBlockNumber);
+
+  logger.info(`Waiting for block trigger ${targetBlockNumber} via ${rpcUrl}`);
+
+  try {
+    const currentBlockNumber = await provider.getBlockNumber();
+    if (currentBlockNumber >= targetBlockNumber) {
+      logger.info(
+        `Block trigger already satisfied at block ${currentBlockNumber} (target ${targetBlockNumber})`
+      );
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      let timeoutId = null;
+      let removeAbortListener = () => {};
+      let settled = false;
+
+      const cleanup = () => {
+        settled = true;
+        provider.off("block", onBlock);
+        removeAbortListener();
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      };
+
+      const onBlock = (blockNumber) => {
+        if (settled || blockNumber < targetBlockNumber) {
+          return;
+        }
+
+        cleanup();
+        logger.info(`Block trigger matched at block ${blockNumber} (target ${targetBlockNumber})`);
+        resolve();
+      };
+
+      if (signal) {
+        const onAbort = () => {
+          cleanup();
+          reject(new AbortRunError());
+        };
+
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      }
+
+      if (config.triggerTimeoutMs) {
+        timeoutId = setTimeout(() => {
+          cleanup();
+          reject(
+            new Error(`Block trigger timed out after ${config.triggerTimeoutMs}ms`)
+          );
+        }, config.triggerTimeoutMs);
+      }
+
+      provider.on("block", onBlock);
+      void provider
+        .getBlockNumber()
+        .then(onBlock)
+        .catch(() => {
+          // Ignore immediate re-check failures and keep waiting on block events.
+        });
+    });
+  } finally {
+    await destroyProvider(provider);
+  }
+}
+
 async function waitForExecutionTrigger(config, signal, logger) {
   if (config.executionTriggerMode === "event") {
     await waitForEventTrigger(config, signal, logger);
@@ -1711,6 +1782,11 @@ async function waitForExecutionTrigger(config, signal, logger) {
 
   if (config.executionTriggerMode === "mempool") {
     await waitForMempoolTrigger(config, signal, logger);
+    return;
+  }
+
+  if (config.executionTriggerMode === "block") {
+    await waitForBlockTrigger(config, signal, logger);
   }
 }
 
@@ -2273,6 +2349,9 @@ async function runMintBot(config, hooks = {}) {
   );
   logger.info(`Ready check: ${config.readyCheckFunction || "disabled"}`);
   logger.info(`Execution trigger: ${config.executionTriggerMode}`);
+  if (config.executionTriggerMode === "block") {
+    logger.info(`Trigger block: ${config.triggerBlockNumber}`);
+  }
   logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
   logger.info("Pre-signed launch: required");
 

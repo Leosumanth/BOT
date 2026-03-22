@@ -612,11 +612,23 @@
             <p id="rpc-selection-count" class="selection-copy">0 RPC nodes selected</p>
           </div>
 
-          <div class="surface inset-surface" hidden>
+          <div class="surface inset-surface">
             <div class="surface-header compact">
-              <h4>Schedule and Execution</h4>
+              <div>
+                <h4>Launch Timing</h4>
+                <p class="helper-copy">Pre-sign stays enabled internally. Use a timestamp or block trigger for hands-free launch.</p>
+              </div>
             </div>
-            <div class="form-grid three">
+            <div class="form-grid four">
+              <label>
+                <span>Execution Profile</span>
+                <select id="task-latency-profile-input">
+                  <option value="low_latency">Low Latency</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="ultra_low_latency">Ultra Low Latency</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
               <label class="toggle-stack">
                 <span>Timestamp to Start</span>
                 <label class="switch-row">
@@ -638,7 +650,7 @@
             </div>
           </div>
 
-          <div class="form-grid five" hidden>
+          <div class="form-grid five">
             <label>
               <span>Retries</span>
               <input id="task-retries-input" type="number" value="1" />
@@ -661,9 +673,12 @@
             </label>
           </div>
 
-          <div class="surface inset-surface" hidden>
+          <div class="surface inset-surface">
             <div class="surface-header compact">
-              <h4>Gas and Validation</h4>
+              <div>
+                <h4>Gas and Validation</h4>
+                <p class="helper-copy">Aggressive gas, multi-RPC, and replacement logic are the main latency controls for live mints.</p>
+              </div>
             </div>
             <div class="form-grid three">
               <label>
@@ -717,18 +732,26 @@
             </div>
           </div>
 
-          <div class="surface inset-surface" hidden>
+          <div class="surface inset-surface">
             <div class="surface-header compact">
-              <h4>Ready Check and Routing</h4>
+              <div>
+                <h4>Ready Check and Routing</h4>
+                <p class="helper-copy">Use Block Driven plus Target Block for exact block-level launch timing.</p>
+              </div>
             </div>
-            <div class="form-grid three">
+            <div class="form-grid four">
               <label>
                 <span>Execution Trigger</span>
                 <select id="task-trigger-mode-input">
                   <option value="standard">Standard</option>
                   <option value="event">Event Driven</option>
                   <option value="mempool">Mempool Driven</option>
+                  <option value="block">Block Driven</option>
                 </select>
+              </label>
+              <label>
+                <span>Target Block</span>
+                <input id="task-trigger-block-input" type="number" min="1" placeholder="23456789" />
               </label>
               <label>
                 <span>Trigger Contract</span>

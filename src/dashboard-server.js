@@ -281,6 +281,7 @@ function defaultTaskState() {
     triggerEventSignature: "",
     triggerEventCondition: "",
     triggerMempoolSignature: "",
+    triggerBlockNumber: "",
     triggerTimeoutMs: "",
     transferAfterMinted: false,
     transferAddress: "",
@@ -416,6 +417,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     triggerMempoolSignature: String(
       payload.triggerMempoolSignature ?? base.triggerMempoolSignature ?? ""
     ).trim(),
+    triggerBlockNumber: String(payload.triggerBlockNumber ?? base.triggerBlockNumber ?? "").trim(),
     triggerTimeoutMs: String(payload.triggerTimeoutMs ?? base.triggerTimeoutMs ?? "").trim(),
     transferAfterMinted: Boolean(payload.transferAfterMinted ?? base.transferAfterMinted ?? false),
     transferAddress: String(payload.transferAddress ?? base.transferAddress ?? "").trim(),
@@ -1970,6 +1972,7 @@ async function buildConfigForTask(task) {
     TRIGGER_EVENT_SIGNATURE: task.triggerEventSignature,
     TRIGGER_EVENT_CONDITION: task.triggerEventCondition,
     TRIGGER_MEMPOOL_SIGNATURE: task.triggerMempoolSignature,
+    TRIGGER_BLOCK_NUMBER: task.triggerBlockNumber,
     TRIGGER_TIMEOUT_MS: task.triggerTimeoutMs,
     TRANSFER_AFTER_MINTED: task.transferAfterMinted,
     TRANSFER_ADDRESS: task.transferAddress,
@@ -2503,6 +2506,13 @@ async function handleTaskSave(request, response) {
 
     if (task.executionTriggerMode === "event" && !task.triggerEventSignature) {
       throw new Error("Event signature is required for event-driven execution");
+    }
+
+    if (task.executionTriggerMode === "block") {
+      const triggerBlockNumber = Number(task.triggerBlockNumber);
+      if (!Number.isInteger(triggerBlockNumber) || triggerBlockNumber < 1) {
+        throw new Error("Target block must be a positive whole number for block-driven execution");
+      }
     }
 
     if (task.executionTriggerMode === "mempool") {

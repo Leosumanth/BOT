@@ -312,6 +312,7 @@ async function buildConfigForTask(database, state, task) {
     TRIGGER_EVENT_SIGNATURE: task.triggerEventSignature,
     TRIGGER_EVENT_CONDITION: task.triggerEventCondition,
     TRIGGER_MEMPOOL_SIGNATURE: task.triggerMempoolSignature,
+    TRIGGER_BLOCK_NUMBER: task.triggerBlockNumber,
     TRIGGER_TIMEOUT_MS: task.triggerTimeoutMs,
     TRANSFER_AFTER_MINTED: task.transferAfterMinted,
     TRANSFER_ADDRESS: task.transferAddress,
