@@ -189,8 +189,41 @@ function truncateMiddle(value, start = 8, end = 6) {
   return `${value.slice(0, start)}...${value.slice(-end)}`;
 }
 
+function normalizePrivateKeyValue(value) {
+  const trimmed = String(value || "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return `0x${trimmed}`;
+  }
+
+  return trimmed;
+}
+
 function deriveAddress(privateKey) {
-  return new ethers.Wallet(privateKey).address;
+  return new ethers.Wallet(normalizePrivateKeyValue(privateKey)).address;
+}
+
+function validateResolvedPrivateKey(privateKey, wallet = null) {
+  const normalized = normalizePrivateKeyValue(privateKey);
+  const walletLabel = wallet?.label || wallet?.addressShort || wallet?.address || "Selected wallet";
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`${walletLabel} has an invalid private key format. Re-import that wallet secret.`);
+  }
+
+  let derivedAddress;
+  try {
+    derivedAddress = deriveAddress(normalized);
+  } catch {
+    throw new Error(`${walletLabel} has an unreadable private key. Re-import that wallet secret.`);
+  }
+
+  if (wallet?.address && derivedAddress.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error(
+      `${walletLabel} private key does not match the saved wallet address ${wallet.address}. Re-import that wallet.`
+    );
+  }
+
+  return normalized;
 }
 
 function authIsRequired() {
@@ -2183,7 +2216,8 @@ function buildEnvWalletEntries() {
 
   keys.forEach((privateKey, index) => {
     try {
-      const address = deriveAddress(privateKey);
+      const normalizedPrivateKey = validateResolvedPrivateKey(privateKey);
+      const address = deriveAddress(normalizedPrivateKey);
       const addressLower = address.toLowerCase();
       if (knownAddresses.has(addressLower)) {
         return;
@@ -2202,7 +2236,7 @@ function buildEnvWalletEntries() {
         createdAt,
         updatedAt: createdAt
       });
-      keyMap.set(id, privateKey);
+      keyMap.set(id, normalizedPrivateKey);
       knownAddresses.add(addressLower);
     } catch {
       // Ignore invalid keys from env bootstrapping.
@@ -2486,7 +2520,8 @@ async function migrateLegacyStateIfNeeded() {
     }
 
     try {
-      const address = deriveAddress(legacyWallet.privateKey);
+      const normalizedPrivateKey = validateResolvedPrivateKey(legacyWallet.privateKey);
+      const address = deriveAddress(normalizedPrivateKey);
       const addressLower = address.toLowerCase();
       if (knownAddresses.has(addressLower) || envWalletAddresses.has(addressLower)) {
         continue;
@@ -2497,7 +2532,7 @@ async function migrateLegacyStateIfNeeded() {
         label: legacyWallet.label || "Migrated Wallet",
         address,
         addressShort: legacyWallet.addressShort || truncateMiddle(address),
-        secretCiphertext: encryptSecret(legacyWallet.privateKey),
+        secretCiphertext: encryptSecret(normalizedPrivateKey),
         group: legacyWallet.group || "Migrated",
         status: legacyWallet.status || "ready",
         source: "stored",
@@ -3116,20 +3151,31 @@ function getTaskById(taskId) {
 
 async function resolveWalletPrivateKeys(walletIds) {
   const { keyMap } = buildEnvWalletEntries();
+  const walletMap = new Map((appState?.wallets || []).map((wallet) => [wallet.id, wallet]));
   const privateKeys = [];
 
   for (const walletId of walletIds) {
+    const wallet = walletMap.get(walletId) || null;
     if (keyMap.has(walletId)) {
-      privateKeys.push(keyMap.get(walletId));
+      privateKeys.push(validateResolvedPrivateKey(keyMap.get(walletId), wallet));
       continue;
     }
 
     const storedSecret = await database.getStoredWalletSecret(walletId);
     if (!storedSecret?.secret_ciphertext) {
-      throw new Error(`Wallet secret not found for wallet ${walletId}`);
+      throw new Error(`${wallet?.label || walletId} secret was not found in storage`);
     }
 
-    privateKeys.push(decryptSecret(storedSecret.secret_ciphertext));
+    let decryptedSecret;
+    try {
+      decryptedSecret = decryptSecret(storedSecret.secret_ciphertext);
+    } catch (error) {
+      throw new Error(
+        `${wallet?.label || walletId} secret could not be decrypted. Check ENCRYPTION_KEY and re-import the wallet if needed.`
+      );
+    }
+
+    privateKeys.push(validateResolvedPrivateKey(decryptedSecret, wallet));
   }
 
   return privateKeys;
@@ -3930,7 +3976,8 @@ async function handleWalletImport(request, response) {
     let skipped = 0;
 
     for (const privateKey of privateKeys) {
-      const address = deriveAddress(privateKey);
+      const normalizedPrivateKey = validateResolvedPrivateKey(privateKey);
+      const address = deriveAddress(normalizedPrivateKey);
       if (knownAddresses.has(address.toLowerCase())) {
         skipped += 1;
         continue;
@@ -3944,7 +3991,7 @@ async function handleWalletImport(request, response) {
         label,
         address,
         addressShort: truncateMiddle(address),
-        secretCiphertext: encryptSecret(privateKey),
+        secretCiphertext: encryptSecret(normalizedPrivateKey),
         group: payload.group || "Imported",
         status: "ready",
         source: "stored",
