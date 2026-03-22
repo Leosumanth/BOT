@@ -1322,11 +1322,194 @@ select:focus {
 }
 
 .toggle-card {
-  padding: 14px;
+  position: relative;
+  min-height: 102px;
+  padding: 18px 20px;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: stretch;
   color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  isolation: isolate;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.toggle-card::after {
+  content: "";
+  position: absolute;
+  right: -30px;
+  bottom: -36px;
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(113, 224, 255, 0.22), transparent 70%);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.toggle-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(124, 223, 255, 0.22);
+  background:
+    linear-gradient(180deg, rgba(113, 224, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.035);
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.toggle-card:hover::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toggle-card > input[type="checkbox"] {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.toggle-card-content {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.toggle-card-indicator {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 20px;
+  border: 1px solid rgba(139, 160, 187, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.02)),
+    linear-gradient(160deg, rgba(10, 20, 32, 0.96), rgba(8, 15, 25, 0.88));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 16px 28px rgba(0, 0, 0, 0.22);
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.toggle-card-indicator::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01));
+}
+
+.toggle-card-indicator::after {
+  content: "";
+  position: absolute;
+  left: 19px;
+  top: 17px;
+  width: 18px;
+  height: 10px;
+  border-left: 4px solid #04111a;
+  border-bottom: 4px solid #04111a;
+  opacity: 0;
+  transform: rotate(-45deg) scale(0.55);
+  transform-origin: center;
+  transition:
+    opacity 120ms ease,
+    transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1.15);
+}
+
+.toggle-card-label {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: 0.02em;
+  color: rgba(237, 247, 255, 0.82);
+}
+
+.toggle-card > input[type="checkbox"]:focus-visible + .toggle-card-content .toggle-card-indicator {
+  box-shadow:
+    0 0 0 4px rgba(47, 183, 255, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 16px 28px rgba(0, 0, 0, 0.22);
+}
+
+.toggle-card > input[type="checkbox"]:checked + .toggle-card-content .toggle-card-indicator {
+  border-color: rgba(136, 241, 255, 0.46);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.02)),
+    linear-gradient(160deg, #7fecff 0%, #2fb7ff 58%, #169fe9 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 18px 34px rgba(47, 183, 255, 0.28),
+    0 0 34px rgba(47, 183, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.toggle-card > input[type="checkbox"]:checked + .toggle-card-content .toggle-card-indicator::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
+}
+
+.toggle-card > input[type="checkbox"]:checked + .toggle-card-content .toggle-card-indicator::after {
+  opacity: 1;
+  transform: rotate(-45deg) scale(1);
+}
+
+.toggle-card > input[type="checkbox"]:checked + .toggle-card-content .toggle-card-label {
+  color: #f7fdff;
+}
+
+.toggle-card:has(> input[type="checkbox"]:checked) {
+  border-color: rgba(124, 223, 255, 0.26);
+  background:
+    linear-gradient(180deg, rgba(113, 224, 255, 0.12), rgba(47, 183, 255, 0.03)),
+    rgba(255, 255, 255, 0.04);
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.2),
+    0 0 36px rgba(47, 183, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.toggle-card:has(> input[type="checkbox"]:checked)::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 720px) {
+  .toggle-card {
+    min-height: 84px;
+    padding: 16px;
+  }
+
+  .toggle-card-content {
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .toggle-card-indicator {
+    width: 52px;
+    height: 52px;
+    border-radius: 16px;
+  }
+
+  .toggle-card-indicator::after {
+    left: 16px;
+    top: 15px;
+    width: 16px;
+    height: 9px;
+  }
 }
 
 .modal-actions {
