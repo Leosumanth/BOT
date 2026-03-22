@@ -189,7 +189,7 @@
             </section>
           </div>
 
-          <div class="content-grid rpc-layout">
+          <div class="content-grid">
             <section class="surface" data-tilt>
               <div class="surface-header">
                 <h3>Live Activity</h3>
@@ -313,7 +313,7 @@
             </div>
           </div>
 
-          <div class="content-grid">
+          <div class="content-grid rpc-layout">
             <section class="surface" data-tilt>
               <div class="surface-header rpc-builder-header">
                 <div>
@@ -358,7 +358,7 @@
           <div class="view-header">
             <div>
               <h2>Settings</h2>
-              <p class="view-subtitle">Local profile details, outbound alerts, and explorer-backed ABI tools.</p>
+              <p class="view-subtitle">Local profile details and explorer-backed ABI tools.</p>
             </div>
           </div>
 
@@ -389,11 +389,13 @@
                 </div>
                 <label>
                   <span>Explorer API Key</span>
-                  <input id="explorer-api-key-input" type="password" placeholder="Leave blank to keep the saved key" />
+                  <input id="explorer-api-key-input" type="password" placeholder="Etherscan V2 API key" />
                 </label>
+                <p class="helper-copy">Leave blank to keep the current key. Enter a new key and save settings to replace it.</p>
               </section>
 
               <div class="settings-actions">
+                <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                 <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
               </div>
             </form>

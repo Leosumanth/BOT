@@ -34,6 +34,8 @@ const scheduledTaskPollIntervalMs = Math.max(
   1000,
   Number(process.env.SCHEDULE_POLL_INTERVAL_MS || 1000)
 );
+const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2";
+const explorerKeyTestChainId = 1;
 
 const clients = new Set();
 const chainCatalog = [
@@ -2917,6 +2919,43 @@ async function handleContractAutofill(request, response) {
   }
 }
 
+async function verifyExplorerApiKey(apiKey) {
+  const result = await fetchAbiFromExplorer({
+    chainId: explorerKeyTestChainId,
+    address: explorerKeyTestAddress,
+    apiKey
+  });
+
+  return {
+    chainId: explorerKeyTestChainId,
+    address: explorerKeyTestAddress,
+    abiEntries: Array.isArray(result.abi) ? result.abi.length : 0
+  };
+}
+
+async function handleExplorerKeyTest(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const inputKey = String(payload.explorerApiKey || "").trim();
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const apiKey = inputKey || resolvedSecrets.explorerApiKey;
+
+    if (!apiKey) {
+      throw new Error("Add an Etherscan V2 API key first.");
+    }
+
+    const result = await verifyExplorerApiKey(apiKey);
+
+    sendJson(response, 200, {
+      ok: true,
+      source: inputKey ? "input" : "saved",
+      ...result
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleSettingsSave(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -2938,6 +2977,10 @@ async function handleSettingsSave(request, response) {
 
       nextSecrets[secretName] = value;
     });
+
+    if (secretInputs.explorerApiKey) {
+      await verifyExplorerApiKey(secretInputs.explorerApiKey);
+    }
 
     appState.settings = nextSettings;
 
@@ -3268,6 +3311,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/control/test-rpc-pool") {
       await handleRpcPoolTest(response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/control/test-explorer-key") {
+      await handleExplorerKeyTest(request, response);
       return;
     }
 

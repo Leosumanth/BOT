@@ -72,6 +72,7 @@ const themeInput = document.getElementById("theme-input");
 const resultsPathInput = document.getElementById("results-path-input");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
+const testExplorerKeyButton = document.getElementById("test-explorer-key-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const batchToggle = document.getElementById("batch-toggle");
@@ -1555,6 +1556,22 @@ function renderRpcNodes() {
   });
 }
 
+function setExplorerKeyStatus(message = null) {
+  if (message) {
+    explorerConfigStatus.textContent = message;
+    return;
+  }
+
+  if (explorerApiKeyInput.value.trim()) {
+    explorerConfigStatus.textContent = "New key ready to test or save";
+    return;
+  }
+
+  explorerConfigStatus.textContent = state.settings.explorerApiKeyConfigured
+    ? "Key available"
+    : "Not configured";
+}
+
 function renderSettings() {
   profileNameInput.value = state.settings.profileName || "local";
   themeInput.value = state.settings.theme || "quantum-operator";
@@ -1562,12 +1579,10 @@ function renderSettings() {
   explorerApiKeyInput.value = "";
 
   explorerApiKeyInput.placeholder = state.settings.explorerApiKeyConfigured
-    ? "Saved on server. Leave blank to keep it."
+    ? "Saved on server. Enter a new key to replace it."
     : "Etherscan V2 API key";
 
-  explorerConfigStatus.textContent = state.settings.explorerApiKeyConfigured
-    ? "Key available"
-    : "Not configured";
+  setExplorerKeyStatus();
 }
 
 function renderRuntime() {
@@ -2703,20 +2718,67 @@ rpcCancelButton.addEventListener("click", () => {
 
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const explorerApiKeyValue = explorerApiKeyInput.value.trim();
   try {
-    await request("/api/settings", {
+    const payload = await request("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         profileName: profileNameInput.value,
         theme: themeInput.value,
         resultsPath: resultsPathInput.value,
-        explorerApiKey: explorerApiKeyInput.value
+        explorerApiKey: explorerApiKeyValue
       })
     });
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
     explorerApiKeyInput.value = "";
-    showToast("Local operator settings and integrations saved.", "success", "Settings Updated");
+    showToast(
+      explorerApiKeyValue
+        ? "Settings saved. Explorer API key updated."
+        : "Local operator settings saved.",
+      "success",
+      explorerApiKeyValue ? "Explorer Key Updated" : "Settings Updated"
+    );
+    setExplorerKeyStatus();
   } catch {}
+});
+
+explorerApiKeyInput.addEventListener("input", () => {
+  setExplorerKeyStatus();
+});
+
+testExplorerKeyButton.addEventListener("click", async () => {
+  const buttonLabel = testExplorerKeyButton.textContent;
+  const explorerApiKeyValue = explorerApiKeyInput.value.trim();
+
+  testExplorerKeyButton.disabled = true;
+  testExplorerKeyButton.textContent = "Testing...";
+
+  try {
+    const payload = await request("/api/control/test-explorer-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        explorerApiKey: explorerApiKeyValue
+      })
+    });
+
+    setExplorerKeyStatus(payload.source === "input" ? "Typed key verified" : "Saved key verified");
+    showToast(
+      payload.source === "input"
+        ? "Explorer API key is valid. Save settings to replace the current key."
+        : "Saved explorer API key is valid.",
+      "success",
+      "Explorer Key Valid"
+    );
+  } catch {
+    setExplorerKeyStatus("Key test failed");
+  } finally {
+    testExplorerKeyButton.disabled = false;
+    testExplorerKeyButton.textContent = buttonLabel;
+  }
 });
 
 selectAllWalletsButton.addEventListener("click", () => {
