@@ -936,7 +936,10 @@ function renderWalletSelector(selectedIds = []) {
     });
   });
 
-  bindSelectorCheckboxes(walletSelector, setWalletSelectionCount);
+  bindSelectorCheckboxes(walletSelector, () => {
+    setWalletSelectionCount();
+    refreshPhasePreviewFromCurrentInput("Wallet selection updated");
+  });
 }
 
 function renderRpcSelector(selectedIds = []) {
@@ -948,7 +951,10 @@ function renderRpcSelector(selectedIds = []) {
     : `<div class="empty-state"><h3>No RPC nodes</h3><p>Add enabled nodes for ${escapeHtml(chainLabel(activeChain))} in the RPC view.</p></div>`;
 
   setRpcSelectionCount();
-  bindSelectorCheckboxes(rpcSelector, setRpcSelectionCount);
+  bindSelectorCheckboxes(rpcSelector, () => {
+    setRpcSelectionCount();
+    refreshPhasePreviewFromCurrentInput("RPC selection updated");
+  });
 }
 
 function renderLogs() {
@@ -2139,36 +2145,71 @@ function renderPhasePreview(phasePreview = []) {
           ? `${escapeHtml(String(phase.priceEth))} ETH`
           : "Auto";
       const statusTone =
-        phase.autoLaunchMode === "review"
-          ? "failed"
-          : phase.autoLaunchMode === "scheduled" || phase.autoLaunchMode === "watch"
-            ? "running"
-            : "";
+        phase.eligibilityStatus === "eligible"
+          ? "running"
+          : phase.eligibilityStatus === "ineligible"
+            ? "failed"
+            : phase.eligibilityStatus === "review"
+              ? "warning"
+              : phase.autoLaunchMode === "scheduled" || phase.autoLaunchMode === "watch"
+                ? "running"
+                : "";
       const statusLabel =
-        phase.autoLaunchMode === "review"
-          ? "Review"
-          : phase.autoLaunchMode === "scheduled"
-            ? "Scheduled"
-            : phase.autoLaunchMode === "watch"
-              ? "Watching"
-              : phase.autoLaunchMode === "instant"
-                ? "Ready"
-                : "Auto";
+        phase.eligibilityStatus === "eligible"
+          ? "Eligible"
+          : phase.eligibilityStatus === "ineligible"
+            ? "Excluded"
+            : phase.eligibilityStatus === "review"
+              ? "Review"
+              : phase.eligibilityStatus === "no_wallets"
+                ? "Select Wallets"
+                : phase.autoLaunchMode === "scheduled"
+                  ? "Scheduled"
+                  : phase.autoLaunchMode === "watch"
+                    ? "Watching"
+                    : phase.autoLaunchMode === "instant"
+                      ? "Ready"
+                      : "Auto";
+      const warningLine = phase.warning
+        ? `<p class="muted-copy">${escapeHtml(phase.warning)}</p>`
+        : "";
 
       return `
         <div class="list-row">
           <div>
             <strong>${escapeHtml(phase.label || phase.phaseType || "Phase")}</strong>
             <p class="muted-copy">${escapeHtml(phase.signature || phase.mintFunction || "Unknown mint")}</p>
+            <p class="muted-copy">Eligibility: ${escapeHtml(phase.eligibilityLabel || "Unknown")}</p>
             <p class="muted-copy">Price: ${priceLabel}${phase.priceSource ? ` via ${escapeHtml(phase.priceSource)}` : ""}</p>
             <p class="muted-copy">Start: ${escapeHtml(formatPhasePreviewTime(phase.waitUntilIso))}${phase.startTimeSource ? ` via ${escapeHtml(phase.startTimeSource)}` : ""}</p>
             <p class="muted-copy">${escapeHtml(phase.autoLaunchLabel || "Automatic launch unavailable")}</p>
+            ${warningLine}
           </div>
           <span class="status-pill ${statusTone}">${escapeHtml(statusLabel)}</span>
         </div>
       `;
     })
     .join("");
+}
+
+function refreshPhasePreviewFromCurrentInput(sourceLabel = "Eligibility updated") {
+  if (!taskAbiInput.value.trim()) {
+    return;
+  }
+
+  try {
+    const abiEntries = parseAbiEntries(taskAbiInput.value);
+    requestRemoteMintAutofill(abiEntries, {
+      sourceLabel,
+      includeFunction: false,
+      includeArgs: false,
+      includeQuantity: false,
+      includePrice: false,
+      includePlatform: false
+    }).catch(() => {});
+  } catch {
+    // Ignore preview refresh when ABI is incomplete.
+  }
 }
 
 function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
@@ -2267,7 +2308,7 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
   const chainKey = taskChainInput.value;
   const contractAddress = taskContractInput.value.trim();
 
-  if (!chainKey || !contractAddress) {
+  if (!chainKey) {
     return null;
   }
 
@@ -2281,7 +2322,10 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
         chainKey,
         contractAddress,
         abi: abiEntries,
-        mintFunction: taskFunctionInput.value
+        mintFunction: taskFunctionInput.value,
+        walletIds: selectedWalletIds(),
+        rpcNodeIds: selectedRpcIds(),
+        quantityPerWallet: Number(taskQuantityInput.value || 1)
       })
     });
 
@@ -2426,6 +2470,15 @@ async function fetchAbiForCurrentTask(options = {}) {
         "ABI Loaded"
       );
     }
+
+    requestRemoteMintAutofill(payload.abi || [], {
+      sourceLabel: `${payload.provider || "Explorer"} wallet preview`,
+      includeFunction: false,
+      includeArgs: false,
+      includeQuantity: false,
+      includePrice: false,
+      includePlatform: false
+    }).catch(() => {});
   } catch {
     if (requestId === abiExplorerFetchRequestId) {
       updateAbiStatus();
@@ -3025,6 +3078,10 @@ taskFunctionInput.addEventListener("change", () => {
       remote: false
     });
   }
+});
+
+taskQuantityInput.addEventListener("change", () => {
+  refreshPhasePreviewFromCurrentInput("Quantity updated");
 });
 
 taskAbiInput.addEventListener("input", () => {

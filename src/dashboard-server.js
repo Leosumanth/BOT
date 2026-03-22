@@ -830,8 +830,11 @@ function getChainRpcNodes(chainKey) {
   return (appState?.rpcNodes || []).filter((node) => node.enabled && node.chainKey === chainKey);
 }
 
-async function createReadProviderForChain(chainKey) {
-  const chainRpcNodes = getChainRpcNodes(chainKey);
+async function createReadProviderForChain(chainKey, preferredRpcNodeIds = []) {
+  const preferredIds = Array.isArray(preferredRpcNodeIds) ? preferredRpcNodeIds : [];
+  const chainRpcNodes = getChainRpcNodes(chainKey).filter(
+    (node) => preferredIds.length === 0 || preferredIds.includes(node.id)
+  );
   if (chainRpcNodes.length === 0) {
     return {
       provider: null,
@@ -868,7 +871,7 @@ async function createReadProviderForChain(chainKey) {
   };
 }
 
-async function inferMintPriceFromContract({ chainKey, contractAddress, abiEntries }) {
+async function inferMintPriceFromContract({ chainKey, contractAddress, abiEntries, rpcNodeIds = [] }) {
   const preferredPriceFunctions = [
     "mintPrice",
     "publicMintPrice",
@@ -889,7 +892,7 @@ async function inferMintPriceFromContract({ chainKey, contractAddress, abiEntrie
     "getCost",
     "pricePerToken"
   ];
-  const { provider, rpcNode, warning } = await createReadProviderForChain(chainKey);
+  const { provider, rpcNode, warning } = await createReadProviderForChain(chainKey, rpcNodeIds);
 
   if (!provider) {
     return {
@@ -2074,24 +2077,141 @@ async function buildPhaseTasksFromTask(task, abiEntries) {
   );
 }
 
-async function buildPhaseAutofillPreview({ chainKey, contractAddress, abiEntries }) {
+function summarizePhaseEligibility(entries = []) {
+  const summary = {
+    eligible: [],
+    review: [],
+    ineligible: []
+  };
+
+  entries.forEach((entry) => {
+    if (entry.status === "eligible") {
+      summary.eligible.push(entry.walletLabel);
+      return;
+    }
+
+    if (entry.status === "ineligible") {
+      summary.ineligible.push(entry.walletLabel);
+      return;
+    }
+
+    summary.review.push(entry.walletLabel);
+  });
+
+  return summary;
+}
+
+function buildPhaseEligibilityPreview(summary, selectedWalletCount) {
+  if (!selectedWalletCount) {
+    return {
+      status: "no_wallets",
+      label: "Select wallet(s) to check eligibility"
+    };
+  }
+
+  const parts = [];
+  if (summary.eligible.length > 0) {
+    parts.push(`${summary.eligible.length} eligible`);
+  }
+  if (summary.review.length > 0) {
+    parts.push(`${summary.review.length} review`);
+  }
+  if (summary.ineligible.length > 0) {
+    parts.push(`${summary.ineligible.length} excluded`);
+  }
+
+  return {
+    status:
+      summary.eligible.length > 0
+        ? "eligible"
+        : summary.review.length > 0
+          ? "review"
+          : "ineligible",
+    label: parts.join(" · ") || `${selectedWalletCount} wallet(s) selected`
+  };
+}
+
+async function buildPhaseAutofillPreview({
+  chainKey,
+  contractAddress,
+  abiEntries,
+  walletIds = [],
+  rpcNodeIds = [],
+  quantityPerWallet = 1
+}) {
   const candidates = buildMintPhaseCandidates(abiEntries);
-  if (!candidates.length || !chainKey || !ethers.isAddress(contractAddress)) {
+  if (!candidates.length) {
     return [];
   }
 
-  const { provider, rpcNode, warning } = await createReadProviderForChain(chainKey);
-  const contract = provider ? new ethers.Contract(contractAddress, abiEntries, provider) : null;
+  const selectedWallets = (appState?.wallets || []).filter((wallet) => (walletIds || []).includes(wallet.id));
+  const hasValidContract = Boolean(chainKey) && ethers.isAddress(contractAddress);
+  const { provider, rpcNode, warning } =
+    hasValidContract && chainKey
+      ? await createReadProviderForChain(chainKey, rpcNodeIds)
+      : {
+          provider: null,
+          rpcNode: null,
+          warning: chainKey ? null : "Select a chain to verify phase eligibility"
+        };
+  const contract = provider && hasValidContract ? new ethers.Contract(contractAddress, abiEntries, provider) : null;
 
   return Promise.all(
     candidates.map(async (candidate) => {
       const phaseType = candidate.phaseType;
+      const eligibilityFunction = findPhaseEligibilityFunction(abiEntries, phaseType);
       const priceInfo = contract
         ? await readPhasePrice(contract, abiEntries, phaseType)
         : { priceEth: null, priceSource: null };
       const startTimeInfo = contract
         ? await readPhaseStartTime(contract, abiEntries, phaseType)
         : { waitUntilIso: null, source: null };
+      const eligibilityEntries = [];
+
+      if (selectedWallets.length > 0) {
+        if (!hasValidContract) {
+          selectedWallets.forEach((wallet) => {
+            eligibilityEntries.push({
+              walletId: wallet.id,
+              walletLabel: wallet.label || wallet.addressShort || wallet.address,
+              status: "review",
+              source: "missing_contract",
+              reason: "Add a valid contract address to check eligibility"
+            });
+          });
+        } else if (!provider) {
+          selectedWallets.forEach((wallet) => {
+            eligibilityEntries.push({
+              walletId: wallet.id,
+              walletLabel: wallet.label || wallet.addressShort || wallet.address,
+              status: "review",
+              source: "missing_rpc",
+              reason: warning || "Add an RPC node for this chain to check eligibility"
+            });
+          });
+        } else {
+          for (const wallet of selectedWallets) {
+            const eligibility = await evaluateWalletPhaseEligibility({
+              provider,
+              contractAddress,
+              abiEntries,
+              candidate,
+              walletAddress: wallet.address,
+              quantityPerWallet,
+              eligibilityFunction,
+              phasePriceEth: priceInfo.priceEth,
+              phaseType
+            });
+
+            eligibilityEntries.push({
+              walletId: wallet.id,
+              walletLabel: wallet.label || wallet.addressShort || wallet.address,
+              ...eligibility
+            });
+          }
+        }
+      }
+
       const readyState = buildPhaseTaskReadyState(
         {
           autoArm: true,
@@ -2148,6 +2268,11 @@ async function buildPhaseAutofillPreview({ chainKey, contractAddress, abiEntries
         abiEntries
       );
       const autoLaunchPlan = resolveTaskAutoLaunchPlan(previewTask, abiEntries);
+      const eligibilitySummary = summarizePhaseEligibility(eligibilityEntries);
+      const eligibilityPreview = buildPhaseEligibilityPreview(
+        eligibilitySummary,
+        selectedWallets.length
+      );
 
       return {
         phaseType,
@@ -2160,21 +2285,37 @@ async function buildPhaseAutofillPreview({ chainKey, contractAddress, abiEntries
         startTimeSource: startTimeInfo.source,
         autoLaunchMode: autoLaunchPlan.mode,
         autoLaunchLabel: describeAutoLaunchMode(autoLaunchPlan.mode),
+        eligibilityStatus: eligibilityPreview.status,
+        eligibilityLabel: eligibilityPreview.label,
+        eligibilityWallets: eligibilityEntries,
+        eligibleWalletLabels: eligibilitySummary.eligible,
+        reviewWalletLabels: eligibilitySummary.review,
+        ineligibleWalletLabels: eligibilitySummary.ineligible,
         requiresReview: taskRequiresManualLaunchReview(previewTask, abiEntries),
         rpcNodeName: rpcNode?.name || null,
-        warning: warning || null
+        warning:
+          warning ||
+          (!hasValidContract ? "Add a valid contract address to read on-chain phase data" : null)
       };
     })
   );
 }
 
-async function buildMintAutofill({ chainKey, contractAddress, abiEntries, requestedFunction = "" }) {
+async function buildMintAutofill({
+  chainKey,
+  contractAddress,
+  abiEntries,
+  requestedFunction = "",
+  walletIds = [],
+  rpcNodeIds = [],
+  quantityPerWallet = 1
+}) {
   const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
   const warnings = [];
   const mintStartDetection = detectMintStartFunctionsFromAbi(abiEntries);
   const priceResolution =
     chainKey && contractAddress && ethers.isAddress(contractAddress)
-      ? await inferMintPriceFromContract({ chainKey, contractAddress, abiEntries })
+      ? await inferMintPriceFromContract({ chainKey, contractAddress, abiEntries, rpcNodeIds })
       : {
           priceEth: null,
           priceSource: null,
@@ -2189,7 +2330,10 @@ async function buildMintAutofill({ chainKey, contractAddress, abiEntries, reques
   const phasePreview = await buildPhaseAutofillPreview({
     chainKey,
     contractAddress,
-    abiEntries
+    abiEntries,
+    walletIds,
+    rpcNodeIds,
+    quantityPerWallet
   });
 
   return {
@@ -4203,7 +4347,10 @@ async function handleContractAutofill(request, response) {
       chainKey,
       contractAddress,
       abiEntries,
-      requestedFunction: payload.mintFunction
+      requestedFunction: payload.mintFunction,
+      walletIds: Array.isArray(payload.walletIds) ? payload.walletIds : [],
+      rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : [],
+      quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || 1))
     });
 
     sendJson(response, 200, {
