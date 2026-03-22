@@ -20,7 +20,7 @@ It is designed as a reusable template for contracts that expose a mint function 
 - supports dynamic gas strategy presets that auto-adjust to live network conditions
 - optionally simulates the mint transaction before sending
 - supports dry-run mode for preflight checks
-- retries failed mint attempts with a configurable delay
+- retries transient mint failures intelligently with a configurable delay
 - can keep retrying failed mint attempts inside a retry window until one succeeds
 - can run wallets sequentially or in parallel
 - can poll a contract read function until mint is ready
@@ -41,6 +41,7 @@ It is designed as a reusable template for contracts that expose a mint function 
 - can fetch verified contract ABI JSON from explorer APIs inside the dashboard
 - can auto-detect `mint`, `publicMint`, and `safeMint` from ABI JSON to reduce task setup errors
 - can auto-fill the mint function, args template, platform, quantity default, and detected ETH price after ABI upload or explorer fetch
+- can auto-detect mint-start signals like `saleActive()`, `paused()`, `totalSupply()`, and contract state reads to fire as soon as mint opens
 
 ## Setup
 
@@ -121,7 +122,7 @@ Copy-Item .env.example .env
 - `MAX_RETRIES`: number of send attempts per wallet
 - `RETRY_DELAY_MS`: wait time between retries
 - `RETRY_WINDOW_MS`: optional retry window in milliseconds; the bot keeps retrying inside this window even after `MAX_RETRIES` is exhausted
-- `WALLET_MODE`: `sequential` or `parallel`
+- `WALLET_MODE`: `parallel` or `sequential`, defaults to `parallel`
 - `CHAIN_ID`: optional expected chain ID safety check
 - `RECEIPT_CONFIRMATIONS`: number of confirmations to wait for
 - `TX_TIMEOUT_MS`: optional receipt wait timeout
@@ -135,6 +136,8 @@ Copy-Item .env.example .env
 - `PRIVATE_RELAY_ONLY`: fail the run instead of falling back to the public RPC when relay submission fails
 - `START_JITTER_MS`: random startup delay per wallet, useful in parallel mode
 - `NONCE_OFFSET`: optional nonce offset if you deliberately want to skip ahead
+- `MINT_START_DETECTION_ENABLED`: poll auto-detected sale-open signals before broadcasting
+- `MINT_START_DETECTION_JSON`: optional JSON object describing sale-open detectors. `saleActiveFunction` and `stateFunction` are primary open signals; `pausedFunction` and `totalSupplyFunction` are supplemental context checks
 - `READY_CHECK_FUNCTION`: optional read function to poll before minting
 - `READY_CHECK_ARGS`: JSON array for the ready-check function
 - `READY_CHECK_EXPECTED`: JSON value used when `READY_CHECK_MODE=equals`
@@ -225,6 +228,13 @@ READY_CHECK_FUNCTION=isPublicSaleOpen
 READY_CHECK_ARGS=[]
 READY_CHECK_MODE=truthy
 READY_CHECK_INTERVAL_MS=500
+```
+
+Auto-detect mint start from common contract state reads instead of relying only on time:
+
+```env
+MINT_START_DETECTION_ENABLED=true
+MINT_START_DETECTION_JSON={"saleActiveFunction":"saleActive","totalSupplyFunction":"totalSupply","stateFunction":"saleState","pollIntervalMs":500}
 ```
 
 Use the normal dynamic gas profile with a small extra fee boost:
@@ -403,5 +413,6 @@ API and service requirements:
 - You must use the correct ABI and exact function arguments for the collection you want to mint.
 - The dashboard now auto-detects `mint`, `publicMint`, and `safeMint` from pasted, uploaded, or explorer-fetched ABIs and auto-fills the mint function when your current selection is not valid for that ABI.
 - When a contract address, chain, and ABI are available in the dashboard, the task builder now auto-fills the mint function, mint args template, platform, and default quantity, and it tries to read the mint price from common on-chain view functions such as `mintPrice()` or `publicSalePrice()`.
+- The dashboard also auto-detects mint-start signals from the ABI. When it finds strong indicators like `saleActive()`, `paused()`, or a sale state read, it arms mint-start detection automatically and uses `totalSupply()` as a supplemental signal when available.
 - Test with a low-risk wallet first.
 - Keep your private key secure and never commit `.env`.

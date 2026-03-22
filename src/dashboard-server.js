@@ -253,6 +253,8 @@ function defaultTaskState() {
     preSignTransactions: true,
     multiRpcBroadcast: false,
     schedulePending: false,
+    mintStartDetectionEnabled: false,
+    mintStartDetectionConfig: null,
     readyCheckFunction: "",
     readyCheckArgs: "[]",
     readyCheckMode: "truthy",
@@ -317,6 +319,12 @@ function sanitizeTaskInput(payload, existingTask = null) {
         ? true
         : Boolean(base.schedulePending)
       : false;
+  const mintStartDetectionConfig =
+    payload.mintStartDetectionConfig && typeof payload.mintStartDetectionConfig === "object"
+      ? payload.mintStartDetectionConfig
+      : base.mintStartDetectionConfig && typeof base.mintStartDetectionConfig === "object"
+        ? base.mintStartDetectionConfig
+        : null;
 
   return {
     ...base,
@@ -358,6 +366,10 @@ function sanitizeTaskInput(payload, existingTask = null) {
     preSignTransactions: true,
     multiRpcBroadcast: Boolean(payload.multiRpcBroadcast ?? base.multiRpcBroadcast ?? false),
     schedulePending,
+    mintStartDetectionEnabled: Boolean(
+      payload.mintStartDetectionEnabled ?? base.mintStartDetectionEnabled ?? false
+    ),
+    mintStartDetectionConfig,
     readyCheckFunction: String(payload.readyCheckFunction ?? base.readyCheckFunction ?? "").trim(),
     readyCheckArgs: String(payload.readyCheckArgs ?? base.readyCheckArgs ?? "[]").trim() || "[]",
     readyCheckMode: String(payload.readyCheckMode || base.readyCheckMode || "truthy"),
@@ -725,9 +737,131 @@ async function inferMintPriceFromContract({ chainKey, contractAddress, abiEntrie
   };
 }
 
+function getReadOnlyAbiFunctions(abiEntries) {
+  return abiEntries.filter(
+    (entry) =>
+      entry?.type === "function" &&
+      Array.isArray(entry.inputs) &&
+      entry.inputs.length === 0 &&
+      Array.isArray(entry.outputs) &&
+      entry.outputs.length <= 1 &&
+      ["view", "pure"].includes(entry.stateMutability)
+  );
+}
+
+function findMintStartReadFunction(abiEntries, preferredNames, outputMatcher = () => true) {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+
+  for (const preferredName of preferredNames) {
+    const actualName = namesByLower.get(preferredName.toLowerCase());
+    if (!actualName) {
+      continue;
+    }
+
+    const entry = findAbiFunctionEntry(abiEntries, actualName);
+    if (
+      entry &&
+      Array.isArray(entry.inputs) &&
+      entry.inputs.length === 0 &&
+      Array.isArray(entry.outputs) &&
+      entry.outputs.length <= 1 &&
+      ["view", "pure"].includes(entry.stateMutability) &&
+      outputMatcher(entry.outputs?.[0]?.type)
+    ) {
+      return actualName;
+    }
+  }
+
+  return null;
+}
+
+function detectMintStartFunctionsFromAbi(abiEntries) {
+  const readOnlyFunctions = getReadOnlyAbiFunctions(abiEntries);
+  const readOnlyFunctionNames = new Set(readOnlyFunctions.map((entry) => entry.name.toLowerCase()));
+  const saleActiveFunction = findMintStartReadFunction(
+    abiEntries,
+    [
+      "saleActive",
+      "isSaleActive",
+      "publicSaleActive",
+      "isPublicSaleActive",
+      "mintActive",
+      "isMintActive",
+      "publicMintActive",
+      "saleOpen",
+      "isSaleOpen",
+      "publicSaleOpen",
+      "isPublicSaleOpen",
+      "mintOpen",
+      "isMintOpen",
+      "mintLive",
+      "isMintLive",
+      "mintStarted",
+      "isMintStarted",
+      "live",
+      "isLive"
+    ],
+    (type) => /^bool$/i.test(String(type || ""))
+  );
+  const pausedFunction = findMintStartReadFunction(
+    abiEntries,
+    ["paused", "isPaused", "mintPaused", "salePaused", "publicSalePaused"],
+    (type) => /^bool$/i.test(String(type || ""))
+  );
+  const totalSupplyFunction = findMintStartReadFunction(
+    abiEntries,
+    ["totalSupply", "minted", "mintedSupply", "tokensMinted", "currentSupply", "supply"],
+    (type) => isIntegerAbiType(type)
+  );
+
+  const stateFunction =
+    findMintStartReadFunction(
+      abiEntries,
+      [
+        "saleState",
+        "publicSaleState",
+        "state",
+        "mintState",
+        "dropState",
+        "phase",
+        "salePhase",
+        "status",
+        "mintStatus"
+      ],
+      (type) => /^bool$/i.test(String(type || "")) || isIntegerAbiType(type) || /^string$/i.test(String(type || ""))
+    ) ||
+    readOnlyFunctions.find((entry) => {
+      if (readOnlyFunctionNames.has(entry.name.toLowerCase())) {
+        return /state|phase|status/i.test(entry.name);
+      }
+
+      return false;
+    })?.name ||
+    null;
+
+  const enabled = Boolean(saleActiveFunction || stateFunction);
+  const signals = [
+    saleActiveFunction ? `${saleActiveFunction}()` : null,
+    pausedFunction ? `${pausedFunction}()` : null,
+    totalSupplyFunction ? `${totalSupplyFunction}()` : null,
+    stateFunction ? `${stateFunction}()` : null
+  ].filter(Boolean);
+
+  return {
+    enabled,
+    pollIntervalMs: 500,
+    saleActiveFunction,
+    pausedFunction,
+    totalSupplyFunction,
+    stateFunction,
+    signals
+  };
+}
+
 async function buildMintAutofill({ chainKey, contractAddress, abiEntries, requestedFunction = "" }) {
   const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
   const warnings = [];
+  const mintStartDetection = detectMintStartFunctionsFromAbi(abiEntries);
   const priceResolution =
     chainKey && contractAddress && ethers.isAddress(contractAddress)
       ? await inferMintPriceFromContract({ chainKey, contractAddress, abiEntries })
@@ -749,6 +883,7 @@ async function buildMintAutofill({ chainKey, contractAddress, abiEntries, reques
     priceEth: priceResolution.priceEth || "0",
     platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
     detectedMintFunctions: resolvedMintFunction.detectedFunctions,
+    mintStartDetection,
     priceSource: priceResolution.priceSource,
     rpcNodeName: priceResolution.rpcNodeName || null,
     warnings
@@ -1637,6 +1772,12 @@ function deriveTaskProgressFromLog(task, entry) {
     phase = "Scheduled";
     percent = 4;
   } else if (
+    entry.message.includes("Waiting for mint start detection") ||
+    entry.message.includes("Mint start detection armed")
+  ) {
+    phase = "Arming";
+    percent = Math.max(percent, 12);
+  } else if (
     entry.message.includes("Waiting for event trigger") ||
     entry.message.includes("Waiting for mempool trigger")
   ) {
@@ -1801,6 +1942,8 @@ async function buildConfigForTask(task) {
     WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
     PRE_SIGN_TRANSACTIONS: true,
     MULTI_RPC_BROADCAST: task.multiRpcBroadcast,
+    MINT_START_DETECTION_ENABLED: task.mintStartDetectionEnabled,
+    MINT_START_DETECTION_JSON: JSON.stringify(task.mintStartDetectionConfig || {}),
     READY_CHECK_FUNCTION: task.readyCheckFunction,
     READY_CHECK_ARGS: task.readyCheckArgs,
     READY_CHECK_MODE: task.readyCheckMode,

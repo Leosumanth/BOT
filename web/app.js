@@ -161,6 +161,10 @@ const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
 let abiAutofillTimer = null;
 let abiAutofillRequestId = 0;
+let currentMintStartDetection = {
+  enabled: false,
+  config: null
+};
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1518,6 +1522,30 @@ function parseAbiEntries(value) {
   return Array.isArray(parsed) ? parsed : parsed.abi || [];
 }
 
+function normalizeMintStartDetectionState(value = null) {
+  const config = value && typeof value === "object" ? value : null;
+  const enabled = Boolean(config?.enabled && (config?.saleActiveFunction || config?.stateFunction));
+
+  return {
+    enabled,
+    config: config
+      ? {
+          enabled,
+          pollIntervalMs: Number(config.pollIntervalMs || 500) || 500,
+          saleActiveFunction: config.saleActiveFunction || null,
+          pausedFunction: config.pausedFunction || null,
+          totalSupplyFunction: config.totalSupplyFunction || null,
+          stateFunction: config.stateFunction || null,
+          signals: Array.isArray(config.signals) ? config.signals : []
+        }
+      : null
+  };
+}
+
+function setMintStartDetectionState(value = null) {
+  currentMintStartDetection = normalizeMintStartDetectionState(value);
+}
+
 function findAbiFunctionEntry(abiEntries, functionName) {
   const requested = String(functionName || "").trim().toLowerCase();
   if (!requested) {
@@ -1751,6 +1779,9 @@ function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
   if (sourceLabel) {
     parts.push(sourceLabel);
   }
+  if (autofill?.mintStartDetection?.enabled) {
+    parts.push("mint start detection armed");
+  }
   if (autofill?.priceSource) {
     parts.push(`price via ${autofill.priceSource}`);
   } else if (autofill?.warnings?.length) {
@@ -1828,6 +1859,7 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
       return null;
     }
 
+    setMintStartDetectionState(autofill.mintStartDetection || null);
     applyMintAutofill(autofill, {
       includeFunction,
       includeArgs,
@@ -1871,6 +1903,7 @@ function applyAbiAutofillFromCurrentInput(options = {}) {
   try {
     const abiEntries = parseAbiEntries(taskAbiInput.value);
     const localAutofill = buildLocalMintAutofill(abiEntries, taskFunctionInput.value);
+    setMintStartDetectionState(null);
     applyMintAutofill(localAutofill, {
       includeFunction,
       includeArgs,
@@ -1919,6 +1952,7 @@ async function fetchAbiForCurrentTask() {
       `/api/explorer/abi?chainKey=${encodeURIComponent(chainKey)}&address=${encodeURIComponent(address)}`
     );
     taskAbiInput.value = JSON.stringify(payload.abi, null, 2);
+    setMintStartDetectionState(payload.autofill?.mintStartDetection || null);
     applyMintAutofill(payload.autofill || buildLocalMintAutofill(payload.abi || [], taskFunctionInput.value));
     updateAbiStatus(buildAbiStatusSourceLabel(payload.provider || "Explorer", payload.autofill));
     showToast(
@@ -1994,6 +2028,12 @@ function openTaskModal(task = null) {
   taskPrivateRelayOnlyToggle.checked = Boolean(task?.privateRelayOnly);
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
+  setMintStartDetectionState({
+    enabled: task?.mintStartDetectionEnabled,
+    ...(task?.mintStartDetectionConfig && typeof task.mintStartDetectionConfig === "object"
+      ? task.mintStartDetectionConfig
+      : {})
+  });
   taskAbiFileInput.value = "";
   fetchAbiButton.disabled = false;
   fetchAbiButton.textContent = "Fetch from Explorer";
@@ -2049,6 +2089,8 @@ function buildTaskPayload() {
       taskScheduleToggle.checked && taskStartTimeInput.value
         ? new Date(taskStartTimeInput.value).toISOString()
         : "",
+    mintStartDetectionEnabled: currentMintStartDetection.enabled,
+    mintStartDetectionConfig: currentMintStartDetection.config,
     readyCheckFunction: taskReadyFunctionInput.value,
     readyCheckArgs: taskReadyArgsInput.value,
     readyCheckMode: taskReadyModeInput.value,

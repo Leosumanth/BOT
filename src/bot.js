@@ -312,6 +312,55 @@ function formatGwei(value) {
   return `${ethers.formatUnits(value, "gwei")} gwei`;
 }
 
+function messageIncludesAny(error, patterns) {
+  const text = [error?.shortMessage, error?.reason, error?.message]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return patterns.some((pattern) => text.includes(pattern));
+}
+
+function isRetryableMintError(error) {
+  if (error instanceof AbortRunError) {
+    return false;
+  }
+
+  if (error?.receipt?.status === 0) {
+    return false;
+  }
+
+  const code = String(error?.code || "").toUpperCase();
+  if (
+    code === "CALL_EXCEPTION" ||
+    code === "INSUFFICIENT_FUNDS" ||
+    code === "ACTION_REJECTED" ||
+    code === "INVALID_ARGUMENT" ||
+    code === "UNSUPPORTED_OPERATION"
+  ) {
+    return false;
+  }
+
+  if (
+    messageIncludesAny(error, [
+      "execution reverted",
+      "transaction reverted",
+      "mint transaction reverted",
+      "call exception",
+      "insufficient funds",
+      "user rejected",
+      "user denied",
+      "denied transaction",
+      "invalid argument",
+      "unsupported operation"
+    ])
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function hasRetryBudgetRemaining(config, attempt, retryWindowDeadline) {
   if (attempt < config.maxRetries) {
     return true;
@@ -912,6 +961,189 @@ function evaluateReadyState(config, value) {
     stringifyForLog(normalizeForComparison(value)) ===
     stringifyForLog(normalizeForComparison(config.readyCheckExpected))
   );
+}
+
+function normalizeNumberish(value) {
+  if (typeof value === "bigint") {
+    return value;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return BigInt(value.trim());
+  }
+
+  return null;
+}
+
+function isMintStartStateOpen(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+
+    if (/closed|pause|inactive|disabled|pending|off|notopen|notlive/.test(normalized)) {
+      return false;
+    }
+
+    return /open|live|active|public|mint|sale/.test(normalized);
+  }
+
+  return false;
+}
+
+function buildMintStartDetectors(contract, config) {
+  const detectionConfig = config.mintStartDetectionConfig || {};
+  const checks = [
+    detectionConfig.saleActiveFunction
+      ? {
+          key: "saleActive",
+          functionName: detectionConfig.saleActiveFunction,
+          semantics: "truthy"
+        }
+      : null,
+    detectionConfig.pausedFunction
+      ? {
+          key: "paused",
+          functionName: detectionConfig.pausedFunction,
+          semantics: "paused"
+        }
+      : null,
+    detectionConfig.totalSupplyFunction
+      ? {
+          key: "totalSupply",
+          functionName: detectionConfig.totalSupplyFunction,
+          semantics: "increase"
+        }
+      : null,
+    detectionConfig.stateFunction
+      ? {
+          key: "state",
+          functionName: detectionConfig.stateFunction,
+          semantics: "state"
+        }
+      : null
+  ].filter(Boolean);
+
+  return checks.map((check) => ({
+    ...check,
+    method: getContractMethod(contract, check.functionName),
+    baselineRaw: undefined,
+    baselineLabel: null,
+    disabled: false
+  }));
+}
+
+async function waitForMintStartDetection(contract, config, walletIndex, signal, logger) {
+  if (!config.mintStartDetectionEnabled) {
+    return;
+  }
+
+  const detectors = buildMintStartDetectors(contract, config);
+  if (detectors.length === 0) {
+    return;
+  }
+
+  const pollIntervalMs = Math.max(
+    100,
+    Number(config.mintStartDetectionConfig?.pollIntervalMs || config.readyCheckIntervalMs || 500)
+  );
+
+  logger.info(
+    `[wallet ${walletIndex}] Mint start detection armed: ${detectors
+      .map((detector) => `${detector.functionName}()`)
+      .join(", ")}`
+  );
+
+  let pollCount = 0;
+
+  while (true) {
+    throwIfAborted(signal);
+    pollCount += 1;
+    const summaries = [];
+
+    for (const detector of detectors) {
+      if (detector.disabled) {
+        continue;
+      }
+
+      try {
+        const value = await detector.method();
+        const valueLabel = stringifyForLog(normalizeForComparison(value));
+        let isOpen = false;
+
+        if (detector.semantics === "truthy") {
+          isOpen = Boolean(value);
+        } else if (detector.semantics === "paused") {
+          isOpen = false;
+        } else if (detector.semantics === "increase") {
+          if (detector.baselineLabel == null) {
+            detector.baselineRaw = value;
+            detector.baselineLabel = valueLabel;
+            logger.info(
+              `[wallet ${walletIndex}] Mint start baseline ${detector.functionName} -> ${valueLabel}`
+            );
+          } else {
+            const currentValue = normalizeNumberish(value);
+            const baselineValue = normalizeNumberish(detector.baselineRaw);
+            isOpen = currentValue != null && baselineValue != null && currentValue > baselineValue;
+          }
+        } else if (detector.semantics === "state") {
+          if (detector.baselineLabel == null) {
+            detector.baselineRaw = value;
+            detector.baselineLabel = valueLabel;
+            logger.info(
+              `[wallet ${walletIndex}] Mint start baseline ${detector.functionName} -> ${valueLabel}`
+            );
+            isOpen = isMintStartStateOpen(value);
+          } else {
+            isOpen =
+              isMintStartStateOpen(value) ||
+              valueLabel !== detector.baselineLabel;
+          }
+        }
+
+        summaries.push(`${detector.functionName}=${valueLabel}`);
+
+        if (isOpen) {
+          logger.info(
+            `[wallet ${walletIndex}] Mint start detected via ${detector.functionName} -> ${valueLabel}`
+          );
+          return;
+        }
+      } catch (error) {
+        detector.disabled = true;
+        logger.error(
+          `[wallet ${walletIndex}] Mint start detector ${detector.functionName} disabled: ${formatError(
+            error
+          )}`
+        );
+      }
+    }
+
+    if (detectors.every((detector) => detector.disabled)) {
+      logger.error(
+        `[wallet ${walletIndex}] All mint start detectors failed; continuing without mint start detection`
+      );
+      return;
+    }
+
+    if (pollCount === 1 || pollCount % 10 === 0) {
+      logger.info(
+        `[wallet ${walletIndex}] Waiting for mint start detection: ${summaries.join(" | ")}`
+      );
+    }
+
+    await sleep(pollIntervalMs, signal);
+  }
 }
 
 async function maybeWaitJitter(maxJitterMs, walletIndex, signal, logger) {
@@ -1690,6 +1922,15 @@ async function tryPreparePresignedMint(config, session, context) {
   }
 }
 
+async function ensurePreparedMint(config, session, context) {
+  if (session.preparedMint) {
+    return session.preparedMint;
+  }
+
+  session.preparedMint = await tryPreparePresignedMint(config, session, context);
+  return session.preparedMint;
+}
+
 async function closeWalletSession(session) {
   if (!session) {
     return;
@@ -1719,6 +1960,7 @@ async function executeWalletSession(config, session, context) {
       }`
     );
 
+    await waitForMintStartDetection(contract, config, walletIndex, signal, logger);
     await waitForReadyCheck(contract, config, walletIndex, signal, logger);
 
     let mintResult = null;
@@ -1750,12 +1992,12 @@ async function executeWalletSession(config, session, context) {
           };
         }
 
-        if (!session.preparedMint) {
+        const preparedMint = await ensurePreparedMint(config, session, context);
+        if (!preparedMint) {
           throw new Error("Pre-signed mint transaction is unavailable");
         }
 
         usedPreparedMint = true;
-        const preparedMint = session.preparedMint;
         logger.info(
           `[wallet ${walletIndex}] Broadcasting pre-signed mint tx: ${preparedMint.hash}`
         );
@@ -1814,18 +2056,20 @@ async function executeWalletSession(config, session, context) {
         }
 
         lastAttemptError = error;
-        const willRetry = hasRetryBudgetRemaining(config, attempt, retryWindowDeadline);
+        const retryable = isRetryableMintError(error);
+        const willRetry = retryable && hasRetryBudgetRemaining(config, attempt, retryWindowDeadline);
         const retryWindowRemainingMs =
           retryWindowDeadline == null ? 0 : Math.max(0, retryWindowDeadline - Date.now());
+        const retrySuffix = !retryable
+          ? " - not retryable"
+          : willRetry
+            ? retryWindowDeadline
+              ? ` - retrying in ${config.retryDelayMs}ms (${retryWindowRemainingMs}ms retry window remaining)`
+              : ` - retrying in ${config.retryDelayMs}ms`
+            : "";
 
         logger.error(
-          `[wallet ${walletIndex}] Attempt ${attempt} failed: ${formatError(error)}${
-            willRetry
-              ? retryWindowDeadline
-                ? ` - retrying in ${config.retryDelayMs}ms (${retryWindowRemainingMs}ms retry window remaining)`
-                : ` - retrying in ${config.retryDelayMs}ms`
-              : ""
-          }`
+          `[wallet ${walletIndex}] Attempt ${attempt} failed: ${formatError(error)}${retrySuffix}`
         );
 
         if (!willRetry) {
@@ -2018,6 +2262,15 @@ async function runMintBot(config, hooks = {}) {
   logger.info(`Simulation: ${config.simulateTransaction ? "enabled" : "disabled"}`);
   logger.info(`Dry run: ${config.dryRun ? "enabled" : "disabled"}`);
   logger.info(`Gas strategy: ${config.gasStrategy}`);
+  logger.info(
+    `Mint start detection: ${
+      config.mintStartDetectionEnabled
+        ? (config.mintStartDetectionConfig?.signals || [])
+            .map((signalName) => signalName)
+            .join(", ") || "enabled"
+        : "disabled"
+    }`
+  );
   logger.info(`Ready check: ${config.readyCheckFunction || "disabled"}`);
   logger.info(`Execution trigger: ${config.executionTriggerMode}`);
   logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);

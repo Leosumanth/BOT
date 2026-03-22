@@ -27,12 +27,14 @@ const defaultInputValues = {
   DRY_RUN: false,
   MAX_RETRIES: "1",
   RETRY_DELAY_MS: "1000",
-  WALLET_MODE: "sequential",
+  WALLET_MODE: "parallel",
   CHAIN_ID: "",
   RECEIPT_CONFIRMATIONS: "1",
   TX_TIMEOUT_MS: "",
   START_JITTER_MS: "0",
   NONCE_OFFSET: "0",
+  MINT_START_DETECTION_ENABLED: false,
+  MINT_START_DETECTION_JSON: "",
   READY_CHECK_FUNCTION: "",
   READY_CHECK_ARGS: "[]",
   READY_CHECK_EXPECTED: "",
@@ -275,7 +277,7 @@ function loadPrivateKeys(raw) {
 }
 
 function loadWalletMode(raw) {
-  const mode = (optionalString(raw, "WALLET_MODE") || "sequential").toLowerCase();
+  const mode = (optionalString(raw, "WALLET_MODE") || "parallel").toLowerCase();
   const supportedModes = new Set(["sequential", "parallel"]);
 
   if (!supportedModes.has(mode)) {
@@ -399,6 +401,11 @@ function normalizeConfig(raw) {
     txTimeoutMs: optionalInteger(raw, "TX_TIMEOUT_MS"),
     startJitterMs: optionalInteger(raw, "START_JITTER_MS") || 0,
     nonceOffset: optionalInteger(raw, "NONCE_OFFSET") || 0,
+    mintStartDetectionEnabled: optionalBoolean(raw, "MINT_START_DETECTION_ENABLED", false),
+    mintStartDetectionConfig: parseJsonObjectValue(
+      raw.MINT_START_DETECTION_JSON,
+      "MINT_START_DETECTION_JSON"
+    ),
     gasStrategy: loadGasStrategy(raw),
     gasBoostPercent: optionalNumber(raw, "GAS_BOOST_PERCENT") || 0,
     priorityBoostPercent: optionalNumber(raw, "PRIORITY_BOOST_PERCENT") || 0,
@@ -482,6 +489,16 @@ function normalizeConfig(raw) {
     throw new Error(
       "At least one ws:// or wss:// RPC URL is required when EXECUTION_TRIGGER_MODE=mempool"
     );
+  }
+
+  if (
+    normalized.mintStartDetectionEnabled &&
+    !(
+      normalized.mintStartDetectionConfig?.saleActiveFunction ||
+      normalized.mintStartDetectionConfig?.stateFunction
+    )
+  ) {
+    normalized.mintStartDetectionEnabled = false;
   }
 
   return normalized;
