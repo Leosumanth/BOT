@@ -792,6 +792,10 @@ body[data-auth-state="locked"] .scanline-layer {
   margin-bottom: 18px;
 }
 
+.rpc-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .command-grid {
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
 }
