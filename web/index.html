@@ -315,11 +315,12 @@
 
           <div class="content-grid">
             <section class="surface" data-tilt>
-              <div class="surface-header">
+              <div class="surface-header rpc-builder-header">
                 <div>
-                  <h3>Add RPC Node</h3>
-                  <p class="helper-copy">Create a stronger mesh with multiple fallback nodes.</p>
+                  <h3 id="rpc-form-title">Add RPC Node</h3>
+                  <p id="rpc-form-subtitle" class="helper-copy">Create a stronger mesh with multiple fallback nodes.</p>
                 </div>
+                <span id="rpc-form-badge" class="queue-chip hidden">Editing</span>
               </div>
               <form id="rpc-form" class="stack-form">
                 <label>
@@ -334,7 +335,10 @@
                   <span>URL</span>
                   <input id="rpc-url-input" type="text" placeholder="https://..." />
                 </label>
-                <button class="primary-button fx-button" type="submit">Save RPC Node</button>
+                <div class="form-action-row">
+                  <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
+                  <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Save RPC Node</button>
+                </div>
               </form>
             </section>
 

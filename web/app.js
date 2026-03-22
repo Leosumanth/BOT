@@ -57,6 +57,11 @@ const walletKeysInput = document.getElementById("wallet-keys-input");
 const walletList = document.getElementById("wallet-list");
 const walletCount = document.getElementById("wallet-count");
 const rpcForm = document.getElementById("rpc-form");
+const rpcFormTitle = document.getElementById("rpc-form-title");
+const rpcFormSubtitle = document.getElementById("rpc-form-subtitle");
+const rpcFormBadge = document.getElementById("rpc-form-badge");
+const rpcCancelButton = document.getElementById("rpc-cancel-button");
+const rpcSubmitButton = document.getElementById("rpc-submit-button");
 const rpcNameInput = document.getElementById("rpc-name-input");
 const rpcChainInput = document.getElementById("rpc-chain-input");
 const rpcUrlInput = document.getElementById("rpc-url-input");
@@ -165,6 +170,7 @@ let abiAutofillTimer = null;
 let abiAutofillRequestId = 0;
 let abiExplorerFetchTimer = null;
 let abiExplorerFetchRequestId = 0;
+let activeRpcEditId = null;
 let currentMintStartDetection = {
   enabled: false,
   config: null
@@ -1420,45 +1426,132 @@ function renderWallets() {
 
 function rpcHealthMarkup(node) {
   if (!node.lastHealth) {
-    return '<span class="rpc-chip">untested</span>';
+    return '<span class="rpc-chip untested">Untested</span>';
   }
 
   if (node.lastHealth.status === "healthy") {
-    return `<span class="rpc-chip healthy">${node.lastHealth.latencyMs}ms</span>`;
+    return `<span class="rpc-chip healthy">Healthy · ${node.lastHealth.latencyMs}ms</span>`;
   }
 
-  return '<span class="rpc-chip error">error</span>';
+  return '<span class="rpc-chip error">Probe Failed</span>';
+}
+
+function rpcHealthDetail(node) {
+  if (!node.lastHealth) {
+    return "No live probe has been run yet. Test the endpoint before assigning it to a hot task.";
+  }
+
+  if (node.lastHealth.status === "healthy") {
+    const blockLabel =
+      node.lastHealth.blockNumber !== undefined && node.lastHealth.blockNumber !== null
+        ? `Latest block ${node.lastHealth.blockNumber}.`
+        : "Live block data received.";
+    return `${blockLabel} Last verified ${relativeTime(node.lastHealth.checkedAt)}.`;
+  }
+
+  return node.lastHealth.error
+    ? `Last probe failed: ${node.lastHealth.error}`
+    : "The most recent health probe did not return a successful result.";
+}
+
+function resetRpcForm(options = {}) {
+  activeRpcEditId = null;
+  rpcFormTitle.textContent = "Add RPC Node";
+  rpcFormSubtitle.textContent = "Create a stronger mesh with multiple fallback nodes.";
+  rpcFormBadge.classList.add("hidden");
+  rpcSubmitButton.textContent = "Save RPC Node";
+  rpcCancelButton.classList.add("hidden");
+
+  if (!options.preserveName) {
+    rpcNameInput.value = "";
+  }
+
+  if (!options.preserveUrl) {
+    rpcUrlInput.value = "";
+  }
+}
+
+function startRpcEdit(node) {
+  if (!node || node.source === "env") {
+    return;
+  }
+
+  activeRpcEditId = node.id;
+  rpcFormTitle.textContent = "Edit RPC Node";
+  rpcFormSubtitle.textContent = "Correct the chain, label, or endpoint URL for this stored node.";
+  rpcFormBadge.classList.remove("hidden");
+  rpcSubmitButton.textContent = "Update RPC Node";
+  rpcCancelButton.classList.remove("hidden");
+  rpcNameInput.value = node.name || "";
+  rpcChainInput.value = node.chainKey || rpcChainInput.value;
+  rpcUrlInput.value = node.url || "";
+  rpcNameInput.focus();
+  rpcForm.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderRpcNodes() {
+  if (activeRpcEditId && !state.rpcNodes.some((node) => node.id === activeRpcEditId)) {
+    resetRpcForm();
+  }
+
   rpcList.innerHTML = state.rpcNodes.length
     ? state.rpcNodes
         .map(
           (node) => `
-            <div class="list-row">
-              <div>
-                <strong>${escapeHtml(node.name)}</strong>
-                <p class="muted-copy">${escapeHtml(chainLabel(node.chainKey))} | ${escapeHtml(node.url)} | ${escapeHtml(node.source || "stored")}</p>
+            <article class="rpc-node-card ${escapeHtml(node.lastHealth?.status || "untested")}">
+              <div class="rpc-node-top">
+                <div class="rpc-node-copy">
+                  <div class="rpc-node-title-row">
+                    <strong>${escapeHtml(node.name)}</strong>
+                    ${rpcHealthMarkup(node)}
+                  </div>
+                  <div class="chip-row rpc-node-chips">
+                    <span class="queue-chip">${escapeHtml(chainLabel(node.chainKey))}</span>
+                    <span class="queue-chip">${escapeHtml(node.source === "env" ? "Env Managed" : "Stored")}</span>
+                    ${
+                      node.lastHealth?.checkedAt
+                        ? `<span class="queue-chip">${escapeHtml(relativeTime(node.lastHealth.checkedAt))}</span>`
+                        : ""
+                    }
+                  </div>
+                  <p class="rpc-node-url">${escapeHtml(node.url)}</p>
+                  <p class="muted-copy rpc-node-detail">${escapeHtml(rpcHealthDetail(node))}</p>
+                </div>
+                <div class="rpc-node-actions">
+                  <button class="mini-button fx-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
+                  ${
+                    node.source === "env"
+                      ? '<span class="rpc-chip">Env Managed</span>'
+                      : `<button class="mini-button fx-button" data-rpc-edit="${escapeHtml(node.id)}">Edit</button>
+                         <button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>`
+                  }
+                </div>
               </div>
-              <div class="task-actions">
-                ${rpcHealthMarkup(node)}
-                <button class="mini-button fx-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
-                ${
-                  node.source === "env"
-                    ? '<span class="rpc-chip">env-managed</span>'
-                    : `<button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>`
-                }
-              </div>
-            </div>
+            </article>
           `
         )
         .join("")
     : `<div class="empty-state"><h3>No RPC nodes saved</h3><p>Add chain endpoints to build a failover mesh.</p></div>`;
 
+  rpcList.querySelectorAll("[data-rpc-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const node = state.rpcNodes.find((entry) => entry.id === button.dataset.rpcEdit);
+      if (!node) {
+        return;
+      }
+
+      startRpcEdit(node);
+      showToast(`Editing ${node.name}.`, "info", "RPC Editor");
+    });
+  });
+
   rpcList.querySelectorAll("[data-rpc-delete]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
         await request(`/api/rpc-nodes/${button.dataset.rpcDelete}`, { method: "DELETE" });
+        if (activeRpcEditId === button.dataset.rpcDelete) {
+          resetRpcForm();
+        }
         showToast("RPC node removed from the mesh.", "success", "RPC Deleted");
       } catch {}
     });
@@ -2628,15 +2721,24 @@ rpcForm.addEventListener("submit", async (event) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        id: activeRpcEditId || undefined,
         name: rpcNameInput.value,
         chainKey: rpcChainInput.value,
         url: rpcUrlInput.value
       })
     });
-    rpcNameInput.value = "";
-    rpcUrlInput.value = "";
-    showToast("RPC node saved to the mesh.", "success", "RPC Added");
+    const wasEditing = Boolean(activeRpcEditId);
+    resetRpcForm();
+    showToast(
+      wasEditing ? "RPC node updated successfully." : "RPC node saved to the mesh.",
+      "success",
+      wasEditing ? "RPC Updated" : "RPC Added"
+    );
   } catch {}
+});
+
+rpcCancelButton.addEventListener("click", () => {
+  resetRpcForm();
 });
 
 settingsForm.addEventListener("submit", async (event) => {

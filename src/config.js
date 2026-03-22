@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { ethers } = require("ethers");
 const mintAutomation = require("./mint-automation");
 
 const defaultInputValues = {
@@ -141,6 +142,51 @@ function parseList(value) {
     .split(/[\r\n,]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function isPlaceholderText(value) {
+  return /(your_|your-|changeme|replace-with|replace_me|example\.com|rpc\.example)/i.test(
+    String(value || "")
+  );
+}
+
+function validateRpcUrl(rpcUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(rpcUrl));
+  } catch {
+    throw new Error(`RPC URL is invalid: ${rpcUrl}`);
+  }
+
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
+    throw new Error(`RPC URL must start with http://, https://, ws://, or wss://: ${rpcUrl}`);
+  }
+
+  if (isPlaceholderText(rpcUrl)) {
+    throw new Error(`RPC URL appears to be a placeholder/example value: ${rpcUrl}`);
+  }
+}
+
+function validatePrivateKey(privateKey) {
+  const value = String(privateKey || "").trim();
+  if (isPlaceholderText(value) || /yourprivatekey/i.test(value)) {
+    throw new Error("PRIVATE_KEY appears to be a placeholder/example value");
+  }
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error("PRIVATE_KEY must be a 32-byte hex string starting with 0x");
+  }
+}
+
+function validateContractAddress(address) {
+  const value = String(address || "").trim();
+  if (isPlaceholderText(value) || /yourcontractaddress/i.test(value)) {
+    throw new Error("CONTRACT_ADDRESS appears to be a placeholder/example value");
+  }
+
+  if (!ethers.isAddress(value)) {
+    throw new Error("CONTRACT_ADDRESS must be a valid EVM address");
+  }
 }
 
 function parseJsonArrayValue(value, name, fallback = []) {
@@ -387,6 +433,8 @@ function loadRpcUrls(raw) {
     throw new Error("At least one RPC URL is required");
   }
 
+  rpcUrls.forEach((rpcUrl) => validateRpcUrl(rpcUrl));
+
   return rpcUrls;
 }
 
@@ -397,6 +445,8 @@ function loadPrivateKeys(raw) {
   if (privateKeys.length === 0) {
     throw new Error("At least one private key is required");
   }
+
+  privateKeys.forEach((privateKey) => validatePrivateKey(privateKey));
 
   return privateKeys;
 }
@@ -591,6 +641,8 @@ function normalizeConfig(raw) {
     triggerBlockNumber: optionalInteger(raw, "TRIGGER_BLOCK_NUMBER"),
     triggerTimeoutMs: optionalInteger(raw, "TRIGGER_TIMEOUT_MS")
   };
+
+  validateContractAddress(normalized.contractAddress);
 
   if (
     normalized.autoMintMode &&
