@@ -1149,11 +1149,6 @@ function buildPublicSettings() {
   return buildClientSettings(appState?.settings, integrationSecrets);
 }
 
-function hasTelegramAlertsConfigured() {
-  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
-  return Boolean(resolvedSecrets.telegramBotToken && resolvedSecrets.telegramChatId);
-}
-
 function hasDiscordAlertsConfigured() {
   return Boolean(resolveIntegrationSecrets(integrationSecrets).discordWebhookUrl);
 }
@@ -1666,13 +1661,6 @@ function buildTelemetry() {
       severity: "warning",
       title: "Blocked tasks detected",
       detail: "One or more priority tasks are missing required inputs or RPC coverage."
-    });
-  }
-  if (appState.settings.telegramEnabled && !hasTelegramAlertsConfigured()) {
-    alerts.push({
-      severity: "warning",
-      title: "Telegram alerts need credentials",
-      detail: "Save both a Telegram bot token and chat ID before enabling Telegram delivery."
     });
   }
   if (appState.settings.discordEnabled && !hasDiscordAlertsConfigured()) {
@@ -2914,7 +2902,7 @@ async function handleAlertTest(response) {
     });
 
     if (result.attempted === 0) {
-      throw new Error("Enable and configure Telegram or Discord alerts in settings first.");
+      throw new Error("Enable and configure Discord alerts in settings first.");
     }
 
     pushLog({
@@ -3010,7 +2998,6 @@ async function handleSettingsSave(request, response) {
       profileName: payload.profileName,
       theme: payload.theme,
       resultsPath: payload.resultsPath,
-      telegramEnabled: payload.telegramEnabled,
       discordEnabled: payload.discordEnabled,
       alertOnRunStart: payload.alertOnRunStart,
       alertOnRunSuccess: payload.alertOnRunSuccess,
@@ -3020,8 +3007,6 @@ async function handleSettingsSave(request, response) {
     const nextSecrets = resolveIntegrationSecrets(integrationSecrets);
     const secretInputs = {
       explorerApiKey: String(payload.explorerApiKey || "").trim(),
-      telegramBotToken: String(payload.telegramBotToken || "").trim(),
-      telegramChatId: String(payload.telegramChatId || "").trim(),
       discordWebhookUrl: String(payload.discordWebhookUrl || "").trim()
     };
 
@@ -3032,10 +3017,6 @@ async function handleSettingsSave(request, response) {
 
       nextSecrets[secretName] = value;
     });
-
-    if (nextSettings.telegramEnabled && (!nextSecrets.telegramBotToken || !nextSecrets.telegramChatId)) {
-      throw new Error("Telegram alerts require both a bot token and a chat ID.");
-    }
 
     if (nextSettings.discordEnabled && !nextSecrets.discordWebhookUrl) {
       throw new Error("Discord alerts require a webhook URL.");

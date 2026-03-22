@@ -72,10 +72,6 @@ const themeInput = document.getElementById("theme-input");
 const resultsPathInput = document.getElementById("results-path-input");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
-const telegramEnabledInput = document.getElementById("telegram-enabled-input");
-const telegramBotTokenInput = document.getElementById("telegram-bot-token-input");
-const telegramChatIdInput = document.getElementById("telegram-chat-id-input");
-const telegramConfigStatus = document.getElementById("telegram-config-status");
 const discordEnabledInput = document.getElementById("discord-enabled-input");
 const discordWebhookUrlInput = document.getElementById("discord-webhook-url-input");
 const discordConfigStatus = document.getElementById("discord-config-status");
@@ -1572,10 +1568,7 @@ function renderSettings() {
   themeInput.value = state.settings.theme || "quantum-operator";
   resultsPathInput.value = state.settings.resultsPath || "./dist/mint-results.json";
   explorerApiKeyInput.value = "";
-  telegramBotTokenInput.value = "";
-  telegramChatIdInput.value = "";
   discordWebhookUrlInput.value = "";
-  telegramEnabledInput.checked = Boolean(state.settings.telegramEnabled);
   discordEnabledInput.checked = Boolean(state.settings.discordEnabled);
   alertOnStartInput.checked = state.settings.alertOnRunStart !== false;
   alertOnSuccessInput.checked = state.settings.alertOnRunSuccess !== false;
@@ -1585,12 +1578,6 @@ function renderSettings() {
   explorerApiKeyInput.placeholder = state.settings.explorerApiKeyConfigured
     ? "Saved on server. Leave blank to keep it."
     : "Etherscan V2 API key";
-  telegramBotTokenInput.placeholder = state.settings.telegramBotTokenConfigured
-    ? "Saved on server. Leave blank to keep it."
-    : "123456:ABC...";
-  telegramChatIdInput.placeholder = state.settings.telegramChatIdConfigured
-    ? "Saved on server. Leave blank to keep it."
-    : "-1001234567890";
   discordWebhookUrlInput.placeholder = state.settings.discordWebhookUrlConfigured
     ? "Saved on server. Leave blank to keep it."
     : "https://discord.com/api/webhooks/...";
@@ -1598,11 +1585,6 @@ function renderSettings() {
   explorerConfigStatus.textContent = state.settings.explorerApiKeyConfigured
     ? "Key available"
     : "Not configured";
-  telegramConfigStatus.textContent = state.settings.telegramConfigured
-    ? `Telegram ready${state.settings.telegramEnabled ? "" : " (disabled)"}`
-    : state.settings.telegramEnabled
-      ? "Telegram is enabled but still missing a token or chat ID."
-      : "Telegram is disabled.";
   discordConfigStatus.textContent = state.settings.discordConfigured
     ? `Discord ready${state.settings.discordEnabled ? "" : " (disabled)"}`
     : state.settings.discordEnabled
@@ -2752,9 +2734,6 @@ settingsForm.addEventListener("submit", async (event) => {
         theme: themeInput.value,
         resultsPath: resultsPathInput.value,
         explorerApiKey: explorerApiKeyInput.value,
-        telegramEnabled: telegramEnabledInput.checked,
-        telegramBotToken: telegramBotTokenInput.value,
-        telegramChatId: telegramChatIdInput.value,
         discordEnabled: discordEnabledInput.checked,
         discordWebhookUrl: discordWebhookUrlInput.value,
         alertOnRunStart: alertOnStartInput.checked,
@@ -2764,8 +2743,6 @@ settingsForm.addEventListener("submit", async (event) => {
       })
     });
     explorerApiKeyInput.value = "";
-    telegramBotTokenInput.value = "";
-    telegramChatIdInput.value = "";
     discordWebhookUrlInput.value = "";
     showToast("Local operator settings and integrations saved.", "success", "Settings Updated");
   } catch {}

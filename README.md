@@ -95,8 +95,6 @@ Copy-Item .env.example .env
 - `WORKER_ID`: optional worker label that appears in distributed run state
 - `WORKER_CONCURRENCY`: number of queued tasks a Redis worker can execute in parallel, defaults to `4`
 - `ETHERSCAN_API_KEY`: optional fallback explorer API key used for dashboard ABI fetches
-- `TELEGRAM_BOT_TOKEN`: optional fallback Telegram bot token for dashboard alerts
-- `TELEGRAM_CHAT_ID`: optional fallback Telegram chat ID for dashboard alerts
 - `DISCORD_WEBHOOK_URL`: optional fallback Discord webhook URL for dashboard alerts
 - `RPC_URL`: a single JSON-RPC endpoint
 - `RPC_URLS`: optional comma-separated list of RPC endpoints for failover

@@ -396,33 +396,15 @@
               <section class="surface inset-surface">
                 <div class="surface-header compact">
                   <div>
-                    <h4>Alert Channels</h4>
+                    <h4>Alert Channel</h4>
                     <p class="helper-copy">Leave secret fields blank to keep their current server-side values.</p>
                   </div>
                 </div>
 
-                <div class="form-grid two">
-                  <label class="toggle-card toggle-card-inline">
-                    <input id="telegram-enabled-input" type="checkbox" />
-                    <span>Enable Telegram Alerts</span>
-                  </label>
-                  <label class="toggle-card toggle-card-inline">
-                    <input id="discord-enabled-input" type="checkbox" />
-                    <span>Enable Discord Alerts</span>
-                  </label>
-                </div>
-
-                <div class="form-grid two">
-                  <label>
-                    <span>Telegram Bot Token</span>
-                    <input id="telegram-bot-token-input" type="password" placeholder="123456:ABC..." />
-                  </label>
-                  <label>
-                    <span>Telegram Chat ID</span>
-                    <input id="telegram-chat-id-input" type="text" placeholder="-1001234567890" />
-                  </label>
-                </div>
-                <p id="telegram-config-status" class="helper-copy">Telegram is disabled.</p>
+                <label class="toggle-card toggle-card-inline">
+                  <input id="discord-enabled-input" type="checkbox" />
+                  <span>Enable Discord Alerts</span>
+                </label>
 
                 <label>
                   <span>Discord Webhook URL</span>

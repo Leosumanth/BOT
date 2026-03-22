@@ -4,15 +4,11 @@ const EXPLORER_BASE_URL = "https://api.etherscan.io/v2/api";
 
 const secretEnvNames = {
   explorerApiKey: "ETHERSCAN_API_KEY",
-  telegramBotToken: "TELEGRAM_BOT_TOKEN",
-  telegramChatId: "TELEGRAM_CHAT_ID",
   discordWebhookUrl: "DISCORD_WEBHOOK_URL"
 };
 
 const secretStorageKeys = {
   explorerApiKey: "explorer_api_key",
-  telegramBotToken: "telegram_bot_token",
-  telegramChatId: "telegram_chat_id",
   discordWebhookUrl: "discord_webhook_url"
 };
 
@@ -21,7 +17,6 @@ function createDefaultDashboardSettings() {
     profileName: "local",
     theme: "quantum-operator",
     resultsPath: "./dist/mint-results.json",
-    telegramEnabled: false,
     discordEnabled: false,
     alertOnRunStart: true,
     alertOnRunSuccess: true,
@@ -68,7 +63,6 @@ function normalizeDashboardSettings(settings) {
     profileName: trimValue(source.profileName, fallback.profileName),
     theme: trimValue(source.theme, fallback.theme),
     resultsPath: trimValue(source.resultsPath, fallback.resultsPath),
-    telegramEnabled: normalizeBoolean(source.telegramEnabled, fallback.telegramEnabled),
     discordEnabled: normalizeBoolean(source.discordEnabled, fallback.discordEnabled),
     alertOnRunStart: normalizeBoolean(source.alertOnRunStart, fallback.alertOnRunStart),
     alertOnRunSuccess: normalizeBoolean(source.alertOnRunSuccess, fallback.alertOnRunSuccess),
@@ -113,9 +107,6 @@ function buildClientSettings(settings, storedSecrets = {}) {
   return {
     ...normalized,
     explorerApiKeyConfigured: Boolean(resolved.explorerApiKey),
-    telegramBotTokenConfigured: Boolean(resolved.telegramBotToken),
-    telegramChatIdConfigured: Boolean(resolved.telegramChatId),
-    telegramConfigured: Boolean(resolved.telegramBotToken && resolved.telegramChatId),
     discordWebhookUrlConfigured: Boolean(resolved.discordWebhookUrl),
     discordConfigured: Boolean(resolved.discordWebhookUrl)
   };
@@ -240,25 +231,6 @@ async function fetchJson(url, options = {}, timeoutMs = 12000) {
   }
 }
 
-async function sendTelegramAlert({ botToken, chatId, message }) {
-  const payload = await fetchJson(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: message
-    })
-  });
-
-  if (payload.ok !== true) {
-    throw new Error(payload.description || "Telegram message was rejected");
-  }
-
-  return payload;
-}
-
 async function sendDiscordAlert({ webhookUrl, message }) {
   const target = new URL(webhookUrl);
   target.searchParams.set("wait", "true");
@@ -297,22 +269,6 @@ async function sendConfiguredAlert({ settings, storedSecrets = {}, eventType, ta
   });
 
   const deliveries = [];
-
-  if (
-    normalizedSettings.telegramEnabled &&
-    resolvedSecrets.telegramBotToken &&
-    resolvedSecrets.telegramChatId
-  ) {
-    deliveries.push({
-      channel: "telegram",
-      send: () =>
-        sendTelegramAlert({
-          botToken: resolvedSecrets.telegramBotToken,
-          chatId: resolvedSecrets.telegramChatId,
-          message
-        })
-    });
-  }
 
   if (normalizedSettings.discordEnabled && resolvedSecrets.discordWebhookUrl) {
     deliveries.push({
