@@ -2668,9 +2668,21 @@ async function handleTaskSave(request, response) {
 
 async function handleTaskDelete(taskId, response) {
   const currentRunState = getRunState();
-  if (distributedQueuedTaskIds.has(taskId) || (currentRunState.activeTaskIds || []).includes(taskId)) {
-    sendJson(response, 409, { error: "Stop or dequeue the task before deleting it" });
+  if ((currentRunState.activeTaskIds || []).includes(taskId)) {
+    sendJson(response, 409, { error: "Stop the running task before deleting it" });
     return;
+  }
+
+  if (queueModeEnabled() && distributedQueuedTaskIds.has(taskId)) {
+    try {
+      await queueCoordinator.removeQueuedTask(taskId);
+    } catch (error) {
+      sendJson(response, 400, { error: formatError(error) });
+      return;
+    }
+
+    distributedQueuedTaskIds.delete(taskId);
+    clearDistributedTaskPatch(taskId);
   }
 
   const before = appState.tasks.length;

@@ -68,6 +68,7 @@ async function createRedisCoordinator(config = resolveQueueConfig(), options = {
       config,
       enabled: false,
       close: async () => {},
+      removeQueuedTask: async () => ({ removed: false }),
       getRunState: async () => createIdleRunState(config),
       listQueuedJobs: async () => [],
       publishEvent: async () => {},
@@ -225,6 +226,40 @@ async function createRedisCoordinator(config = resolveQueueConfig(), options = {
     return job;
   }
 
+  async function removeQueuedTask(taskId) {
+    const rawJobs = await commands.lRange(config.queueKey, 0, -1);
+    const matchingRawJobs = rawJobs.filter((rawJob) => {
+      const job = parseMessage(rawJob);
+      return job?.taskId === taskId;
+    });
+
+    if (matchingRawJobs.length === 0) {
+      await commands.del(buildTaskClaimKey(config, taskId));
+      return {
+        removed: false
+      };
+    }
+
+    let removedCount = 0;
+    for (const rawJob of matchingRawJobs) {
+      removedCount += await commands.lRem(config.queueKey, 0, rawJob);
+    }
+
+    await commands.del(buildTaskClaimKey(config, taskId));
+
+    if (removedCount > 0) {
+      await publishEvent("task-dequeued", {
+        taskId,
+        removedCount
+      });
+    }
+
+    return {
+      removed: removedCount > 0,
+      removedCount
+    };
+  }
+
   async function requestStop(taskId) {
     await publishControl("stop-task", { taskId });
     return true;
@@ -266,6 +301,7 @@ async function createRedisCoordinator(config = resolveQueueConfig(), options = {
     getRunState,
     listQueuedJobs,
     publishEvent,
+    removeQueuedTask,
     requestStop,
     setRunState,
     subscribeToControl,
