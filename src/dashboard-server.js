@@ -515,6 +515,11 @@ function writableAbiFunctionEntries(abiEntries) {
   });
 }
 
+function formatFunctionSignature(entry) {
+  const inputTypes = Array.isArray(entry?.inputs) ? entry.inputs.map((input) => input.type).join(",") : "";
+  return `${entry?.name || "unknown"}(${inputTypes})`;
+}
+
 const preferredMintFunctionNames = [
   "mint",
   "publicMint",
