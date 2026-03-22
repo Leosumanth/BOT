@@ -104,6 +104,7 @@ const fetchAbiButton = document.getElementById("fetch-abi-button");
 const taskPlatformInput = document.getElementById("task-platform-input");
 const taskFunctionInput = document.getElementById("task-function-input");
 const taskArgsInput = document.getElementById("task-args-input");
+const taskAutoPhaseToggle = document.getElementById("task-auto-phase-toggle");
 const walletGroupTabs = document.getElementById("wallet-group-tabs");
 const walletSelector = document.getElementById("wallet-selector");
 const selectAllWalletsButton = document.getElementById("select-all-wallets-button");
@@ -2380,6 +2381,8 @@ function openTaskModal(task = null) {
   taskPlatformInput.value = task?.platform || "Generic EVM (auto-detect)";
   taskFunctionInput.value = task?.mintFunction || "";
   taskArgsInput.value = task?.mintArgs || "";
+  taskAutoPhaseToggle.checked = !task;
+  taskAutoPhaseToggle.disabled = Boolean(task);
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
   taskStartTimeInput.value = task?.waitUntilIso ? task.waitUntilIso.slice(0, 16) : "";
   taskWalletModeInput.value = task?.walletMode || "parallel";
@@ -2475,6 +2478,7 @@ function buildTaskPayload() {
     rpcNodeIds: selectedRpcIds(),
     mintFunction: taskFunctionInput.value,
     mintArgs: taskArgsInput.value,
+    autoGeneratePhaseTasks: !taskIdInput.value && taskAutoPhaseToggle.checked,
     gasStrategy: taskGasStrategyInput.value,
     gasLimit: taskGasLimitInput.value,
     maxFeeGwei: taskMaxFeeInput.value,
@@ -3013,12 +3017,21 @@ abiDropzone.addEventListener("drop", async (event) => {
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    await request("/api/tasks", {
+    const payload = await request("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildTaskPayload())
     });
     closeTaskModal();
+    if (Array.isArray(payload.tasks) && payload.tasks.length > 1) {
+      showToast(
+        `${payload.tasks.length} phase schedules created. Delete the ones you do not want before launch.`,
+        "success",
+        "Phase Tasks Created"
+      );
+      return;
+    }
+
     showToast("Task preset saved locally.", "success", "Task Saved");
   } catch {}
 });

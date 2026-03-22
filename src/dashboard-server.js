@@ -6,6 +6,7 @@ const http = require("http");
 const path = require("path");
 const { ethers } = require("ethers");
 const { AbortRunError, formatError, runMintBot } = require("./bot");
+const mintAutomation = require("./mint-automation");
 const { defaultInputValues, normalizeConfig, normalizeGasStrategyValue } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
 const {
@@ -36,6 +37,38 @@ const scheduledTaskPollIntervalMs = Math.max(
 );
 const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2";
 const explorerKeyTestChainId = 1;
+const mintPhaseOrder = ["gtd", "allowlist", "public"];
+const mintPhaseLabels = {
+  gtd: "GTD",
+  allowlist: "Allowlist",
+  public: "Public"
+};
+const mintPhaseGasProfiles = {
+  gtd: {
+    priority: "high",
+    gasStrategy: "aggressive",
+    gasBoostPercent: "8",
+    priorityBoostPercent: "12",
+    maxRetries: "2",
+    retryDelayMs: "750"
+  },
+  allowlist: {
+    priority: "high",
+    gasStrategy: "aggressive",
+    gasBoostPercent: "12",
+    priorityBoostPercent: "18",
+    maxRetries: "3",
+    retryDelayMs: "600"
+  },
+  public: {
+    priority: "critical",
+    gasStrategy: "aggressive",
+    gasBoostPercent: "18",
+    priorityBoostPercent: "25",
+    maxRetries: "4",
+    retryDelayMs: "500"
+  }
+};
 
 const clients = new Set();
 const chainCatalog = [
@@ -977,6 +1010,825 @@ function detectMintStartFunctionsFromAbi(abiEntries) {
     stateFunction,
     signals
   };
+}
+
+function buildPhaseDescriptor(entry) {
+  const inputLabels = Array.isArray(entry?.inputs)
+    ? entry.inputs.map((input) => `${input?.name || ""}:${input?.type || ""}`).join(" ")
+    : "";
+
+  return `${entry?.name || ""} ${inputLabels}`.toLowerCase();
+}
+
+function hasProofLikeInput(entry) {
+  return Array.isArray(entry?.inputs)
+    ? entry.inputs.some((input) =>
+        /proof|merkle|whitelist|allowlist|allow|wl|sig|signature|voucher|permit/i.test(
+          String(input?.name || "")
+        )
+      )
+    : false;
+}
+
+function detectMintPhaseType(entry) {
+  const descriptor = buildPhaseDescriptor(entry);
+
+  if (/gtd|guaranteed|holder|pass|vip|founder|reserve|og|earlyaccess/.test(descriptor)) {
+    return "gtd";
+  }
+
+  if (/allowlist|whitelist|presale|presell|private|merkle|proof|voucher|signature|wl/.test(descriptor)) {
+    return "allowlist";
+  }
+
+  if (/public|sale|open|live/.test(descriptor)) {
+    return "public";
+  }
+
+  if (/mint|buy|purchase|claim|redeem/.test(descriptor)) {
+    return "public";
+  }
+
+  return null;
+}
+
+function scoreMintPhaseCandidate(entry, phaseType) {
+  const descriptor = buildPhaseDescriptor(entry);
+  let score = mintFunctionCandidateScore(entry);
+
+  if (phaseType === "gtd" && /gtd|guaranteed|holder|pass|vip|founder|reserve|og|earlyaccess/.test(descriptor)) {
+    score += 12;
+  }
+
+  if (
+    phaseType === "allowlist" &&
+    /allowlist|whitelist|presale|presell|private|merkle|proof|voucher|signature|wl/.test(descriptor)
+  ) {
+    score += 12;
+  }
+
+  if (phaseType === "public" && /public|sale|open|live/.test(descriptor)) {
+    score += 10;
+  }
+
+  if (
+    phaseType === "public" &&
+    !/allowlist|whitelist|presale|private|gtd|guaranteed|holder|pass|vip|founder|reserve/.test(
+      descriptor
+    )
+  ) {
+    score += 4;
+  }
+
+  if (Array.isArray(entry?.inputs)) {
+    score -= entry.inputs.length;
+  }
+
+  if (phaseType === "allowlist" && hasProofLikeInput(entry)) {
+    score += 3;
+  }
+
+  return score;
+}
+
+function buildMintPhaseCandidates(abiEntries) {
+  const candidates = writableAbiFunctionEntries(abiEntries)
+    .map((entry) => {
+      const phaseType = detectMintPhaseType(entry);
+      if (!phaseType) {
+        return null;
+      }
+
+      return {
+        ...entry,
+        phaseType,
+        score: scoreMintPhaseCandidate(entry, phaseType),
+        signature: formatFunctionSignature(entry)
+      };
+    })
+    .filter((candidate) => candidate && candidate.score > 0)
+    .sort((left, right) => {
+      const phaseDelta = mintPhaseOrder.indexOf(left.phaseType) - mintPhaseOrder.indexOf(right.phaseType);
+      if (phaseDelta !== 0) {
+        return phaseDelta;
+      }
+
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return (left.inputs?.length || 0) - (right.inputs?.length || 0);
+    });
+
+  const selected = [];
+  const seenPhases = new Set();
+
+  for (const candidate of candidates) {
+    if (seenPhases.has(candidate.phaseType)) {
+      continue;
+    }
+
+    selected.push(candidate);
+    seenPhases.add(candidate.phaseType);
+  }
+
+  return selected;
+}
+
+function findAddressEligibilityReadFunction(abiEntries, preferredNames) {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+
+  for (const preferredName of preferredNames) {
+    const actualName = namesByLower.get(preferredName.toLowerCase());
+    if (!actualName) {
+      continue;
+    }
+
+    const entry = findAbiFunctionEntry(abiEntries, actualName);
+    if (
+      entry &&
+      Array.isArray(entry.inputs) &&
+      entry.inputs.length === 1 &&
+      /^address$/i.test(String(entry.inputs[0]?.type || "")) &&
+      Array.isArray(entry.outputs) &&
+      entry.outputs.length >= 1 &&
+      (String(entry.outputs[0]?.type || "").toLowerCase() === "bool" || isIntegerAbiType(entry.outputs[0]?.type)) &&
+      ["view", "pure"].includes(entry.stateMutability)
+    ) {
+      return actualName;
+    }
+  }
+
+  return null;
+}
+
+function findPhaseEligibilityFunction(abiEntries, phaseType) {
+  if (phaseType === "gtd") {
+    return findAddressEligibilityReadFunction(abiEntries, [
+      "isGtdEligible",
+      "isGuaranteedEligible",
+      "isGuaranteed",
+      "isHolderEligible",
+      "isPassHolder",
+      "hasMintPass",
+      "hasPass",
+      "holderEligible",
+      "gtdEligible",
+      "canHolderMint"
+    ]);
+  }
+
+  if (phaseType === "allowlist") {
+    return findAddressEligibilityReadFunction(abiEntries, [
+      "isAllowlisted",
+      "isWhitelist",
+      "isWhitelisted",
+      "allowlist",
+      "whitelist",
+      "allowlistEligible",
+      "whitelistEligible",
+      "presaleEligible",
+      "canPresaleMint",
+      "canAllowlistMint"
+    ]);
+  }
+
+  return null;
+}
+
+function findPhaseActiveFunction(abiEntries, phaseType) {
+  if (phaseType === "gtd") {
+    return findMintStartReadFunction(
+      abiEntries,
+      [
+        "gtdMintActive",
+        "guaranteedMintActive",
+        "holderMintActive",
+        "passMintActive",
+        "earlyAccessActive",
+        "vipMintActive"
+      ],
+      (type) => /^bool$/i.test(String(type || ""))
+    );
+  }
+
+  if (phaseType === "allowlist") {
+    return findMintStartReadFunction(
+      abiEntries,
+      [
+        "allowlistMintActive",
+        "allowlistActive",
+        "whitelistMintActive",
+        "whitelistActive",
+        "presaleMintActive",
+        "presaleActive",
+        "privateSaleActive"
+      ],
+      (type) => /^bool$/i.test(String(type || ""))
+    );
+  }
+
+  return findMintStartReadFunction(
+    abiEntries,
+    [
+      "publicMintActive",
+      "publicSaleActive",
+      "publicSaleOpen",
+      "isPublicSaleOpen",
+      "saleActive",
+      "isSaleActive",
+      "mintActive",
+      "isMintActive"
+    ],
+    (type) => /^bool$/i.test(String(type || ""))
+  );
+}
+
+function findPhaseStartTimeFunction(abiEntries, phaseType) {
+  if (phaseType === "gtd") {
+    return findMintStartReadFunction(
+      abiEntries,
+      [
+        "gtdStartTime",
+        "guaranteedStartTime",
+        "holderMintStartTime",
+        "passMintStartTime",
+        "earlyAccessStartTime",
+        "vipMintStartTime"
+      ],
+      (type) => isIntegerAbiType(type)
+    );
+  }
+
+  if (phaseType === "allowlist") {
+    return findMintStartReadFunction(
+      abiEntries,
+      [
+        "allowlistStartTime",
+        "allowlistMintStartTime",
+        "whitelistStartTime",
+        "whitelistMintStartTime",
+        "presaleStartTime",
+        "presaleMintStartTime",
+        "privateSaleStartTime"
+      ],
+      (type) => isIntegerAbiType(type)
+    );
+  }
+
+  return findMintStartReadFunction(
+    abiEntries,
+    [
+      "publicSaleStartTime",
+      "publicMintStartTime",
+      "saleStartTime",
+      "mintStartTime",
+      "startTime"
+    ],
+    (type) => isIntegerAbiType(type)
+  );
+}
+
+function normalizeContractTimestampValue(value) {
+  const normalized =
+    typeof value === "bigint"
+      ? value
+      : typeof value === "number" && Number.isFinite(value)
+        ? BigInt(Math.trunc(value))
+        : typeof value === "string" && /^\d+$/.test(value.trim())
+          ? BigInt(value.trim())
+          : null;
+
+  if (normalized == null || normalized <= 0n) {
+    return null;
+  }
+
+  const milliseconds = normalized > 1000000000000n ? normalized : normalized * 1000n;
+  const safeMs = Number(milliseconds);
+  if (!Number.isFinite(safeMs) || safeMs < 1577836800000 || safeMs > 4102444800000) {
+    return null;
+  }
+
+  return new Date(safeMs).toISOString();
+}
+
+function truthyContractReadResult(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "bigint") {
+    return value > 0n;
+  }
+
+  if (typeof value === "number") {
+    return value > 0;
+  }
+
+  if (typeof value === "string") {
+    return value.trim() !== "" && value.trim() !== "0";
+  }
+
+  return Boolean(value);
+}
+
+async function readMintPriceByNames(contract, abiEntries, preferredNames = []) {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+
+  for (const preferredName of preferredNames) {
+    const actualName = namesByLower.get(preferredName.toLowerCase());
+    if (!actualName) {
+      continue;
+    }
+
+    const priceEntry = findAbiFunctionEntry(abiEntries, actualName);
+    if (!priceEntry || priceEntry.inputs?.length > 0 || !["view", "pure"].includes(priceEntry.stateMutability)) {
+      continue;
+    }
+
+    try {
+      const value = await contract[actualName]();
+      const priceEth = formatEthString(value);
+      if (priceEth === null) {
+        continue;
+      }
+
+      return {
+        priceEth,
+        priceSource: actualName
+      };
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return {
+    priceEth: null,
+    priceSource: null
+  };
+}
+
+async function readPhasePrice(contract, abiEntries, phaseType) {
+  const phaseSpecificNames = {
+    gtd: ["gtdPrice", "holderPrice", "passPrice", "vipPrice"],
+    allowlist: ["allowlistPrice", "whitelistPrice", "presalePrice", "wlPrice"],
+    public: ["publicSalePrice", "publicMintPrice", "publicPrice", "salePrice"]
+  };
+
+  const specificResult = await readMintPriceByNames(contract, abiEntries, phaseSpecificNames[phaseType] || []);
+  if (specificResult.priceEth != null) {
+    return specificResult;
+  }
+
+  return readMintPriceByNames(contract, abiEntries, [
+    "mintPrice",
+    "price",
+    "cost",
+    "mintCost",
+    "mintFee",
+    "getMintPrice",
+    "getPrice"
+  ]);
+}
+
+async function readPhaseStartTime(contract, abiEntries, phaseType) {
+  const functionName = findPhaseStartTimeFunction(abiEntries, phaseType);
+  if (!functionName) {
+    return {
+      waitUntilIso: null,
+      source: null
+    };
+  }
+
+  try {
+    const value = await contract[functionName]();
+    return {
+      waitUntilIso: normalizeContractTimestampValue(value),
+      source: functionName
+    };
+  } catch {
+    return {
+      waitUntilIso: null,
+      source: functionName
+    };
+  }
+}
+
+function getTaskRpcNodes(task) {
+  const rpcNodeIds = Array.isArray(task?.rpcNodeIds) ? task.rpcNodeIds : [];
+  return (appState?.rpcNodes || []).filter(
+    (node) =>
+      node.enabled &&
+      node.chainKey === task.chainKey &&
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+  );
+}
+
+async function createReadProviderForTask(task) {
+  const taskRpcNodes = getTaskRpcNodes(task);
+  if (taskRpcNodes.length === 0) {
+    return {
+      provider: null,
+      rpcNode: null,
+      warning: `No enabled RPC nodes configured for ${task.chainKey}`
+    };
+  }
+
+  let lastError = null;
+
+  for (const rpcNode of taskRpcNodes) {
+    const provider = /^wss?:\/\//i.test(String(rpcNode.url || ""))
+      ? new ethers.WebSocketProvider(rpcNode.url)
+      : new ethers.JsonRpcProvider(rpcNode.url);
+
+    try {
+      await provider.getBlockNumber();
+      return {
+        provider,
+        rpcNode,
+        warning: null
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  return {
+    provider: null,
+    rpcNode: null,
+    warning: lastError ? `Unable to reach configured RPC nodes: ${formatError(lastError)}` : null
+  };
+}
+
+function classifyEligibilityError(phaseType, message = "") {
+  const normalized = String(message || "").toLowerCase();
+  if (!normalized) {
+    return "review";
+  }
+
+  if (/not active|not live|not open|sale not|mint not|closed|paused|not started|before start|hasn't started|has not started/.test(normalized)) {
+    return "not_open";
+  }
+
+  if (/sold out|max supply|supply exceeded|no tokens left|mint closed/.test(normalized)) {
+    return "ineligible";
+  }
+
+  if (
+    /not whitelisted|not allowlisted|not eligible|not on list|not in allowlist|not in whitelist|not authorized|not approved|must hold|holder required|pass required/.test(
+      normalized
+    )
+  ) {
+    return "ineligible";
+  }
+
+  if (/invalid proof|proof|merkle|signature|voucher|permit/.test(normalized)) {
+    return phaseType === "public" ? "review" : "review";
+  }
+
+  if (/gtd|guaranteed|holder|pass|vip|founder|reserve|og/.test(normalized)) {
+    return phaseType === "gtd" ? "review" : "ineligible";
+  }
+
+  return "review";
+}
+
+async function evaluateWalletPhaseEligibility({
+  provider,
+  contractAddress,
+  abiEntries,
+  candidate,
+  walletAddress,
+  quantityPerWallet,
+  eligibilityFunction,
+  phasePriceEth,
+  phaseType
+}) {
+  if (phaseType === "public") {
+    return {
+      status: "eligible",
+      source: "phase_public"
+    };
+  }
+
+  const contract = new ethers.Contract(contractAddress, abiEntries, provider);
+
+  if (eligibilityFunction) {
+    try {
+      const result = await contract[eligibilityFunction](walletAddress);
+      return {
+        status: truthyContractReadResult(result) ? "eligible" : "ineligible",
+        source: `view:${eligibilityFunction}`
+      };
+    } catch {
+      // Fall through to simulation when the view function is not callable.
+    }
+  }
+
+  const argResolution = mintAutomation.resolveFunctionArgsFromEntry(candidate, {
+    walletAddress,
+    quantity: quantityPerWallet
+  });
+
+  if (!argResolution.supported) {
+    return {
+      status: "review",
+      source: "unsupported_args",
+      reason: argResolution.reason
+    };
+  }
+
+  const runner = new ethers.VoidSigner(walletAddress, provider);
+  const contractWithRunner = new ethers.Contract(contractAddress, abiEntries, runner);
+  const method = contractWithRunner.getFunction(candidate.name);
+  const overrides = {};
+  if (String(candidate.stateMutability || "").toLowerCase() === "payable" && phasePriceEth) {
+    try {
+      overrides.value = ethers.parseEther(String(phasePriceEth)) * BigInt(Math.max(1, quantityPerWallet));
+    } catch {
+      // Keep zero-value simulation if the parsed price is invalid.
+    }
+  }
+
+  try {
+    await method.staticCall(...argResolution.args, overrides);
+    return {
+      status: "eligible",
+      source: "simulation"
+    };
+  } catch (error) {
+    const errorMessage = formatError(error);
+    const classification = classifyEligibilityError(phaseType, errorMessage);
+    if (classification === "not_open" && !hasProofLikeInput(candidate)) {
+      return {
+        status: "eligible",
+        source: "simulation:not_open",
+        reason: errorMessage
+      };
+    }
+
+    return {
+      status: classification === "ineligible" ? "ineligible" : "review",
+      source: `simulation:${classification}`,
+      reason: errorMessage
+    };
+  }
+}
+
+function mergeTaskNotes(...parts) {
+  return parts
+    .flat()
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function buildPhaseTaskName(baseName, phaseType) {
+  return `${baseName} · ${mintPhaseLabels[phaseType] || phaseType}`;
+}
+
+function maxNumericString(currentValue, minimumValue) {
+  const current = Number(currentValue || 0);
+  const minimum = Number(minimumValue || 0);
+
+  if (!Number.isFinite(current) || current <= 0) {
+    return String(minimum);
+  }
+
+  return String(Math.max(current, minimum));
+}
+
+function minPositiveNumericString(currentValue, preferredValue) {
+  const current = Number(currentValue || 0);
+  const preferred = Number(preferredValue || 0);
+
+  if (!Number.isFinite(current) || current <= 0) {
+    return String(preferred);
+  }
+
+  return String(Math.min(current, preferred));
+}
+
+function applyPhaseGasProfile(task, phaseType) {
+  const profile = mintPhaseGasProfiles[phaseType];
+  if (!profile) {
+    return task;
+  }
+
+  return {
+    ...task,
+    priority: profile.priority,
+    gasStrategy: profile.gasStrategy,
+    gasBoostPercent: maxNumericString(task.gasBoostPercent, profile.gasBoostPercent),
+    priorityBoostPercent: maxNumericString(task.priorityBoostPercent, profile.priorityBoostPercent),
+    maxRetries: maxNumericString(task.maxRetries, profile.maxRetries),
+    retryDelayMs: minPositiveNumericString(task.retryDelayMs, profile.retryDelayMs)
+  };
+}
+
+function isoTimestampValue(isoString) {
+  if (!isoString) {
+    return null;
+  }
+
+  const value = new Date(isoString).getTime();
+  return Number.isNaN(value) ? null : value;
+}
+
+function resolvePhaseWaitUntil(baseWaitUntilIso, detectedWaitUntilIso) {
+  const now = Date.now();
+  const detectedMs = isoTimestampValue(detectedWaitUntilIso);
+  if (detectedMs != null && detectedMs > now) {
+    return detectedWaitUntilIso;
+  }
+
+  const baseMs = isoTimestampValue(baseWaitUntilIso);
+  if (baseMs != null && baseMs > now) {
+    return baseWaitUntilIso;
+  }
+
+  return detectedWaitUntilIso || baseWaitUntilIso || "";
+}
+
+function buildPhaseTaskReadyState(task, abiEntries, phaseType, phaseWaitUntilIso) {
+  const phaseActiveFunction = findPhaseActiveFunction(abiEntries, phaseType);
+  const baseMintStartDetection =
+    task.mintStartDetectionConfig && typeof task.mintStartDetectionConfig === "object"
+      ? task.mintStartDetectionConfig
+      : {};
+
+  return {
+    useSchedule: Boolean(phaseWaitUntilIso),
+    waitUntilIso: phaseWaitUntilIso || "",
+    schedulePending:
+      Boolean(phaseWaitUntilIso) &&
+      !Number.isNaN(new Date(phaseWaitUntilIso).getTime()) &&
+      new Date(phaseWaitUntilIso).getTime() > Date.now(),
+    readyCheckFunction: phaseActiveFunction || task.readyCheckFunction,
+    readyCheckArgs: phaseActiveFunction ? "[]" : task.readyCheckArgs,
+    readyCheckMode: phaseActiveFunction ? "truthy" : task.readyCheckMode,
+    readyCheckExpected: phaseActiveFunction ? "" : task.readyCheckExpected,
+    mintStartDetectionEnabled: Boolean(phaseActiveFunction || task.mintStartDetectionEnabled),
+    mintStartDetectionConfig:
+      phaseActiveFunction || Object.keys(baseMintStartDetection).length > 0
+        ? {
+            ...baseMintStartDetection,
+            saleActiveFunction: phaseActiveFunction || baseMintStartDetection.saleActiveFunction || null,
+            pollIntervalMs: 500
+          }
+        : null
+  };
+}
+
+async function buildPhaseTasksFromTask(task, abiEntries) {
+  const candidates = buildMintPhaseCandidates(abiEntries);
+  if (!candidates.length) {
+    return [];
+  }
+
+  const selectedWallets = appState.wallets.filter((wallet) => (task.walletIds || []).includes(wallet.id));
+  if (!selectedWallets.length) {
+    return [];
+  }
+
+  const { provider, rpcNode, warning } = await createReadProviderForTask(task);
+  const contract =
+    provider && ethers.isAddress(task.contractAddress)
+      ? new ethers.Contract(task.contractAddress, abiEntries, provider)
+      : null;
+
+  const phaseTasks = [];
+
+  for (const candidate of candidates) {
+    const phaseType = candidate.phaseType;
+    const priceInfo = contract ? await readPhasePrice(contract, abiEntries, phaseType) : { priceEth: null, priceSource: null };
+    const startTimeInfo = contract ? await readPhaseStartTime(contract, abiEntries, phaseType) : { waitUntilIso: null, source: null };
+    const eligibilityFunction = findPhaseEligibilityFunction(abiEntries, phaseType);
+    const eligibleWalletIds = [];
+    const reviewWalletIds = [];
+    const ineligibleWalletLabels = [];
+
+    for (const wallet of selectedWallets) {
+      if (!provider) {
+        reviewWalletIds.push(wallet.id);
+        continue;
+      }
+
+      const eligibility = await evaluateWalletPhaseEligibility({
+        provider,
+        contractAddress: task.contractAddress,
+        abiEntries,
+        candidate,
+        walletAddress: wallet.address,
+        quantityPerWallet: task.quantityPerWallet,
+        eligibilityFunction,
+        phasePriceEth: priceInfo.priceEth,
+        phaseType
+      });
+
+      if (eligibility.status === "eligible") {
+        eligibleWalletIds.push(wallet.id);
+        continue;
+      }
+
+      if (eligibility.status === "review") {
+        reviewWalletIds.push(wallet.id);
+        continue;
+      }
+
+      ineligibleWalletLabels.push(wallet.label || wallet.addressShort || wallet.address);
+    }
+
+    const phaseWalletIds =
+      phaseType === "public"
+        ? selectedWallets.map((wallet) => wallet.id)
+        : eligibleWalletIds.length > 0
+          ? [...new Set([...eligibleWalletIds, ...reviewWalletIds])]
+          : reviewWalletIds;
+
+    if (!phaseWalletIds.length) {
+      continue;
+    }
+
+    const argResolution = mintAutomation.resolveFunctionArgsFromEntry(candidate, {
+      walletAddress: "{{wallet}}",
+      quantity: task.quantityPerWallet
+    });
+
+    const phaseWaitUntilIso = resolvePhaseWaitUntil(task.waitUntilIso, startTimeInfo.waitUntilIso);
+    const readyState = buildPhaseTaskReadyState(task, abiEntries, phaseType, phaseWaitUntilIso);
+    const reviewNeeded = reviewWalletIds.length > 0 || (!provider && Boolean(warning)) || hasProofLikeInput(candidate);
+    const phaseTags = [...new Set([...(task.tags || []), "auto-phase", mintPhaseLabels[phaseType].toLowerCase()])];
+    if (reviewNeeded) {
+      phaseTags.push("review");
+    }
+
+    const phaseNotes = mergeTaskNotes(
+      task.notes,
+      `Auto-generated ${mintPhaseLabels[phaseType]} phase using ${candidate.signature}`,
+      eligibleWalletIds.length > 0 ? `${eligibleWalletIds.length} wallet(s) confirmed eligible` : "",
+      reviewWalletIds.length > 0
+        ? `${reviewWalletIds.length} wallet(s) need review before launch`
+        : "",
+      ineligibleWalletLabels.length > 0
+        ? `${ineligibleWalletLabels.length} wallet(s) excluded as ineligible`
+        : "",
+      eligibilityFunction ? `Eligibility check: ${eligibilityFunction}(address)` : "",
+      priceInfo.priceSource ? `Price source: ${priceInfo.priceSource}` : "",
+      startTimeInfo.source ? `Start source: ${startTimeInfo.source}` : "",
+      rpcNode?.name ? `Planner RPC: ${rpcNode.name}` : "",
+      warning || "",
+      hasProofLikeInput(candidate) ? "Proof or signature inputs may still need manual values." : "",
+      !argResolution.supported ? `Args need review: ${argResolution.reason}` : ""
+    );
+
+    const phaseTask = applyPhaseGasProfile(
+      {
+        ...task,
+        id: createId("task"),
+        name: buildPhaseTaskName(task.name, phaseType),
+        tags: phaseTags,
+        notes: phaseNotes,
+        walletIds: phaseWalletIds,
+        mintFunction: candidate.name,
+        mintArgs: argResolution.supported ? JSON.stringify(argResolution.args) : task.mintArgs,
+        priceEth: priceInfo.priceEth || task.priceEth || "0",
+        platform:
+          phaseType === "allowlist"
+            ? "Allowlist Mint"
+            : phaseType === "public"
+              ? "ERC721 Public Mint"
+              : "Generic EVM (auto-detect)",
+        status: "draft",
+        done: false,
+        ...readyState,
+        progress: {
+          phase: "Ready",
+          percent: 0
+        },
+        summary: {
+          total: 0,
+          success: 0,
+          failed: 0,
+          stopped: 0,
+          hashes: []
+        },
+        history: [],
+        lastRunAt: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      phaseType
+    );
+
+    phaseTasks.push(phaseTask);
+  }
+
+  return phaseTasks.sort(
+    (left, right) =>
+      mintPhaseOrder.indexOf((left.tags || []).find((tag) => mintPhaseOrder.includes(tag)) || "public") -
+      mintPhaseOrder.indexOf((right.tags || []).find((tag) => mintPhaseOrder.includes(tag)) || "public")
+  );
 }
 
 async function buildMintAutofill({ chainKey, contractAddress, abiEntries, requestedFunction = "" }) {
@@ -2594,6 +3446,23 @@ async function handleTaskSave(request, response) {
         throw new Error(
           "Mempool execution requires at least one enabled ws:// or wss:// RPC URL for the selected chain"
         );
+      }
+    }
+
+    const autoGeneratePhaseTasks = !existingTask && Boolean(payload.autoGeneratePhaseTasks);
+    if (autoGeneratePhaseTasks) {
+      const generatedTasks = await buildPhaseTasksFromTask(task, abiEntries);
+      if (generatedTasks.length > 0) {
+        appState.tasks = [...generatedTasks, ...appState.tasks];
+        await persistAppState();
+        emitState();
+        sendJson(response, 200, {
+          ok: true,
+          task: buildTaskResponse(generatedTasks[0]),
+          tasks: generatedTasks.map((entry) => buildTaskResponse(entry)),
+          autoGeneratedPhaseTasks: true
+        });
+        return;
       }
     }
 
