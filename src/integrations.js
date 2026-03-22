@@ -70,10 +70,14 @@ function resolveIntegrationSecrets(storedSecrets = {}) {
 function buildClientSettings(settings, storedSecrets = {}) {
   const normalized = normalizeDashboardSettings(settings);
   const resolved = resolveIntegrationSecrets(storedSecrets);
+  const storedExplorerApiKey = trimValue(storedSecrets.explorerApiKey, "");
+  const envExplorerApiKey = trimValue(process.env[secretEnvNames.explorerApiKey], "");
+  const explorerApiKeySource = storedExplorerApiKey ? "saved" : envExplorerApiKey ? "env" : "";
 
   return {
     ...normalized,
-    explorerApiKeyConfigured: Boolean(resolved.explorerApiKey)
+    explorerApiKeyConfigured: Boolean(resolved.explorerApiKey),
+    explorerApiKeySource
   };
 }
 

@@ -2920,6 +2920,14 @@ async function handleContractAutofill(request, response) {
 }
 
 async function verifyExplorerApiKey(apiKey) {
+  if (/^https?:\/\//i.test(apiKey) || /etherscan/i.test(apiKey) || /apikey=/i.test(apiKey)) {
+    throw new Error("Paste the raw Etherscan V2 API key only, not a link or URL.");
+  }
+
+  if (/\s/.test(apiKey)) {
+    throw new Error("Explorer API key must be a single token with no spaces.");
+  }
+
   const result = await fetchAbiFromExplorer({
     chainId: explorerKeyTestChainId,
     address: explorerKeyTestAddress,
@@ -2938,6 +2946,7 @@ async function handleExplorerKeyTest(request, response) {
     const payload = await readJsonBody(request);
     const inputKey = String(payload.explorerApiKey || "").trim();
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const savedKey = String(integrationSecrets.explorerApiKey || "").trim();
     const apiKey = inputKey || resolvedSecrets.explorerApiKey;
 
     if (!apiKey) {
@@ -2948,9 +2957,20 @@ async function handleExplorerKeyTest(request, response) {
 
     sendJson(response, 200, {
       ok: true,
-      source: inputKey ? "input" : "saved",
+      source: inputKey ? "input" : savedKey ? "saved" : "env",
       ...result
     });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleExplorerKeyDelete(response) {
+  try {
+    await database.deleteSecret(secretStorageKeys.explorerApiKey);
+    delete integrationSecrets.explorerApiKey;
+    emitState();
+    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
   }
@@ -3356,6 +3376,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/settings") {
       await handleSettingsSave(request, response);
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/settings/explorer-key") {
+      await handleExplorerKeyDelete(response);
       return;
     }
 

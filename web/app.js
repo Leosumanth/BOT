@@ -72,6 +72,7 @@ const themeInput = document.getElementById("theme-input");
 const resultsPathInput = document.getElementById("results-path-input");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
+const deleteExplorerKeyButton = document.getElementById("delete-explorer-key-button");
 const testExplorerKeyButton = document.getElementById("test-explorer-key-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
@@ -1567,9 +1568,33 @@ function setExplorerKeyStatus(message = null) {
     return;
   }
 
-  explorerConfigStatus.textContent = state.settings.explorerApiKeyConfigured
-    ? "Key available"
-    : "Not configured";
+  if (state.settings.explorerApiKeySource === "saved") {
+    explorerConfigStatus.textContent = "Saved key available";
+    return;
+  }
+
+  if (state.settings.explorerApiKeySource === "env") {
+    explorerConfigStatus.textContent = "Environment key available";
+    return;
+  }
+
+  explorerConfigStatus.textContent = "Not configured";
+}
+
+function syncExplorerKeyControls() {
+  if (state.settings.explorerApiKeySource === "saved") {
+    explorerApiKeyInput.placeholder = "Saved on server. Enter a new key to replace it.";
+  } else if (state.settings.explorerApiKeySource === "env") {
+    explorerApiKeyInput.placeholder = "Loaded from .env. Enter a new key to override it.";
+  } else {
+    explorerApiKeyInput.placeholder = "Etherscan V2 API key";
+  }
+
+  deleteExplorerKeyButton.disabled = state.settings.explorerApiKeySource !== "saved";
+  deleteExplorerKeyButton.title =
+    state.settings.explorerApiKeySource === "saved"
+      ? "Delete the saved explorer API key"
+      : "Only saved dashboard keys can be deleted here";
 }
 
 function renderSettings() {
@@ -1578,10 +1603,7 @@ function renderSettings() {
   resultsPathInput.value = state.settings.resultsPath || "./dist/mint-results.json";
   explorerApiKeyInput.value = "";
 
-  explorerApiKeyInput.placeholder = state.settings.explorerApiKeyConfigured
-    ? "Saved on server. Enter a new key to replace it."
-    : "Etherscan V2 API key";
-
+  syncExplorerKeyControls();
   setExplorerKeyStatus();
 }
 
@@ -2741,12 +2763,49 @@ settingsForm.addEventListener("submit", async (event) => {
       "success",
       explorerApiKeyValue ? "Explorer Key Updated" : "Settings Updated"
     );
+    syncExplorerKeyControls();
     setExplorerKeyStatus();
   } catch {}
 });
 
 explorerApiKeyInput.addEventListener("input", () => {
   setExplorerKeyStatus();
+});
+
+deleteExplorerKeyButton.addEventListener("click", async () => {
+  if (state.settings.explorerApiKeySource !== "saved") {
+    showToast("There is no saved dashboard key to delete.", "info", "No Saved Key");
+    return;
+  }
+
+  if (!window.confirm("Delete the saved explorer API key?")) {
+    return;
+  }
+
+  const buttonLabel = deleteExplorerKeyButton.textContent;
+  deleteExplorerKeyButton.disabled = true;
+  deleteExplorerKeyButton.textContent = "Deleting...";
+
+  try {
+    const payload = await request("/api/settings/explorer-key", {
+      method: "DELETE"
+    });
+
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
+
+    explorerApiKeyInput.value = "";
+    syncExplorerKeyControls();
+    setExplorerKeyStatus();
+    showToast("Saved explorer API key deleted.", "success", "Explorer Key Deleted");
+  } catch {
+    syncExplorerKeyControls();
+    setExplorerKeyStatus();
+  } finally {
+    deleteExplorerKeyButton.textContent = buttonLabel;
+    syncExplorerKeyControls();
+  }
 });
 
 testExplorerKeyButton.addEventListener("click", async () => {
@@ -2765,11 +2824,19 @@ testExplorerKeyButton.addEventListener("click", async () => {
       })
     });
 
-    setExplorerKeyStatus(payload.source === "input" ? "Typed key verified" : "Saved key verified");
+    const statusMessage =
+      payload.source === "input"
+        ? "Typed key verified"
+        : payload.source === "env"
+          ? "Environment key verified"
+          : "Saved key verified";
+    setExplorerKeyStatus(statusMessage);
     showToast(
       payload.source === "input"
         ? "Explorer API key is valid. Save settings to replace the current key."
-        : "Saved explorer API key is valid.",
+        : payload.source === "env"
+          ? "Environment explorer API key is valid. Save a new key if you want to override it in the dashboard."
+          : "Saved explorer API key is valid.",
       "success",
       "Explorer Key Valid"
     );

@@ -391,10 +391,12 @@
                   <span>Explorer API Key</span>
                   <input id="explorer-api-key-input" type="password" placeholder="Etherscan V2 API key" />
                 </label>
+                <p class="helper-copy">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
                 <p class="helper-copy">Leave blank to keep the current key. Enter a new key and save settings to replace it.</p>
               </section>
 
               <div class="settings-actions">
+                <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                 <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                 <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
               </div>
