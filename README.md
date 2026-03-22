@@ -39,6 +39,8 @@ It is designed as a reusable template for contracts that expose a mint function 
 - encrypts dashboard-imported wallet secrets before storing them
 - can send Telegram and Discord alerts for run lifecycle events
 - can fetch verified contract ABI JSON from explorer APIs inside the dashboard
+- can auto-detect `mint`, `publicMint`, and `safeMint` from ABI JSON to reduce task setup errors
+- can auto-fill the mint function, args template, platform, quantity default, and detected ETH price after ABI upload or explorer fetch
 
 ## Setup
 
@@ -100,6 +102,7 @@ Copy-Item .env.example .env
 - `CONTRACT_ADDRESS`: NFT contract address
 - `ABI_PATH`: path to the ABI JSON file
 - `MINT_FUNCTION`: function name to call
+  If the configured name is missing or wrong and the ABI exposes `mint`, `publicMint`, or `safeMint`, the bot auto-detects the first matching function.
 - `MINT_ARGS`: JSON array of arguments, for example `[]` or `[2]`
   String values can include `{{wallet}}`, `{{index}}`, and `{{timestamp}}` placeholders.
 - `MINT_VALUE_ETH`: ETH value to send with the transaction
@@ -398,5 +401,7 @@ API and service requirements:
 
 - This bot assumes the target contract is on an EVM-compatible chain.
 - You must use the correct ABI and exact function arguments for the collection you want to mint.
+- The dashboard now auto-detects `mint`, `publicMint`, and `safeMint` from pasted, uploaded, or explorer-fetched ABIs and auto-fills the mint function when your current selection is not valid for that ABI.
+- When a contract address, chain, and ABI are available in the dashboard, the task builder now auto-fills the mint function, mint args template, platform, and default quantity, and it tries to read the mint price from common on-chain view functions such as `mintPrice()` or `publicSalePrice()`.
 - Test with a low-risk wallet first.
 - Keep your private key secure and never commit `.env`.

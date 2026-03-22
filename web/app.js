@@ -159,6 +159,8 @@ const taskPrivateRelayOnlyToggle = document.getElementById("task-private-relay-o
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
 let events = null;
+let abiAutofillTimer = null;
+let abiAutofillRequestId = 0;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1516,20 +1518,245 @@ function parseAbiEntries(value) {
   return Array.isArray(parsed) ? parsed : parsed.abi || [];
 }
 
-function suggestFunctionFromAbi(abiEntries) {
-  const functions = abiEntries.filter((item) => item?.type === "function" && item.name);
-  const currentFunction = taskFunctionInput.value.trim();
-
-  if (currentFunction && functions.some((item) => item.name === currentFunction)) {
-    return "";
+function findAbiFunctionEntry(abiEntries, functionName) {
+  const requested = String(functionName || "").trim().toLowerCase();
+  if (!requested) {
+    return null;
   }
 
   return (
-    functions.find((item) => item.name === "mint")?.name ||
-    functions.find((item) => /mint/i.test(item.name))?.name ||
-    functions[0]?.name ||
-    ""
+    abiEntries.find(
+      (entry) =>
+        entry?.type === "function" &&
+        typeof entry.name === "string" &&
+        entry.name.trim().toLowerCase() === requested
+    ) || null
   );
+}
+
+function abiFunctionNames(abiEntries) {
+  return abiEntries
+    .filter((item) => item?.type === "function" && typeof item.name === "string" && item.name.trim())
+    .map((item) => item.name.trim());
+}
+
+function normalizeAbiName(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function isIntegerAbiType(type) {
+  return /^u?int(\d+)?$/i.test(String(type || ""));
+}
+
+function detectMintFunctionsFromAbi(abiEntries) {
+  const namesByLower = abiFunctionNames(abiEntries).reduce((map, name) => {
+    const lowerName = name.toLowerCase();
+    if (!map.has(lowerName)) {
+      map.set(lowerName, name);
+    }
+    return map;
+  }, new Map());
+
+  return ["mint", "publicMint", "safeMint"]
+    .map((name) => namesByLower.get(name.toLowerCase()) || null)
+    .filter((name, index, values) => Boolean(name) && values.indexOf(name) === index);
+}
+
+function resolveMintFunctionFromAbi(abiEntries, requestedFunction = "") {
+  const namesByLower = abiFunctionNames(abiEntries).reduce((map, name) => {
+    const lowerName = name.toLowerCase();
+    if (!map.has(lowerName)) {
+      map.set(lowerName, name);
+    }
+    return map;
+  }, new Map());
+  const detectedFunctions = detectMintFunctionsFromAbi(abiEntries);
+  const requested = requestedFunction.trim();
+  const matchedRequestedFunction = requested ? namesByLower.get(requested.toLowerCase()) || "" : "";
+
+  return {
+    detectedFunctions,
+    mintFunction: matchedRequestedFunction || detectedFunctions[0] || "",
+    shouldAutofill: Boolean(!matchedRequestedFunction && detectedFunctions[0])
+  };
+}
+
+function inferTaskPlatformFromAbi(abiEntries, mintFunction = "") {
+  const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
+  const abiNames = abiEntries
+    .filter((entry) => typeof entry?.name === "string")
+    .map((entry) => entry.name.toLowerCase());
+  const mintInputNames = (mintEntry?.inputs || []).map((input) => normalizeAbiName(input?.name));
+  const mintInputTypes = (mintEntry?.inputs || []).map((input) => String(input?.type || "").toLowerCase());
+
+  const hasAllowlistPattern =
+    [mintFunction, ...abiNames].some((name) => /allow|white|merkle|proof|presale|claim|signature|voucher/i.test(name)) ||
+    mintInputNames.some((name) => /allow|white|merkle|proof|presale|claim|signature|voucher/i.test(name)) ||
+    mintInputTypes.some((type) => type === "bytes32[]" || type === "bytes" || type === "bytes32");
+
+  const hasErc1155Pattern =
+    abiEntries.some(
+      (entry) =>
+        entry?.type === "function" &&
+        entry.name === "balanceOf" &&
+        Array.isArray(entry.inputs) &&
+        entry.inputs.length === 2
+    ) ||
+    abiEntries.some((entry) => entry?.type === "function" && entry.name === "uri") ||
+    abiEntries.some(
+      (entry) => entry?.type === "event" && /TransferSingle|TransferBatch/.test(String(entry.name || ""))
+    );
+
+  const hasErc721Pattern =
+    abiEntries.some((entry) => entry?.type === "function" && entry.name === "ownerOf") ||
+    abiEntries.some((entry) => entry?.type === "function" && entry.name === "tokenURI") ||
+    abiEntries.some((entry) => entry?.type === "event" && entry.name === "Transfer");
+
+  if (hasAllowlistPattern) {
+    return "Allowlist Mint";
+  }
+
+  if (hasErc1155Pattern) {
+    return "ERC1155 Mint";
+  }
+
+  if (hasErc721Pattern) {
+    return "ERC721 Public Mint";
+  }
+
+  return "Generic EVM (auto-detect)";
+}
+
+function looksLikeQuantityInput(input, inputIndex, totalInputs) {
+  const normalizedName = normalizeAbiName(input?.name);
+  if (!isIntegerAbiType(input?.type)) {
+    return false;
+  }
+
+  if (
+    /id|tokenid|proof|phase|nonce|timestamp|max|limit|sale|price|cost|wei|eth|index/.test(
+      normalizedName
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /qty|quantity|count|mintamount|mintqty|requestedquantity|numberoftokens|numberofnfts|numtokens|tokenquantity|amount/.test(
+      normalizedName
+    )
+  ) {
+    return true;
+  }
+
+  return totalInputs === 1 && inputIndex === 0;
+}
+
+function defaultValueForAbiInput(input, inputIndex, totalInputs) {
+  const type = String(input?.type || "");
+
+  if (/^address$/i.test(type)) {
+    return "{{wallet}}";
+  }
+
+  if (/\[\]$/.test(type)) {
+    return [];
+  }
+
+  if (/^bool$/i.test(type)) {
+    return false;
+  }
+
+  if (/^string$/i.test(type)) {
+    return "";
+  }
+
+  if (/^bytes(\d+)?$/i.test(type)) {
+    return "0x";
+  }
+
+  if (/^tuple/i.test(type)) {
+    return null;
+  }
+
+  if (isIntegerAbiType(type)) {
+    return looksLikeQuantityInput(input, inputIndex, totalInputs) ? 1 : 0;
+  }
+
+  return null;
+}
+
+function inferMintArgsFromAbi(abiEntries, mintFunction = "") {
+  const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
+  if (!mintEntry?.inputs?.length) {
+    return [];
+  }
+
+  return mintEntry.inputs.map((input, inputIndex) =>
+    defaultValueForAbiInput(input, inputIndex, mintEntry.inputs.length)
+  );
+}
+
+function buildLocalMintAutofill(abiEntries, requestedFunction = "") {
+  const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
+  return {
+    mintFunction: resolvedMintFunction.mintFunction,
+    mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
+    quantityPerWallet: 1,
+    platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
+    detectedMintFunctions: resolvedMintFunction.detectedFunctions
+  };
+}
+
+function applyMintAutofill(autofill, options = {}) {
+  const {
+    includeFunction = true,
+    includeArgs = true,
+    includeQuantity = true,
+    includePrice = true,
+    includePlatform = true
+  } = options;
+
+  if (includeFunction && autofill?.mintFunction) {
+    taskFunctionInput.value = autofill.mintFunction;
+  }
+
+  if (includeArgs && Array.isArray(autofill?.mintArgs)) {
+    taskArgsInput.value = JSON.stringify(autofill.mintArgs);
+  }
+
+  if (includeQuantity && autofill?.quantityPerWallet) {
+    taskQuantityInput.value = String(autofill.quantityPerWallet);
+  }
+
+  if (includePrice && autofill?.priceEth !== undefined && autofill?.priceEth !== null) {
+    const hasExistingCustomPrice =
+      taskPriceInput.value.trim() !== "" && taskPriceInput.value.trim() !== "0";
+    if (autofill.priceSource || !hasExistingCustomPrice) {
+      taskPriceInput.value = String(autofill.priceEth);
+    }
+  }
+
+  if (
+    includePlatform &&
+    autofill?.platform &&
+    [...taskPlatformInput.options].some((option) => option.value === autofill.platform)
+  ) {
+    taskPlatformInput.value = autofill.platform;
+  }
+}
+
+function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
+  const parts = [];
+  if (sourceLabel) {
+    parts.push(sourceLabel);
+  }
+  if (autofill?.priceSource) {
+    parts.push(`price via ${autofill.priceSource}`);
+  } else if (autofill?.warnings?.length) {
+    parts.push("partial autofill");
+  }
+  return parts.join(" · ");
 }
 
 function updateAbiStatus(sourceLabel = "") {
@@ -1540,12 +1767,131 @@ function updateAbiStatus(sourceLabel = "") {
 
   try {
     const abi = parseAbiEntries(taskAbiInput.value);
-    const functionCount = abi.filter((item) => item.type === "function").length;
-    abiStatus.textContent = `ABI loaded - ${pluralize(functionCount, "function")}${
-      sourceLabel ? ` - ${sourceLabel}` : ""
-    }`;
+    const functionCount = abiFunctionNames(abi).length;
+    const resolvedMintFunction = resolveMintFunctionFromAbi(abi, taskFunctionInput.value);
+    if (resolvedMintFunction.shouldAutofill) {
+      taskFunctionInput.value = resolvedMintFunction.mintFunction;
+    }
+
+    const statusParts = [`ABI loaded - ${pluralize(functionCount, "function")}`];
+    if (resolvedMintFunction.detectedFunctions.length > 0) {
+      statusParts.push(`detected ${resolvedMintFunction.detectedFunctions.join(", ")}`);
+    } else {
+      statusParts.push("no mint/publicMint/safeMint detected");
+    }
+    if (sourceLabel) {
+      statusParts.push(sourceLabel);
+    }
+
+    abiStatus.textContent = statusParts.join(" - ");
   } catch {
     abiStatus.textContent = "ABI JSON is not valid yet.";
+  }
+}
+
+async function requestRemoteMintAutofill(abiEntries, options = {}) {
+  const {
+    sourceLabel = "",
+    includeFunction = true,
+    includeArgs = true,
+    includeQuantity = true,
+    includePrice = true,
+    includePlatform = true
+  } = options;
+  const chainKey = taskChainInput.value;
+  const contractAddress = taskContractInput.value.trim();
+
+  if (!chainKey || !contractAddress) {
+    return null;
+  }
+
+  const requestId = ++abiAutofillRequestId;
+
+  try {
+    const payload = await request("/api/contracts/autofill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chainKey,
+        contractAddress,
+        abi: abiEntries,
+        mintFunction: taskFunctionInput.value
+      })
+    });
+
+    if (requestId !== abiAutofillRequestId) {
+      return null;
+    }
+
+    const autofill = payload.autofill || null;
+    if (!autofill) {
+      return null;
+    }
+
+    applyMintAutofill(autofill, {
+      includeFunction,
+      includeArgs,
+      includeQuantity,
+      includePrice,
+      includePlatform
+    });
+    updateAbiStatus(buildAbiStatusSourceLabel(sourceLabel, autofill));
+    return autofill;
+  } catch {
+    if (requestId === abiAutofillRequestId) {
+      updateAbiStatus(sourceLabel);
+    }
+    return null;
+  }
+}
+
+function scheduleRemoteMintAutofill(abiEntries, options = {}) {
+  window.clearTimeout(abiAutofillTimer);
+  abiAutofillTimer = window.setTimeout(() => {
+    requestRemoteMintAutofill(abiEntries, options).catch(() => {});
+  }, 350);
+}
+
+function applyAbiAutofillFromCurrentInput(options = {}) {
+  const {
+    sourceLabel = "",
+    includeFunction = true,
+    includeArgs = true,
+    includeQuantity = true,
+    includePrice = true,
+    includePlatform = true,
+    remote = true
+  } = options;
+
+  if (!taskAbiInput.value.trim()) {
+    updateAbiStatus();
+    return;
+  }
+
+  try {
+    const abiEntries = parseAbiEntries(taskAbiInput.value);
+    const localAutofill = buildLocalMintAutofill(abiEntries, taskFunctionInput.value);
+    applyMintAutofill(localAutofill, {
+      includeFunction,
+      includeArgs,
+      includeQuantity,
+      includePrice: false,
+      includePlatform
+    });
+    updateAbiStatus(buildAbiStatusSourceLabel(sourceLabel, localAutofill));
+
+    if (remote) {
+      scheduleRemoteMintAutofill(abiEntries, {
+        sourceLabel,
+        includeFunction,
+        includeArgs,
+        includeQuantity,
+        includePrice,
+        includePlatform
+      });
+    }
+  } catch {
+    updateAbiStatus();
   }
 }
 
@@ -1573,13 +1919,13 @@ async function fetchAbiForCurrentTask() {
       `/api/explorer/abi?chainKey=${encodeURIComponent(chainKey)}&address=${encodeURIComponent(address)}`
     );
     taskAbiInput.value = JSON.stringify(payload.abi, null, 2);
-    const suggestedFunction = suggestFunctionFromAbi(payload.abi || []);
-    if (suggestedFunction) {
-      taskFunctionInput.value = suggestedFunction;
-    }
-
-    updateAbiStatus(payload.provider || "Explorer");
-    showToast(`ABI loaded from ${payload.provider || "the explorer"}.`, "success", "ABI Loaded");
+    applyMintAutofill(payload.autofill || buildLocalMintAutofill(payload.abi || [], taskFunctionInput.value));
+    updateAbiStatus(buildAbiStatusSourceLabel(payload.provider || "Explorer", payload.autofill));
+    showToast(
+      `ABI loaded from ${payload.provider || "the explorer"} and mint fields were auto-filled.`,
+      "success",
+      "ABI Loaded"
+    );
   } catch {
     updateAbiStatus();
   } finally {
@@ -1988,9 +2334,56 @@ taskChainInput.addEventListener("change", () => {
       return node?.chainKey === taskChainInput.value;
     })
   );
+
+  if (taskAbiInput.value.trim()) {
+    applyAbiAutofillFromCurrentInput({
+      sourceLabel: "Chain updated",
+      includeFunction: false,
+      includeArgs: false,
+      includeQuantity: false,
+      includePrice: true,
+      includePlatform: false
+    });
+  }
 });
 
-taskAbiInput.addEventListener("input", updateAbiStatus);
+taskContractInput.addEventListener("change", () => {
+  if (taskAbiInput.value.trim()) {
+    applyAbiAutofillFromCurrentInput({
+      sourceLabel: "Contract updated",
+      includeFunction: false,
+      includeArgs: false,
+      includeQuantity: false,
+      includePrice: true,
+      includePlatform: false
+    });
+  }
+});
+
+taskFunctionInput.addEventListener("change", () => {
+  if (taskAbiInput.value.trim()) {
+    applyAbiAutofillFromCurrentInput({
+      sourceLabel: "Mint function updated",
+      includeFunction: true,
+      includeArgs: true,
+      includeQuantity: true,
+      includePrice: false,
+      includePlatform: true,
+      remote: false
+    });
+  }
+});
+
+taskAbiInput.addEventListener("input", () => {
+  applyAbiAutofillFromCurrentInput({
+    sourceLabel: "Manual ABI",
+    includeFunction: true,
+    includeArgs: true,
+    includeQuantity: true,
+    includePrice: true,
+    includePlatform: true
+  });
+});
 
 fetchAbiButton.addEventListener("click", () => {
   fetchAbiForCurrentTask().catch(() => {});
@@ -2003,7 +2396,14 @@ taskAbiFileInput.addEventListener("change", async () => {
   }
 
   taskAbiInput.value = await file.text();
-  updateAbiStatus();
+  applyAbiAutofillFromCurrentInput({
+    sourceLabel: "ABI file",
+    includeFunction: true,
+    includeArgs: true,
+    includeQuantity: true,
+    includePrice: true,
+    includePlatform: true
+  });
 });
 
 ["dragenter", "dragover"].forEach((eventName) => {
@@ -2027,7 +2427,14 @@ abiDropzone.addEventListener("drop", async (event) => {
   }
 
   taskAbiInput.value = await file.text();
-  updateAbiStatus();
+  applyAbiAutofillFromCurrentInput({
+    sourceLabel: "Dropped ABI",
+    includeFunction: true,
+    includeArgs: true,
+    includeQuantity: true,
+    includePrice: true,
+    includePlatform: true
+  });
 });
 
 taskForm.addEventListener("submit", async (event) => {

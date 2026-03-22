@@ -417,6 +417,344 @@ function sanitizeTaskInput(payload, existingTask = null) {
   };
 }
 
+function parseTaskAbiEntries(abiJson) {
+  const parsedAbi = JSON.parse(abiJson);
+  const abiEntries = Array.isArray(parsedAbi) ? parsedAbi : parsedAbi?.abi;
+  if (!Array.isArray(abiEntries)) {
+    throw new Error("ABI must be a JSON array or an object with an abi array");
+  }
+
+  return abiEntries;
+}
+
+function abiFunctionNameMap(abiEntries) {
+  return abiEntries.reduce((map, entry) => {
+    if (entry?.type !== "function" || typeof entry.name !== "string") {
+      return map;
+    }
+
+    const name = entry.name.trim();
+    if (!name) {
+      return map;
+    }
+
+    const lowerName = name.toLowerCase();
+    if (!map.has(lowerName)) {
+      map.set(lowerName, name);
+    }
+    return map;
+  }, new Map());
+}
+
+function detectMintFunctionsFromAbi(abiEntries) {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+
+  return ["mint", "publicMint", "safeMint"]
+    .map((name) => namesByLower.get(name.toLowerCase()) || null)
+    .filter((name, index, values) => Boolean(name) && values.indexOf(name) === index);
+}
+
+function resolveMintFunctionFromAbi(abiEntries, requestedFunction = "") {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+  const detectedFunctions = detectMintFunctionsFromAbi(abiEntries);
+  const requested = String(requestedFunction || "").trim();
+  const matchedRequestedFunction = requested ? namesByLower.get(requested.toLowerCase()) || "" : "";
+
+  return {
+    detectedFunctions,
+    mintFunction: matchedRequestedFunction || detectedFunctions[0] || requested,
+    wasAutoDetected: Boolean(!matchedRequestedFunction && detectedFunctions[0])
+  };
+}
+
+function findAbiFunctionEntry(abiEntries, functionName) {
+  const requested = String(functionName || "").trim().toLowerCase();
+  if (!requested) {
+    return null;
+  }
+
+  return (
+    abiEntries.find(
+      (entry) =>
+        entry?.type === "function" &&
+        typeof entry.name === "string" &&
+        entry.name.trim().toLowerCase() === requested
+    ) || null
+  );
+}
+
+function normalizeAbiName(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function isIntegerAbiType(type) {
+  return /^u?int(\d+)?$/i.test(String(type || ""));
+}
+
+function inferTaskPlatformFromAbi(abiEntries, mintFunction = "") {
+  const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
+  const abiNames = abiEntries
+    .filter((entry) => typeof entry?.name === "string")
+    .map((entry) => entry.name.toLowerCase());
+  const mintInputNames = (mintEntry?.inputs || []).map((input) => normalizeAbiName(input?.name));
+  const mintInputTypes = (mintEntry?.inputs || []).map((input) => String(input?.type || "").toLowerCase());
+
+  const hasAllowlistPattern =
+    [mintFunction, ...abiNames].some((name) => /allow|white|merkle|proof|presale|claim|signature|voucher/i.test(name)) ||
+    mintInputNames.some((name) => /allow|white|merkle|proof|presale|claim|signature|voucher/i.test(name)) ||
+    mintInputTypes.some((type) => type === "bytes32[]" || type === "bytes" || type === "bytes32");
+
+  const hasErc1155Pattern =
+    abiEntries.some(
+      (entry) =>
+        entry?.type === "function" &&
+        entry.name === "balanceOf" &&
+        Array.isArray(entry.inputs) &&
+        entry.inputs.length === 2
+    ) ||
+    abiEntries.some((entry) => entry?.type === "function" && entry.name === "uri") ||
+    abiEntries.some(
+      (entry) => entry?.type === "event" && /TransferSingle|TransferBatch/.test(String(entry.name || ""))
+    );
+
+  const hasErc721Pattern =
+    abiEntries.some((entry) => entry?.type === "function" && entry.name === "ownerOf") ||
+    abiEntries.some((entry) => entry?.type === "function" && entry.name === "tokenURI") ||
+    abiEntries.some((entry) => entry?.type === "event" && entry.name === "Transfer");
+
+  if (hasAllowlistPattern) {
+    return "Allowlist Mint";
+  }
+
+  if (hasErc1155Pattern) {
+    return "ERC1155 Mint";
+  }
+
+  if (hasErc721Pattern) {
+    return "ERC721 Public Mint";
+  }
+
+  return "Generic EVM (auto-detect)";
+}
+
+function looksLikeQuantityInput(input, inputIndex, totalInputs) {
+  const normalizedName = normalizeAbiName(input?.name);
+  if (!isIntegerAbiType(input?.type)) {
+    return false;
+  }
+
+  if (
+    /id|tokenid|proof|phase|nonce|timestamp|max|limit|sale|price|cost|wei|eth|index/.test(
+      normalizedName
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /qty|quantity|count|mintamount|mintqty|requestedquantity|numberoftokens|numberofnfts|numtokens|tokenquantity|amount/.test(
+      normalizedName
+    )
+  ) {
+    return true;
+  }
+
+  return totalInputs === 1 && inputIndex === 0;
+}
+
+function defaultValueForAbiInput(input, inputIndex, totalInputs) {
+  const type = String(input?.type || "");
+
+  if (/^address$/i.test(type)) {
+    return "{{wallet}}";
+  }
+
+  if (/\[\]$/.test(type)) {
+    return [];
+  }
+
+  if (/^bool$/i.test(type)) {
+    return false;
+  }
+
+  if (/^string$/i.test(type)) {
+    return "";
+  }
+
+  if (/^bytes(\d+)?$/i.test(type)) {
+    return "0x";
+  }
+
+  if (/^tuple/i.test(type)) {
+    return null;
+  }
+
+  if (isIntegerAbiType(type)) {
+    return looksLikeQuantityInput(input, inputIndex, totalInputs) ? 1 : 0;
+  }
+
+  return null;
+}
+
+function inferMintArgsFromAbi(abiEntries, mintFunction = "") {
+  const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
+  if (!mintEntry?.inputs?.length) {
+    return [];
+  }
+
+  return mintEntry.inputs.map((input, inputIndex) =>
+    defaultValueForAbiInput(input, inputIndex, mintEntry.inputs.length)
+  );
+}
+
+function formatEthString(value) {
+  if (typeof value !== "bigint") {
+    return null;
+  }
+
+  const formatted = ethers.formatEther(value);
+  const trimmed = formatted.includes(".") ? formatted.replace(/\.?0+$/, "") : formatted;
+  return trimmed || "0";
+}
+
+function getChainRpcNodes(chainKey) {
+  return (appState?.rpcNodes || []).filter((node) => node.enabled && node.chainKey === chainKey);
+}
+
+async function createReadProviderForChain(chainKey) {
+  const chainRpcNodes = getChainRpcNodes(chainKey);
+  if (chainRpcNodes.length === 0) {
+    return {
+      provider: null,
+      rpcNode: null,
+      warning: `No enabled RPC nodes configured for ${chainKey}`
+    };
+  }
+
+  let lastError = null;
+
+  for (const rpcNode of chainRpcNodes) {
+    const provider = new ethers.JsonRpcProvider(rpcNode.url);
+    try {
+      await provider.getBlockNumber();
+      return {
+        provider,
+        rpcNode,
+        warning: null
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  return {
+    provider: null,
+    rpcNode: null,
+    warning: lastError ? `Unable to reach configured RPC nodes: ${formatError(lastError)}` : null
+  };
+}
+
+async function inferMintPriceFromContract({ chainKey, contractAddress, abiEntries }) {
+  const preferredPriceFunctions = [
+    "mintPrice",
+    "publicMintPrice",
+    "publicSalePrice",
+    "publicPrice",
+    "salePrice",
+    "price",
+    "cost",
+    "mintCost",
+    "mintFee",
+    "whitelistPrice",
+    "allowlistPrice",
+    "presalePrice",
+    "wlPrice",
+    "tokenPrice",
+    "getMintPrice",
+    "getPrice",
+    "getCost",
+    "pricePerToken"
+  ];
+  const { provider, rpcNode, warning } = await createReadProviderForChain(chainKey);
+
+  if (!provider) {
+    return {
+      priceEth: null,
+      priceSource: null,
+      warning
+    };
+  }
+
+  const contract = new ethers.Contract(contractAddress, abiEntries, provider);
+  const namesByLower = abiFunctionNameMap(abiEntries);
+
+  for (const preferredName of preferredPriceFunctions) {
+    const actualName = namesByLower.get(preferredName.toLowerCase());
+    if (!actualName) {
+      continue;
+    }
+
+    const priceEntry = findAbiFunctionEntry(abiEntries, actualName);
+    if (!priceEntry || priceEntry.inputs?.length > 0 || !["view", "pure"].includes(priceEntry.stateMutability)) {
+      continue;
+    }
+
+    try {
+      const value = await contract[actualName]();
+      const priceEth = formatEthString(value);
+      if (priceEth === null) {
+        continue;
+      }
+
+      return {
+        priceEth,
+        priceSource: actualName,
+        warning: null,
+        rpcNodeName: rpcNode?.name || null
+      };
+    } catch {
+      // Keep trying other view functions.
+    }
+  }
+
+  return {
+    priceEth: null,
+    priceSource: null,
+    warning: null,
+    rpcNodeName: rpcNode?.name || null
+  };
+}
+
+async function buildMintAutofill({ chainKey, contractAddress, abiEntries, requestedFunction = "" }) {
+  const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
+  const warnings = [];
+  const priceResolution =
+    chainKey && contractAddress && ethers.isAddress(contractAddress)
+      ? await inferMintPriceFromContract({ chainKey, contractAddress, abiEntries })
+      : {
+          priceEth: null,
+          priceSource: null,
+          warning: contractAddress ? "Contract address must be a valid EVM address for price detection" : null,
+          rpcNodeName: null
+        };
+
+  if (priceResolution.warning) {
+    warnings.push(priceResolution.warning);
+  }
+
+  return {
+    mintFunction: resolvedMintFunction.mintFunction,
+    mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
+    quantityPerWallet: 1,
+    priceEth: priceResolution.priceEth || "0",
+    platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
+    detectedMintFunctions: resolvedMintFunction.detectedFunctions,
+    priceSource: priceResolution.priceSource,
+    rpcNodeName: priceResolution.rpcNodeName || null,
+    warnings
+  };
+}
+
 function buildEnvWalletEntries() {
   const keys = parseList(process.env.PRIVATE_KEYS || process.env.PRIVATE_KEY);
   const records = [];
@@ -1934,6 +2272,7 @@ async function handleTaskSave(request, response) {
     const payload = await readJsonBody(request);
     const existingTask = payload.id ? getTaskById(payload.id) : null;
     const task = sanitizeTaskInput(payload, existingTask);
+    let abiEntries = null;
 
     if (!task.contractAddress) {
       throw new Error("Contract address is required");
@@ -1944,13 +2283,20 @@ async function handleTaskSave(request, response) {
     }
 
     try {
-      const parsedAbi = JSON.parse(task.abiJson);
-      const abiEntries = Array.isArray(parsedAbi) ? parsedAbi : parsedAbi?.abi;
-      if (!Array.isArray(abiEntries)) {
-        throw new Error("ABI must be a JSON array or an object with an abi array");
-      }
+      abiEntries = parseTaskAbiEntries(task.abiJson);
     } catch (error) {
       throw new Error(`ABI JSON is invalid: ${formatError(error)}`);
+    }
+
+    const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, task.mintFunction);
+    task.mintFunction = resolvedMintFunction.mintFunction;
+    if (!task.mintFunction || !abiFunctionNameMap(abiEntries).has(task.mintFunction.toLowerCase())) {
+      const detectedLabel = resolvedMintFunction.detectedFunctions.length
+        ? resolvedMintFunction.detectedFunctions.join(", ")
+        : "none of mint/publicMint/safeMint";
+      throw new Error(
+        `Mint function "${task.mintFunction || "(empty)"}" was not found in the ABI. Detected ${detectedLabel}.`
+      );
     }
 
     if ((task.walletIds || []).length === 0) {
@@ -2323,13 +2669,50 @@ async function handleExplorerAbiLookup(url, response) {
       address,
       apiKey: resolvedSecrets.explorerApiKey
     });
+    const autofill = await buildMintAutofill({
+      chainKey,
+      contractAddress: address,
+      abiEntries: result.abi || []
+    });
 
     sendJson(response, 200, {
       ok: true,
       abi: result.abi,
+      detectedMintFunction: autofill.detectedMintFunctions[0] || null,
+      detectedMintFunctions: autofill.detectedMintFunctions,
+      autofill,
       chainKey,
       chainLabel: chain.label,
       provider: "Etherscan V2"
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleContractAutofill(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const chainKey = String(payload.chainKey || "").trim();
+    const contractAddress = String(payload.contractAddress || payload.address || "").trim();
+    const abiEntries = Array.isArray(payload.abi)
+      ? payload.abi
+      : parseTaskAbiEntries(String(payload.abiJson || ""));
+
+    if (!chainKey) {
+      throw new Error("Chain is required for mint autofill");
+    }
+
+    const autofill = await buildMintAutofill({
+      chainKey,
+      contractAddress,
+      abiEntries,
+      requestedFunction: payload.mintFunction
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      autofill
     });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
@@ -2749,6 +3132,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/settings") {
       await handleSettingsSave(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/contracts/autofill") {
+      await handleContractAutofill(request, response);
       return;
     }
 

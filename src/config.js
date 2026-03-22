@@ -187,6 +187,45 @@ function normalizeAbiJson(parsed) {
   throw new Error("ABI must be a JSON array or an object with an abi array");
 }
 
+function abiFunctionNameMap(abiEntries) {
+  return abiEntries.reduce((map, entry) => {
+    if (entry?.type !== "function" || typeof entry.name !== "string") {
+      return map;
+    }
+
+    const name = entry.name.trim();
+    if (!name) {
+      return map;
+    }
+
+    const lowerName = name.toLowerCase();
+    if (!map.has(lowerName)) {
+      map.set(lowerName, name);
+    }
+    return map;
+  }, new Map());
+}
+
+function detectMintFunctionsFromAbi(abiEntries) {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+
+  return ["mint", "publicMint", "safeMint"]
+    .map((name) => namesByLower.get(name.toLowerCase()) || null)
+    .filter((name, index, values) => Boolean(name) && values.indexOf(name) === index);
+}
+
+function resolveMintFunctionFromAbi(abiEntries, requestedFunction = "") {
+  const namesByLower = abiFunctionNameMap(abiEntries);
+  const detectedFunctions = detectMintFunctionsFromAbi(abiEntries);
+  const requested = String(requestedFunction || "").trim();
+  const matchedRequestedFunction = requested ? namesByLower.get(requested.toLowerCase()) || "" : "";
+
+  return {
+    detectedFunctions,
+    mintFunction: matchedRequestedFunction || detectedFunctions[0] || requested
+  };
+}
+
 function loadAbiFromPath(abiPath) {
   const resolvedPath = path.resolve(process.cwd(), abiPath);
   if (!fs.existsSync(resolvedPath)) {
@@ -327,13 +366,18 @@ function normalizeConfig(raw) {
   const abiPath = optionalString(raw, "ABI_PATH") || "./abi/contract.json";
   const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
   const retryWindowMs = Math.max(0, optionalInteger(raw, "RETRY_WINDOW_MS") || 0);
+  const abi = loadAbi(raw, abiPath);
+  const resolvedMintFunction = resolveMintFunctionFromAbi(
+    abi,
+    optionalString(raw, "MINT_FUNCTION") || "mint"
+  );
   const normalized = {
     rpcUrls: loadRpcUrls(raw),
     privateKeys: loadPrivateKeys(raw),
     contractAddress: required(raw, "CONTRACT_ADDRESS"),
     abiPath,
-    abi: loadAbi(raw, abiPath),
-    mintFunction: optionalString(raw, "MINT_FUNCTION") || "mint",
+    abi,
+    mintFunction: resolvedMintFunction.mintFunction,
     mintArgsTemplate: parseJsonArrayValue(raw.MINT_ARGS, "MINT_ARGS", []),
     mintValueEth: optionalString(raw, "MINT_VALUE_ETH") || "0",
     gasLimit: optionalNumber(raw, "GAS_LIMIT"),
@@ -385,6 +429,15 @@ function normalizeConfig(raw) {
     triggerMempoolSignature: optionalString(raw, "TRIGGER_MEMPOOL_SIGNATURE"),
     triggerTimeoutMs: optionalInteger(raw, "TRIGGER_TIMEOUT_MS")
   };
+
+  if (!normalized.mintFunction || !abiFunctionNameMap(normalized.abi).has(normalized.mintFunction.toLowerCase())) {
+    const detectedLabel = resolvedMintFunction.detectedFunctions.length
+      ? resolvedMintFunction.detectedFunctions.join(", ")
+      : "none of mint/publicMint/safeMint";
+    throw new Error(
+      `MINT_FUNCTION "${normalized.mintFunction || "(empty)"}" was not found in the ABI. Detected ${detectedLabel}.`
+    );
+  }
 
   if (normalized.transferAfterMinted && !normalized.transferAddress) {
     throw new Error("TRANSFER_ADDRESS is required when TRANSFER_AFTER_MINTED=true");
