@@ -1093,7 +1093,7 @@ function renderTaskCard(task) {
   const active = state.runState.activeTaskId === task.id && state.runState.status === "running";
   const queued = task.status === "queued";
   const hashCount = summary.hashes?.length || 0;
-  const tags = task.tags || [];
+  const tags = [...(task.tags || [])];
 
   return `
     <article class="task-card ${escapeHtml(task.status)}" data-task-id="${escapeHtml(task.id)}" data-tilt>
@@ -1653,6 +1653,7 @@ function buildTaskPayload() {
     dryRun: taskDryRunToggle.checked,
     waitForReceipt: true,
     warmupRpc: taskWarmupToggle.checked,
+    preSignTransactions: true,
     continueOnError: false,
     walletMode: taskWalletModeInput.value,
     useSchedule: taskScheduleToggle.checked,

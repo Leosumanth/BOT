@@ -284,6 +284,7 @@ async function buildConfigForTask(database, state, task) {
     CONTINUE_ON_ERROR: task.continueOnError,
     WALLET_MODE: task.walletMode,
     WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
+    PRE_SIGN_TRANSACTIONS: true,
     READY_CHECK_FUNCTION: task.readyCheckFunction,
     READY_CHECK_ARGS: task.readyCheckArgs,
     READY_CHECK_MODE: task.readyCheckMode,

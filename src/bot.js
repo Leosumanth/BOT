@@ -962,6 +962,42 @@ async function wrapSignedTransactionResponse(provider, signedTransaction) {
   return provider._wrapTransactionResponse(transaction, network).replaceableTransaction(blockNumber);
 }
 
+async function submitSignedTransactionWithRoute({
+  provider,
+  config,
+  signedTransaction,
+  walletIndex,
+  label,
+  logger
+}) {
+  if (!config.privateRelayEnabled) {
+    return provider.broadcastTransaction(signedTransaction);
+  }
+
+  try {
+    const relayResult = await sendRelayRpcRequest(config, signedTransaction);
+    const relayHash = extractRelayTransactionHash(relayResult);
+    const wrappedTransaction = await wrapSignedTransactionResponse(provider, signedTransaction);
+
+    logger.info(
+      `[wallet ${walletIndex}] ${label} submitted through private relay${
+        relayHash ? ` (${relayHash})` : ""
+      }`
+    );
+
+    return wrappedTransaction;
+  } catch (error) {
+    if (config.privateRelayOnly) {
+      throw new Error(`Private relay submission failed: ${formatError(error)}`);
+    }
+
+    logger.error(
+      `[wallet ${walletIndex}] Private relay submission failed, falling back to public RPC: ${formatError(error)}`
+    );
+    return provider.broadcastTransaction(signedTransaction);
+  }
+}
+
 async function submitTransactionWithRoute({
   wallet,
   provider,
@@ -978,17 +1014,14 @@ async function submitTransactionWithRoute({
   try {
     const populatedTransaction = await wallet.populateTransaction(txRequest);
     const signedTransaction = await wallet.signTransaction(populatedTransaction);
-    const relayResult = await sendRelayRpcRequest(config, signedTransaction);
-    const relayHash = extractRelayTransactionHash(relayResult);
-    const wrappedTransaction = await wrapSignedTransactionResponse(provider, signedTransaction);
-
-    logger.info(
-      `[wallet ${walletIndex}] ${label} submitted through private relay${
-        relayHash ? ` (${relayHash})` : ""
-      }`
-    );
-
-    return wrappedTransaction;
+    return await submitSignedTransactionWithRoute({
+      provider,
+      config,
+      signedTransaction,
+      walletIndex,
+      label,
+      logger
+    });
   } catch (error) {
     if (config.privateRelayOnly) {
       throw new Error(`Private relay submission failed: ${formatError(error)}`);
@@ -1026,6 +1059,32 @@ async function sendContractTransaction({
     label,
     logger
   });
+}
+
+async function preparePresignedContractTransaction({
+  contractMethod,
+  args,
+  overrides,
+  wallet,
+  walletIndex,
+  label,
+  logger
+}) {
+  const txRequest = await contractMethod.populateTransaction(...args, overrides);
+  const populatedTransaction = await wallet.populateTransaction(txRequest);
+  const signedTransaction = await wallet.signTransaction(populatedTransaction);
+  const transaction = ethers.Transaction.from(signedTransaction);
+
+  logger.info(
+    `[wallet ${walletIndex}] Pre-signed ${label.toLowerCase()} tx: ${transaction.hash} (nonce ${transaction.nonce})`
+  );
+
+  return {
+    request: populatedTransaction,
+    signedTransaction,
+    hash: transaction.hash,
+    nonce: transaction.nonce
+  };
 }
 
 async function waitForEventTrigger(config, signal, logger) {
@@ -1333,10 +1392,8 @@ function persistResults(resultsPath, results, logger) {
   logger.info(`Saved results to ${resolvedPath}`);
 }
 
-async function runSingleWallet(config, privateKey, walletIndex, context) {
+async function createWalletSession(config, privateKey, walletIndex, context) {
   const { signal, logger } = context;
-  await maybeWaitJitter(config.startJitterMs, walletIndex, signal, logger);
-
   const { provider, rpcUrl, chainId } = await createProvider(config);
   try {
     const wallet = new ethers.Wallet(privateKey, provider);
@@ -1350,8 +1407,6 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     });
     let nextPlannedNonce =
       (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
-    const retryWindowDeadline =
-      config.retryWindowMs > 0 ? Date.now() + config.retryWindowMs : null;
 
     logger.info(`[wallet ${walletIndex}] Address: ${walletAddress}`);
     logger.info(`[wallet ${walletIndex}] RPC: ${rpcUrl}`);
@@ -1361,11 +1416,6 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
     logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
     logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
-    logger.info(
-      `[wallet ${walletIndex}] Retry policy: ${config.maxRetries} attempt(s) minimum${
-        retryWindowDeadline ? ` with a ${config.retryWindowMs}ms retry window` : ""
-      }`
-    );
 
     if (config.warmupRpc) {
       await warmupProvider(provider, walletAddress, signal);
@@ -1373,13 +1423,103 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
     }
 
     await ensureMinimumBalance(provider, walletAddress, config, walletIndex, logger);
-    await waitForReadyCheck(contract, config, walletIndex, signal, logger);
 
-    const reserveSubmittedNonce = (tx) => {
-      if (typeof tx?.nonce === "number" && tx.nonce >= nextPlannedNonce) {
-        nextPlannedNonce = tx.nonce + 1;
-      }
+    return {
+      provider,
+      wallet,
+      walletAddress,
+      walletIndex,
+      contract,
+      mintMethod,
+      mintArgs,
+      getPlannedNonce() {
+        return nextPlannedNonce;
+      },
+      reserveSubmittedNonce(tx) {
+        if (typeof tx?.nonce === "number" && tx.nonce >= nextPlannedNonce) {
+          nextPlannedNonce = tx.nonce + 1;
+        }
+      },
+      preparedMint: null
     };
+  } catch (error) {
+    await destroyProvider(provider);
+    throw error;
+  }
+}
+
+async function tryPreparePresignedMint(config, session, context) {
+  if (config.dryRun) {
+    return null;
+  }
+
+  const { signal, logger } = context;
+  const { provider, mintMethod, mintArgs, wallet, walletIndex } = session;
+  throwIfAborted(signal);
+
+  try {
+    const overrides = await buildRuntimeOverrides(config, provider);
+
+    if (config.simulateTransaction) {
+      await mintMethod.staticCall(...mintArgs, overrides);
+      const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
+      logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
+    }
+
+    const preparedMint = await preparePresignedContractTransaction({
+      contractMethod: mintMethod,
+      args: mintArgs,
+      overrides: {
+        ...overrides,
+        nonce: session.getPlannedNonce()
+      },
+      wallet,
+      walletIndex,
+      label: "Mint",
+      logger
+    });
+
+    logger.info(`[wallet ${walletIndex}] Mint broadcast armed with a pre-signed transaction`);
+    return preparedMint;
+  } catch (error) {
+    throw attachErrorContext(
+      new Error(`Pre-signing failed: ${formatError(error)}`),
+      {
+        walletAddress: session.walletAddress
+      }
+    );
+  }
+}
+
+async function closeWalletSession(session) {
+  if (!session) {
+    return;
+  }
+
+  await destroyProvider(session.provider);
+}
+
+async function closeWalletSessions(sessions) {
+  await Promise.allSettled((sessions || []).map((session) => closeWalletSession(session)));
+}
+
+async function executeWalletSession(config, session, context) {
+  const { signal, logger } = context;
+  const { provider, wallet, walletAddress, walletIndex, contract, mintMethod, mintArgs } = session;
+
+  try {
+    await maybeWaitJitter(config.startJitterMs, walletIndex, signal, logger);
+
+    const retryWindowDeadline =
+      config.retryWindowMs > 0 ? Date.now() + config.retryWindowMs : null;
+
+    logger.info(
+      `[wallet ${walletIndex}] Retry policy: ${config.maxRetries} attempt(s) minimum${
+        retryWindowDeadline ? ` with a ${config.retryWindowMs}ms retry window` : ""
+      }`
+    );
+
+    await waitForReadyCheck(contract, config, walletIndex, signal, logger);
 
     let mintResult = null;
     let lastAttemptError = null;
@@ -1389,16 +1529,18 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
       attempt += 1;
       throwIfAborted(signal);
 
+      let usedPreparedMint = false;
+
       try {
-        const overrides = await buildRuntimeOverrides(config, provider);
-
-        if (config.simulateTransaction) {
-          await mintMethod.staticCall(...mintArgs, overrides);
-          const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
-          logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
-        }
-
         if (config.dryRun) {
+          const overrides = await buildRuntimeOverrides(config, provider);
+
+          if (config.simulateTransaction) {
+            await mintMethod.staticCall(...mintArgs, overrides);
+            const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
+            logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
+          }
+
           logger.info(`[wallet ${walletIndex}] Dry run enabled, transaction not sent`);
           return {
             walletAddress,
@@ -1408,15 +1550,22 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
           };
         }
 
+        if (!session.preparedMint) {
+          throw new Error("Pre-signed mint transaction is unavailable");
+        }
+
+        usedPreparedMint = true;
+        const preparedMint = session.preparedMint;
+        logger.info(
+          `[wallet ${walletIndex}] Broadcasting pre-signed mint tx: ${preparedMint.hash}`
+        );
+
         mintResult = await sendManagedTransaction({
           send: () =>
-            sendContractTransaction({
-              contractMethod: mintMethod,
-              args: mintArgs,
-              overrides: { ...overrides, nonce: nextPlannedNonce },
-              wallet,
+            submitSignedTransactionWithRoute({
               provider,
               config,
+              signedTransaction: preparedMint.signedTransaction,
               walletIndex,
               label: "Mint",
               logger
@@ -1436,8 +1585,12 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
           label: "Mint",
           logger,
           signal,
-          onSubmitted: reserveSubmittedNonce
+          onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
         });
+
+        if (usedPreparedMint) {
+          session.preparedMint = null;
+        }
 
         if (config.waitForReceipt && mintResult.receipt?.status !== 1) {
           throw attachErrorContext(new Error("Mint transaction reverted on-chain"), {
@@ -1452,6 +1605,10 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
       } catch (error) {
         if (error instanceof AbortRunError) {
           throw error;
+        }
+
+        if (usedPreparedMint) {
+          session.preparedMint = null;
         }
 
         lastAttemptError = error;
@@ -1514,8 +1671,8 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
         receipt: mintResult.receipt,
         logger,
         signal,
-        getPlannedNonce: () => nextPlannedNonce,
-        reserveSubmittedNonce
+        getPlannedNonce: () => session.getPlannedNonce(),
+        reserveSubmittedNonce: (tx) => session.reserveSubmittedNonce(tx)
       });
 
       result.transfers = transferResults;
@@ -1534,55 +1691,96 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
       });
     }
   } finally {
-    await destroyProvider(provider);
+    await closeWalletSession(session);
   }
 }
 
-async function runMintBot(config, hooks = {}) {
-  const logger = createLogger(hooks);
-  const signal = hooks.signal;
+async function runSingleWallet(config, privateKey, walletIndex, context) {
+  const session = await createWalletSession(config, privateKey, walletIndex, context);
+  return executeWalletSession(config, session, context);
+}
 
-  logger.info(`Wallet mode: ${config.walletMode}`);
-  logger.info(`Wallet count: ${config.privateKeys.length}`);
-  logger.info(`Configured RPC URLs: ${config.rpcUrls.length}`);
-  logger.info(`Simulation: ${config.simulateTransaction ? "enabled" : "disabled"}`);
-  logger.info(`Dry run: ${config.dryRun ? "enabled" : "disabled"}`);
-  logger.info(`Gas strategy: ${config.gasStrategy}`);
-  logger.info(`Ready check: ${config.readyCheckFunction || "disabled"}`);
-  logger.info(`Execution trigger: ${config.executionTriggerMode}`);
-  logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
-
-  await waitUntil(config.waitUntilIso, config.pollIntervalMs, signal, logger);
-  await waitForExecutionTrigger(config, signal, logger);
-
-  const runners = config.privateKeys.map((privateKey, index) => () =>
-    runSingleWallet(config, privateKey, index, { signal, logger })
+async function prepareWalletSlots(config, context) {
+  const prepared = await Promise.allSettled(
+    config.privateKeys.map(async (privateKey, index) => {
+      const session = await createWalletSession(config, privateKey, index, context);
+      session.preparedMint = await tryPreparePresignedMint(config, session, context);
+      return session;
+    })
   );
 
+  return prepared.map((result, index) => {
+    if (result.status === "fulfilled") {
+      return {
+        session: result.value
+      };
+    }
+
+    return {
+      error: result.reason,
+      walletIndex: index
+    };
+  });
+}
+
+async function runMintBotWithPreparedWallets(config, context) {
+  const { signal, logger } = context;
+  let launchGateError = null;
+  const launchGatePromise = (async () => {
+    await waitUntil(config.waitUntilIso, config.pollIntervalMs, signal, logger);
+    await waitForExecutionTrigger(config, signal, logger);
+  })().catch((error) => {
+    launchGateError = error;
+  });
+
+  const preparedSlots = await prepareWalletSlots(config, context);
+  const sessionsToClose = preparedSlots.flatMap((slot) => (slot.session ? [slot.session] : []));
   const results = [];
 
-  if (config.walletMode === "parallel") {
-    const settled = await Promise.allSettled(runners.map((run) => run()));
-    settled.forEach((result, index) => {
-      if (result.status === "fulfilled") {
-        results.push(result.value);
-        return;
+  try {
+    await launchGatePromise;
+    if (launchGateError) {
+      throw launchGateError;
+    }
+
+    if (config.walletMode === "parallel") {
+      const settled = await Promise.allSettled(
+        preparedSlots.map((slot) => {
+          if (slot.session) {
+            return executeWalletSession(config, slot.session, context);
+          }
+
+          return Promise.reject(slot.error);
+        })
+      );
+
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          results.push(result.value);
+          return;
+        }
+
+        const failure = buildFailureResult(index, config.privateKeys[index], result.reason);
+        results.push(failure);
+        logger.error(`[wallet ${index}] Final failure: ${failure.error}`);
+      });
+
+      const successCount = results.filter((result) => !["failed", "stopped"].includes(result.status)).length;
+      if (successCount === 0) {
+        persistResults(config.resultsPath, results, logger);
+        throw new Error(signal?.aborted ? "Run stopped" : "All wallet runs failed");
       }
 
-      const failure = buildFailureResult(index, config.privateKeys[index], result.reason);
-      results.push(failure);
-      logger.error(`[wallet ${index}] Final failure: ${failure.error}`);
-    });
-
-    const successCount = results.filter((result) => !["failed", "stopped"].includes(result.status)).length;
-    if (successCount === 0) {
-      persistResults(config.resultsPath, results, logger);
-      throw new Error(signal?.aborted ? "Run stopped" : "All wallet runs failed");
+      return { results };
     }
-  } else {
-    for (const [index, run] of runners.entries()) {
+
+    for (const [index, slot] of preparedSlots.entries()) {
       try {
-        results.push(await run());
+        if (slot.session) {
+          results.push(await executeWalletSession(config, slot.session, context));
+        } else {
+          throw slot.error;
+        }
       } catch (error) {
         const failure = buildFailureResult(index, config.privateKeys[index], error);
         results.push(failure);
@@ -1600,7 +1798,30 @@ async function runMintBot(config, hooks = {}) {
         logger.error(`[wallet ${index}] Continuing after failure`);
       }
     }
+
+    return { results };
+  } finally {
+    await closeWalletSessions(sessionsToClose);
   }
+}
+
+async function runMintBot(config, hooks = {}) {
+  const logger = createLogger(hooks);
+  const signal = hooks.signal;
+
+  logger.info(`Wallet mode: ${config.walletMode}`);
+  logger.info(`Wallet count: ${config.privateKeys.length}`);
+  logger.info(`Configured RPC URLs: ${config.rpcUrls.length}`);
+  logger.info(`Simulation: ${config.simulateTransaction ? "enabled" : "disabled"}`);
+  logger.info(`Dry run: ${config.dryRun ? "enabled" : "disabled"}`);
+  logger.info(`Gas strategy: ${config.gasStrategy}`);
+  logger.info(`Ready check: ${config.readyCheckFunction || "disabled"}`);
+  logger.info(`Execution trigger: ${config.executionTriggerMode}`);
+  logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
+  logger.info("Pre-signed launch: required");
+
+  const preparedRun = await runMintBotWithPreparedWallets(config, { signal, logger });
+  const results = preparedRun.results;
 
   persistResults(config.resultsPath, results, logger);
   logger.info("Run summary:");

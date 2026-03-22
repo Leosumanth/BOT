@@ -209,6 +209,7 @@ function defaultTaskState() {
     walletMode: "parallel",
     useSchedule: false,
     waitUntilIso: "",
+    preSignTransactions: true,
     schedulePending: false,
     readyCheckFunction: "",
     readyCheckArgs: "[]",
@@ -312,6 +313,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     walletMode: String(payload.walletMode || base.walletMode || "parallel"),
     useSchedule,
     waitUntilIso,
+    preSignTransactions: true,
     schedulePending,
     readyCheckFunction: String(payload.readyCheckFunction ?? base.readyCheckFunction ?? "").trim(),
     readyCheckArgs: String(payload.readyCheckArgs ?? base.readyCheckArgs ?? "[]").trim() || "[]",
@@ -803,6 +805,7 @@ function buildTaskResponse(task) {
 
   const response = {
     ...task,
+    preSignTransactions: true,
     walletIds,
     rpcNodeIds,
     walletCount: walletIds.length,
@@ -1229,17 +1232,32 @@ function deriveTaskProgressFromLog(task, entry) {
   } else if (entry.message.includes("Provider warmup complete")) {
     phase = "Pre-signing";
     percent = Math.max(percent, 18);
+  } else if (
+    entry.message.includes("Pre-signed mint tx") ||
+    entry.message.includes("Mint broadcast armed with a pre-signed transaction")
+  ) {
+    phase = "Pre-signing";
+    percent = Math.max(percent, 36);
   } else if (entry.message.includes("Simulation passed")) {
     phase = "Pre-signing";
     const scanned = Math.min(total, summary.success + summary.failed + summary.stopped + 1);
     percent = Math.max(percent, 20 + Math.round((scanned / total) * 25));
-  } else if (entry.message.includes("Submitted tx")) {
+  } else if (entry.message.includes("Broadcasting pre-signed mint tx")) {
+    phase = "Broadcasting";
+    percent = Math.max(percent, 55);
+  } else if (
+    entry.message.includes("Submitted tx") ||
+    entry.message.includes("Submitted mint tx") ||
+    entry.message.includes("Submitted transfer tx")
+  ) {
     phase = "Broadcasting";
     percent = Math.max(percent, 55);
   } else if (
     entry.message.includes("Confirmed in block") ||
+    entry.message.includes("confirmed in block") ||
     entry.message.includes("Dry run enabled") ||
-    entry.message.includes("Status:")
+    entry.message.includes("Status:") ||
+    entry.message.includes("status:")
   ) {
     phase = "Settling";
     percent = Math.max(percent, 76);
@@ -1365,6 +1383,7 @@ async function buildConfigForTask(task) {
     CONTINUE_ON_ERROR: task.continueOnError,
     WALLET_MODE: task.walletMode,
     WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
+    PRE_SIGN_TRANSACTIONS: true,
     READY_CHECK_FUNCTION: task.readyCheckFunction,
     READY_CHECK_ARGS: task.readyCheckArgs,
     READY_CHECK_MODE: task.readyCheckMode,

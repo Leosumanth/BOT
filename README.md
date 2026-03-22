@@ -16,6 +16,7 @@ It is designed as a reusable template for contracts that expose a mint function 
 - optionally waits until a specific ISO timestamp before sending
 - supports multiple RPC URLs for failover
 - warms up the provider session before launch
+- can pre-sign mint transactions before the launch gate and broadcast the raw payload instantly
 - optionally simulates the mint transaction before sending
 - supports dry-run mode for preflight checks
 - retries failed mint attempts with a configurable delay
@@ -199,6 +200,15 @@ MAX_RETRIES=1
 RETRY_DELAY_MS=1500
 RETRY_WINDOW_MS=1800000
 ```
+
+Pre-signing is always enabled. For a scheduled mint, the bot now builds and signs before the launch gate and only broadcasts the raw payload at launch:
+
+```env
+WAIT_UNTIL_ISO=2026-03-21T18:30:00Z
+GAS_LIMIT=200000
+```
+
+If the contract cannot be gas-estimated before the sale opens, set `GAS_LIMIT` manually so the bot can sign ahead of time. If simulation would revert before the sale opens, disable `SIMULATE_TRANSACTION` for that task.
 
 Wait until a sale flag becomes live:
 

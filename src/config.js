@@ -325,6 +325,7 @@ function normalizeConfig(raw) {
     maxFeeGwei: optionalNumber(raw, "MAX_FEE_GWEI"),
     maxPriorityFeeGwei: optionalNumber(raw, "MAX_PRIORITY_FEE_GWEI"),
     waitUntilIso: optionalString(raw, "WAIT_UNTIL_ISO"),
+    preSignTransactions: true,
     pollIntervalMs,
     waitForReceipt: optionalBoolean(raw, "WAIT_FOR_RECEIPT", true),
     simulateTransaction: optionalBoolean(raw, "SIMULATE_TRANSACTION", true),
