@@ -16,10 +16,11 @@ const defaultInputValues = {
   GAS_LIMIT: "",
   MAX_FEE_GWEI: "",
   MAX_PRIORITY_FEE_GWEI: "",
-  GAS_STRATEGY: "provider",
+  GAS_STRATEGY: "normal",
   GAS_BOOST_PERCENT: "0",
   PRIORITY_BOOST_PERCENT: "0",
   WAIT_UNTIL_ISO: "",
+  MULTI_RPC_BROADCAST: false,
   POLL_INTERVAL_MS: "1000",
   WAIT_FOR_RECEIPT: true,
   SIMULATE_TRANSACTION: true,
@@ -246,14 +247,28 @@ function loadWalletMode(raw) {
 }
 
 function loadGasStrategy(raw) {
-  const strategy = (optionalString(raw, "GAS_STRATEGY") || "provider").toLowerCase();
-  const supportedStrategies = new Set(["manual", "provider"]);
+  const strategy = normalizeGasStrategyValue(optionalString(raw, "GAS_STRATEGY") || "normal");
+  const supportedStrategies = new Set(["aggressive", "normal", "custom"]);
 
   if (!supportedStrategies.has(strategy)) {
-    throw new Error("GAS_STRATEGY must be either manual or provider");
+    throw new Error("GAS_STRATEGY must be aggressive, normal, or custom");
   }
 
   return strategy;
+}
+
+function normalizeGasStrategyValue(value) {
+  const normalized = String(value || "normal").trim().toLowerCase();
+
+  if (normalized === "provider") {
+    return "normal";
+  }
+
+  if (normalized === "manual") {
+    return "custom";
+  }
+
+  return normalized || "normal";
 }
 
 function loadReadyCheckMode(raw) {
@@ -326,6 +341,7 @@ function normalizeConfig(raw) {
     maxPriorityFeeGwei: optionalNumber(raw, "MAX_PRIORITY_FEE_GWEI"),
     waitUntilIso: optionalString(raw, "WAIT_UNTIL_ISO"),
     preSignTransactions: true,
+    multiRpcBroadcast: optionalBoolean(raw, "MULTI_RPC_BROADCAST", false),
     pollIntervalMs,
     waitForReceipt: optionalBoolean(raw, "WAIT_FOR_RECEIPT", true),
     simulateTransaction: optionalBoolean(raw, "SIMULATE_TRANSACTION", true),
@@ -425,5 +441,6 @@ function loadConfig() {
 module.exports = {
   defaultInputValues,
   loadConfig,
-  normalizeConfig
+  normalizeConfig,
+  normalizeGasStrategyValue
 };

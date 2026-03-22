@@ -5,7 +5,7 @@ const state = {
   settings: {},
   chains: [],
   telemetry: null,
-  runState: { status: "idle", activeTaskId: null, logs: [], startedAt: null },
+  runState: { status: "idle", activeTaskId: null, activeTaskIds: [], activeRuns: [], logs: [], startedAt: null },
   session: { authenticated: false, user: null, authRequired: true },
   currentView: "dashboard",
   walletGroupFilter: "All",
@@ -152,6 +152,7 @@ const taskTransferAddressInput = document.getElementById("task-transfer-address-
 const taskSimulateToggle = document.getElementById("task-simulate-toggle");
 const taskDryRunToggle = document.getElementById("task-dry-run-toggle");
 const taskWarmupToggle = document.getElementById("task-warmup-toggle");
+const taskMultiRpcBroadcastToggle = document.getElementById("task-multi-rpc-broadcast-toggle");
 const taskSmartReplaceToggle = document.getElementById("task-smart-replace-toggle");
 const taskPrivateRelayToggle = document.getElementById("task-private-relay-toggle");
 const taskPrivateRelayOnlyToggle = document.getElementById("task-private-relay-only-toggle");
@@ -178,6 +179,20 @@ function truncateMiddle(value, start = 8, end = 6) {
 
 function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function normalizeGasStrategyValue(value) {
+  const normalized = String(value || "normal").trim().toLowerCase();
+
+  if (normalized === "provider") {
+    return "normal";
+  }
+
+  if (normalized === "manual") {
+    return "custom";
+  }
+
+  return normalized || "normal";
 }
 
 function relativeTime(isoString) {
@@ -347,7 +362,17 @@ function connectEvents() {
 }
 
 function activeTask() {
-  return state.tasks.find((task) => task.id === state.runState.activeTaskId) || null;
+  const primaryActiveTaskId = (state.runState.activeTaskIds || [])[0] || state.runState.activeTaskId;
+  return state.tasks.find((task) => task.id === primaryActiveTaskId) || null;
+}
+
+function activeTaskIds() {
+  const taskIds = state.runState.activeTaskIds || [];
+  if (taskIds.length > 0) {
+    return taskIds;
+  }
+
+  return state.runState.activeTaskId ? [state.runState.activeTaskId] : [];
 }
 
 function walletGroups() {
@@ -940,6 +965,7 @@ function renderRpcHealthGrid(telemetry) {
 function renderDashboard() {
   const telemetry = telemetryView();
   const active = activeTask();
+  const activeTaskCount = activeTaskIds().length;
   const completedTasks = state.tasks.filter((task) => task.status === "completed").length;
   const runningTasks = state.tasks.filter((task) => task.status === "running").length;
   const armedTasks = (telemetry.priorityQueue || []).filter((task) => task.health === "armed").length;
@@ -958,7 +984,12 @@ function renderDashboard() {
     {
       label: "Hot Runs",
       number: runningTasks,
-      subtext: active ? active.name : "No active task"
+      subtext:
+        activeTaskCount > 1
+          ? `${pluralize(activeTaskCount, "task")} active`
+          : active
+            ? active.name
+            : "No active task"
     },
     {
       label: "Armed Queue",
@@ -1090,10 +1121,14 @@ function renderTaskCard(task) {
   const summary = task.summary || {};
   const progress = task.progress || { phase: "Ready", percent: 0 };
   const latestHistory = task.history?.[0];
-  const active = state.runState.activeTaskId === task.id && state.runState.status === "running";
+  const active = activeTaskIds().includes(task.id) && state.runState.status === "running";
   const queued = task.status === "queued";
   const hashCount = summary.hashes?.length || 0;
   const tags = [...(task.tags || [])];
+
+  if (task.multiRpcBroadcast) {
+    tags.push("RPC Mesh");
+  }
 
   return `
     <article class="task-card ${escapeHtml(task.status)}" data-task-id="${escapeHtml(task.id)}" data-tilt>
@@ -1206,8 +1241,8 @@ function renderTasks() {
         }
 
         if (action === "stop") {
-          await request("/api/run/stop", { method: "POST" });
-          showToast("Active run stop requested.", "info", "Run Control");
+          await request(`/api/tasks/${taskId}/stop`, { method: "POST" });
+          showToast(`${task?.name || "Task"} stop requested.`, "info", "Run Control");
         }
       } catch {}
     });
@@ -1379,6 +1414,7 @@ function renderResultsIfAvailable() {
 function renderShellTelemetry() {
   const telemetry = telemetryView();
   const active = activeTask();
+  const activeTaskCount = activeTaskIds().length;
   const hasCriticalAlert = (telemetry.alerts || []).some((alert) => alert.severity === "critical");
 
   body.dataset.runState = state.runState.status;
@@ -1386,18 +1422,22 @@ function renderShellTelemetry() {
     state.session.user?.username || state.settings.profileName || "Local Operator";
   accountStatus.textContent =
     state.runState.status === "running"
-      ? "Task running"
+      ? activeTaskCount > 1
+        ? `${activeTaskCount} tasks running`
+        : "Task running"
       : (state.runState.queuedTaskIds || []).length > 0
         ? "Queue armed"
         : "Authenticated";
   heroModeCopy.textContent = active
-    ? `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
+    ? activeTaskCount > 1
+      ? `${pluralize(activeTaskCount, "task")} are executing concurrently. Primary run: ${active.name} on ${chainLabel(active.chainKey)} at ${active.progress?.percent || 0}% completion.`
+      : `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
     : (state.runState.queuedTaskIds || []).length > 0
       ? `${pluralize((state.runState.queuedTaskIds || []).length, "task")} queued for worker execution across the Redis lane.`
-    : `Monitoring ${pluralize(state.tasks.length, "task")}, ${pluralize(state.wallets.length, "wallet")}, and ${pluralize(state.rpcNodes.length, "RPC node")} from one control surface.`;
+      : `Monitoring ${pluralize(state.tasks.length, "task")}, ${pluralize(state.wallets.length, "wallet")}, and ${pluralize(state.rpcNodes.length, "RPC node")} from one control surface.`;
 
   if (state.runState.status === "running") {
-    sidebarModeLabel.textContent = "Live Run";
+    sidebarModeLabel.textContent = activeTaskCount > 1 ? "Live Runs" : "Live Run";
     sidebarModeDot.className = "signal-dot hot";
   } else if ((state.runState.queuedTaskIds || []).length > 0) {
     sidebarModeLabel.textContent = "Queued";
@@ -1410,7 +1450,7 @@ function renderShellTelemetry() {
     sidebarModeDot.className = "signal-dot";
   }
 
-  globalStopButton.disabled = state.runState.status !== "running";
+  globalStopButton.disabled = activeTaskCount === 0;
 }
 
 function renderAll() {
@@ -1567,7 +1607,7 @@ function openTaskModal(task = null) {
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
   taskStartTimeInput.value = task?.waitUntilIso ? task.waitUntilIso.slice(0, 16) : "";
   taskWalletModeInput.value = task?.walletMode || "parallel";
-  taskGasStrategyInput.value = task?.gasStrategy || "provider";
+  taskGasStrategyInput.value = normalizeGasStrategyValue(task?.gasStrategy || "normal");
   taskGasLimitInput.value = task?.gasLimit || "";
   taskPollIntervalInput.value = task?.pollIntervalMs || "1000";
   taskTxTimeoutInput.value = task?.txTimeoutMs || "";
@@ -1602,6 +1642,7 @@ function openTaskModal(task = null) {
   taskSimulateToggle.checked = task?.simulateTransaction ?? true;
   taskDryRunToggle.checked = Boolean(task?.dryRun);
   taskWarmupToggle.checked = task?.warmupRpc ?? true;
+  taskMultiRpcBroadcastToggle.checked = Boolean(task?.multiRpcBroadcast);
   taskSmartReplaceToggle.checked = Boolean(task?.smartGasReplacement);
   taskPrivateRelayToggle.checked = Boolean(task?.privateRelayEnabled);
   taskPrivateRelayOnlyToggle.checked = Boolean(task?.privateRelayOnly);
@@ -1654,6 +1695,7 @@ function buildTaskPayload() {
     waitForReceipt: true,
     warmupRpc: taskWarmupToggle.checked,
     preSignTransactions: true,
+    multiRpcBroadcast: taskMultiRpcBroadcastToggle.checked,
     continueOnError: false,
     walletMode: taskWalletModeInput.value,
     useSchedule: taskScheduleToggle.checked,
@@ -1829,7 +1871,7 @@ batchToggle.addEventListener("change", () => {
 globalStopButton.addEventListener("click", async () => {
   try {
     await request("/api/run/stop", { method: "POST" });
-    showToast("Stop signal sent to the active run.", "info", "Run Control");
+    showToast("Stop signal sent to all active runs.", "info", "Run Control");
   } catch {}
 });
 

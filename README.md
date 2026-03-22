@@ -17,6 +17,7 @@ It is designed as a reusable template for contracts that expose a mint function 
 - supports multiple RPC URLs for failover
 - warms up the provider session before launch
 - can pre-sign mint transactions before the launch gate and broadcast the raw payload instantly
+- supports dynamic gas strategy presets that auto-adjust to live network conditions
 - optionally simulates the mint transaction before sending
 - supports dry-run mode for preflight checks
 - retries failed mint attempts with a configurable delay
@@ -28,6 +29,8 @@ It is designed as a reusable template for contracts that expose a mint function 
 - optionally waits for the transaction receipt
 - can automatically replace timed-out transactions with higher gas using the same nonce
 - can submit transactions through a configurable private relay with optional public RPC fallback
+- can broadcast the same signed transaction to multiple RPCs in parallel for faster public propagation
+- can execute multiple tasks simultaneously without blocking the dashboard control plane
 - can arm execution from on-chain events or pending mempool transactions
 - can transfer freshly minted ERC-721 and ERC-1155 tokens to another wallet after confirmation
 - can enqueue dashboard runs into Redis for dedicated worker execution
@@ -85,6 +88,7 @@ Copy-Item .env.example .env
 - `REDIS_NAMESPACE`: queue key prefix, defaults to `mintbot`
 - `REDIS_BLOCK_TIMEOUT_SEC`: blocking pop timeout used by the worker loop, defaults to `5`
 - `WORKER_ID`: optional worker label that appears in distributed run state
+- `WORKER_CONCURRENCY`: number of queued tasks a Redis worker can execute in parallel, defaults to `4`
 - `ETHERSCAN_API_KEY`: optional fallback explorer API key used for dashboard ABI fetches
 - `TELEGRAM_BOT_TOKEN`: optional fallback Telegram bot token for dashboard alerts
 - `TELEGRAM_CHAT_ID`: optional fallback Telegram chat ID for dashboard alerts
@@ -102,11 +106,12 @@ Copy-Item .env.example .env
 - `GAS_LIMIT`: optional gas limit
 - `MAX_FEE_GWEI`: optional EIP-1559 max fee
 - `MAX_PRIORITY_FEE_GWEI`: optional EIP-1559 priority fee
-- `GAS_STRATEGY`: `manual` or `provider`
-- `GAS_BOOST_PERCENT`: boost provider fee suggestions by a percentage
-- `PRIORITY_BOOST_PERCENT`: boost provider priority fee suggestions by a percentage
+- `GAS_STRATEGY`: `aggressive`, `normal`, or `custom`
+- `GAS_BOOST_PERCENT`: extra max fee boost percentage added on top of the selected strategy profile
+- `PRIORITY_BOOST_PERCENT`: extra priority fee boost percentage added on top of the selected strategy profile
 - `WAIT_UNTIL_ISO`: optional start time such as `2026-03-21T18:30:00Z`
 - `POLL_INTERVAL_MS`: how often to check the countdown
+- `MULTI_RPC_BROADCAST`: broadcast the same signed transaction to every configured public RPC in parallel; the first accepted response wins and the rest improve propagation
 - `WAIT_FOR_RECEIPT`: `true` or `false`
 - `SIMULATE_TRANSACTION`: run `staticCall` and gas estimation before sending
 - `DRY_RUN`: validate everything without broadcasting a transaction
@@ -219,12 +224,26 @@ READY_CHECK_MODE=truthy
 READY_CHECK_INTERVAL_MS=500
 ```
 
-Use provider gas suggestions with a fee boost:
+Use the normal dynamic gas profile with a small extra fee boost:
 
 ```env
-GAS_STRATEGY=provider
+GAS_STRATEGY=normal
 GAS_BOOST_PERCENT=15
 PRIORITY_BOOST_PERCENT=20
+```
+
+Use the aggressive dynamic gas profile for hotter launches:
+
+```env
+GAS_STRATEGY=aggressive
+```
+
+Use fully custom fee caps:
+
+```env
+GAS_STRATEGY=custom
+MAX_FEE_GWEI=40
+MAX_PRIORITY_FEE_GWEI=4
 ```
 
 Enable timeout-based gas replacement and move minted tokens to a vault wallet:
@@ -268,6 +287,15 @@ PRIVATE_RELAY_METHOD=eth_sendRawTransaction
 PRIVATE_RELAY_HEADERS_JSON={"Authorization":"Bearer your-token"}
 PRIVATE_RELAY_ONLY=false
 ```
+
+Broadcast the same signed transaction to multiple RPCs for faster propagation:
+
+```env
+RPC_URLS=https://rpc1.example,https://rpc2.example,wss://rpc3.example
+MULTI_RPC_BROADCAST=true
+```
+
+This does not create extra on-chain cost because every endpoint receives the same signed payload and therefore the same tx hash.
 
 Enable Redis queue mode with a dedicated worker:
 
@@ -340,6 +368,7 @@ Set `BOT_MODE=worker` if you want the process to boot directly into the Redis wo
 The dashboard now stores tasks, RPC nodes, sessions, and encrypted imported wallets in Postgres. Env-provided wallets and RPC URLs still load at runtime without being copied into the database.
 Explorer keys and alert credentials can be supplied from `.env` or saved from the dashboard settings view. Dashboard-saved credentials are encrypted server-side and only their configured status is exposed back to the browser.
 When `QUEUE_MODE=redis`, the dashboard enqueues task launches into Redis and a separate worker process consumes them, publishes live log events, and writes runtime/history records back into Postgres.
+The local dashboard can now run multiple tasks simultaneously, and Redis workers can process multiple queued tasks at the same time when `WORKER_CONCURRENCY` is greater than `1`.
 When a dashboard task has schedule enabled, the dashboard process polls for due tasks and auto-starts them. Keep the dashboard server online for scheduled launches, and keep the worker online too when `QUEUE_MODE=redis`.
 
 ## Mint Requirements

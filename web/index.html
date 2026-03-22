@@ -664,10 +664,11 @@
             </div>
             <div class="form-grid three">
               <label>
-                <span>Gas Strategy</span>
+                <span>Dynamic Gas Strategy</span>
                 <select id="task-gas-strategy-input">
-                  <option value="provider">Provider</option>
-                  <option value="manual">Manual</option>
+                  <option value="normal">Normal</option>
+                  <option value="aggressive">Aggressive</option>
+                  <option value="custom">Custom</option>
                 </select>
               </label>
               <label>
@@ -681,19 +682,19 @@
             </div>
             <div class="form-grid four">
               <label>
-                <span>Max Fee Gwei</span>
+                <span>Max Fee Gwei (Custom)</span>
                 <input id="task-max-fee-input" type="text" />
               </label>
               <label>
-                <span>Priority Fee Gwei</span>
+                <span>Priority Fee Gwei (Custom)</span>
                 <input id="task-priority-fee-input" type="text" />
               </label>
               <label>
-                <span>Gas Boost %</span>
+                <span>Extra Max Fee %</span>
                 <input id="task-gas-boost-input" type="number" value="0" />
               </label>
               <label>
-                <span>Priority Boost %</span>
+                <span>Extra Priority %</span>
                 <input id="task-priority-boost-input" type="number" value="0" />
               </label>
             </div>
@@ -824,6 +825,10 @@
             <label class="toggle-card">
               <input id="task-warmup-toggle" type="checkbox" checked />
               <span>Warmup RPC</span>
+            </label>
+            <label class="toggle-card">
+              <input id="task-multi-rpc-broadcast-toggle" type="checkbox" />
+              <span>Multi-RPC Broadcast</span>
             </label>
             <label class="toggle-card">
               <input id="task-smart-replace-toggle" type="checkbox" />

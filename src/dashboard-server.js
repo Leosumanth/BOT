@@ -6,7 +6,7 @@ const http = require("http");
 const path = require("path");
 const { ethers } = require("ethers");
 const { AbortRunError, formatError, runMintBot } = require("./bot");
-const { defaultInputValues, normalizeConfig } = require("./config");
+const { defaultInputValues, normalizeConfig, normalizeGasStrategyValue } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
 const {
   buildClientSettings,
@@ -50,10 +50,8 @@ let database = null;
 let initialized = false;
 let appState = null;
 let integrationSecrets = {};
-let runController = null;
-let activeTaskId = null;
+const localTaskRuns = new Map();
 let liveLogs = [];
-let runStartedAt = null;
 let queueCoordinator = null;
 let distributedRunState = createIdleRunState(resolveQueueConfig());
 const distributedQueuedTaskIds = new Set();
@@ -71,6 +69,49 @@ function getQueueConfig() {
 
 function queueModeEnabled() {
   return getQueueConfig().enabled;
+}
+
+function sortActiveRuns(left, right) {
+  return new Date(left.startedAt || 0) - new Date(right.startedAt || 0);
+}
+
+function listLocalActiveRuns() {
+  return [...localTaskRuns.values()]
+    .filter((entry) => entry.active)
+    .map((entry) => ({
+      taskId: entry.taskId,
+      startedAt: entry.startedAt,
+      taskName: entry.taskName || null
+    }))
+    .sort(sortActiveRuns);
+}
+
+function listDistributedActiveRuns() {
+  if (!appState?.taskRuntimeById) {
+    return [];
+  }
+
+  return Object.entries(appState.taskRuntimeById)
+    .filter(([, runtime]) => runtime?.active)
+    .map(([taskId, runtime]) => ({
+      taskId,
+      startedAt: runtime.startedAt || null,
+      workerId: runtime.workerId || null,
+      taskName: getTaskById(taskId)?.name || null
+    }))
+    .sort(sortActiveRuns);
+}
+
+function listActiveRuns() {
+  return queueModeEnabled() ? listDistributedActiveRuns() : listLocalActiveRuns();
+}
+
+function listActiveTaskIds() {
+  return listActiveRuns().map((entry) => entry.taskId);
+}
+
+function isTaskActive(taskId) {
+  return listActiveTaskIds().includes(taskId);
 }
 
 function hashForId(value) {
@@ -195,7 +236,7 @@ function defaultTaskState() {
     rpcNodeIds: [],
     mintFunction: "mint",
     mintArgs: "[1]",
-    gasStrategy: "provider",
+    gasStrategy: "normal",
     gasLimit: "",
     maxFeeGwei: "",
     maxPriorityFeeGwei: "",
@@ -210,6 +251,7 @@ function defaultTaskState() {
     useSchedule: false,
     waitUntilIso: "",
     preSignTransactions: true,
+    multiRpcBroadcast: false,
     schedulePending: false,
     readyCheckFunction: "",
     readyCheckArgs: "[]",
@@ -297,7 +339,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : base.rpcNodeIds || [],
     mintFunction: String(payload.mintFunction || base.mintFunction || "mint").trim() || "mint",
     mintArgs: String(payload.mintArgs || base.mintArgs || "[]").trim() || "[]",
-    gasStrategy: String(payload.gasStrategy || base.gasStrategy || "provider"),
+    gasStrategy: normalizeGasStrategyValue(payload.gasStrategy || base.gasStrategy || "normal"),
     gasLimit: String(payload.gasLimit ?? base.gasLimit ?? "").trim(),
     maxFeeGwei: String(payload.maxFeeGwei ?? base.maxFeeGwei ?? "").trim(),
     maxPriorityFeeGwei: String(payload.maxPriorityFeeGwei ?? base.maxPriorityFeeGwei ?? "").trim(),
@@ -314,6 +356,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     useSchedule,
     waitUntilIso,
     preSignTransactions: true,
+    multiRpcBroadcast: Boolean(payload.multiRpcBroadcast ?? base.multiRpcBroadcast ?? false),
     schedulePending,
     readyCheckFunction: String(payload.readyCheckFunction ?? base.readyCheckFunction ?? "").trim(),
     readyCheckArgs: String(payload.readyCheckArgs ?? base.readyCheckArgs ?? "[]").trim() || "[]",
@@ -598,7 +641,8 @@ async function syncDistributedQueueSnapshot() {
 
 function applyRunStateUpdate(runState) {
   distributedRunState = runState || createIdleRunState(getQueueConfig());
-  if (!distributedRunState.activeTaskId) {
+  const activeTaskIds = distributedRunState.activeTaskIds || [];
+  if (!distributedRunState.activeTaskId && activeTaskIds.length === 0) {
     distributedTaskPatches.clear();
   }
   emitState();
@@ -636,8 +680,15 @@ async function initializeQueueMode() {
     }
 
     if (message.type === "run-state" && message.payload?.runState) {
+      const activeTaskIds = message.payload.runState.activeTaskIds || [];
       if (message.payload.runState.activeTaskId) {
         distributedQueuedTaskIds.delete(message.payload.runState.activeTaskId);
+      }
+      activeTaskIds.forEach((taskId) => {
+        distributedQueuedTaskIds.delete(taskId);
+      });
+      if (activeTaskIds.length === 0 && message.payload.runState.activeTaskId == null) {
+        void refreshDistributedState().catch(reportBackgroundError);
       }
       applyRunStateUpdate(message.payload.runState);
       return;
@@ -777,9 +828,24 @@ async function initializeServer() {
 }
 
 function getRunState() {
+  const activeRuns = listActiveRuns();
+  const activeTaskIds = activeRuns.map((entry) => entry.taskId);
+  const primaryActiveRun = activeRuns[0] || null;
+
   if (queueModeEnabled()) {
     return {
       ...distributedRunState,
+      status:
+        activeTaskIds.length > 0
+          ? "running"
+          : distributedQueuedTaskIds.size > 0
+            ? "queued"
+            : "idle",
+      activeTaskId: primaryActiveRun?.taskId || null,
+      activeTaskIds,
+      activeRuns,
+      startedAt: primaryActiveRun?.startedAt || null,
+      workerId: primaryActiveRun?.workerId || null,
       queueMode: "redis",
       queuedTaskIds: [...distributedQueuedTaskIds],
       logs: liveLogs.slice(-200)
@@ -787,9 +853,12 @@ function getRunState() {
   }
 
   return {
-    status: runController ? "running" : "idle",
-    activeTaskId,
-    startedAt: runStartedAt,
+    status: activeTaskIds.length > 0 ? "running" : "idle",
+    activeTaskId: primaryActiveRun?.taskId || null,
+    activeTaskIds,
+    activeRuns,
+    startedAt: primaryActiveRun?.startedAt || null,
+    workerId: null,
     queueMode: "local",
     queuedTaskIds: [],
     logs: liveLogs.slice(-200)
@@ -805,6 +874,7 @@ function buildTaskResponse(task) {
 
   const response = {
     ...task,
+    gasStrategy: normalizeGasStrategyValue(task.gasStrategy || "normal"),
     preSignTransactions: true,
     walletIds,
     rpcNodeIds,
@@ -843,8 +913,9 @@ function humanizePriority(priority) {
 
 function findActiveTask() {
   const currentRunState = getRunState();
-  return currentRunState.activeTaskId
-    ? appState.tasks.find((task) => task.id === currentRunState.activeTaskId) || null
+  const primaryActiveTaskId = currentRunState.activeTaskIds?.[0] || currentRunState.activeTaskId;
+  return primaryActiveTaskId
+    ? appState.tasks.find((task) => task.id === primaryActiveTaskId) || null
     : null;
 }
 
@@ -920,6 +991,7 @@ function buildTelemetry() {
   const totalAttempts = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
   const successfulAttempts = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
   const successRate = totalAttempts ? Math.round((successfulAttempts / totalAttempts) * 100) : 0;
+  const currentRunState = getRunState();
 
   const priorityQueue = [...taskViews]
     .filter((task) => !task.done)
@@ -1021,7 +1093,10 @@ function buildTelemetry() {
     alerts.push({
       severity: "info",
       title: "Run in progress",
-      detail: `${activeTask.name} is currently executing with ${activeTask.progress?.percent || 0}% completion.`
+      detail:
+        currentRunState.activeTaskIds?.length > 1
+          ? `${currentRunState.activeTaskIds.length} tasks are currently executing. Primary run: ${activeTask.name} at ${activeTask.progress?.percent || 0}% completion.`
+          : `${activeTask.name} is currently executing with ${activeTask.progress?.percent || 0}% completion.`
     });
   }
   if (!alerts.length) {
@@ -1041,7 +1116,7 @@ function buildTelemetry() {
     walletGroupCount,
     readyTaskCount: priorityQueue.filter((task) => task.health === "armed").length,
     liveLogCount: liveLogs.length,
-    runDurationMs: runStartedAt ? Date.now() - new Date(runStartedAt).getTime() : 0,
+    runDurationMs: currentRunState.startedAt ? Date.now() - new Date(currentRunState.startedAt).getTime() : 0,
     activeTaskName: activeTask?.name || null,
     topChainLabel: chainLoad[0]?.label || "No chain load",
     lastRunTaskName: latestRunTask?.name || "No history",
@@ -1242,7 +1317,10 @@ function deriveTaskProgressFromLog(task, entry) {
     phase = "Pre-signing";
     const scanned = Math.min(total, summary.success + summary.failed + summary.stopped + 1);
     percent = Math.max(percent, 20 + Math.round((scanned / total) * 25));
-  } else if (entry.message.includes("Broadcasting pre-signed mint tx")) {
+  } else if (
+    entry.message.includes("Broadcasting pre-signed mint tx") ||
+    entry.message.includes("multi-RPC broadcast")
+  ) {
     phase = "Broadcasting";
     percent = Math.max(percent, 55);
   } else if (
@@ -1384,6 +1462,7 @@ async function buildConfigForTask(task) {
     WALLET_MODE: task.walletMode,
     WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
     PRE_SIGN_TRANSACTIONS: true,
+    MULTI_RPC_BROADCAST: task.multiRpcBroadcast,
     READY_CHECK_FUNCTION: task.readyCheckFunction,
     READY_CHECK_ARGS: task.readyCheckArgs,
     READY_CHECK_MODE: task.readyCheckMode,
@@ -1518,10 +1597,6 @@ async function scanAndRunScheduledTasks() {
     return;
   }
 
-  if (!queueModeEnabled() && runController) {
-    return;
-  }
-
   scheduledTaskScanInFlight = true;
 
   try {
@@ -1530,13 +1605,15 @@ async function scanAndRunScheduledTasks() {
       return;
     }
 
-    const tasksToLaunch = queueModeEnabled() ? dueTasks : dueTasks.slice(0, 1);
+    const tasksToLaunch = dueTasks;
 
     for (const task of tasksToLaunch) {
       if (queueModeEnabled()) {
-        if (distributedQueuedTaskIds.has(task.id) || distributedRunState.activeTaskId === task.id) {
+        if (distributedQueuedTaskIds.has(task.id) || isTaskActive(task.id)) {
           continue;
         }
+      } else if (isTaskActive(task.id)) {
+        continue;
       }
 
       pushLog({
@@ -1573,102 +1650,117 @@ function ensureScheduledTaskLoop() {
 }
 
 async function startTaskRunLocal(taskId) {
-  if (runController) {
-    throw createHttpError("A task is already running", 409);
-  }
-
   const task = getTaskById(taskId);
   if (!task) {
     throw createHttpError("Task not found", 404);
   }
 
-  const config = await buildConfigForTask(task);
-  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
-  runController = new AbortController();
-  activeTaskId = taskId;
-  runStartedAt = new Date().toISOString();
-  liveLogs = [];
+  if (localTaskRuns.has(taskId)) {
+    throw createHttpError("Task is already running", 409);
+  }
 
-  await updateTask(taskId, {
-    schedulePending: false,
-    status: "running",
-    progress: {
-      phase: "Preparing",
-      percent: 8
-    },
-    summary: {
-      total: walletIds.length,
-      success: 0,
-      failed: 0,
-      stopped: 0,
-      hashes: []
-    }
-  });
+  const runContext = {
+    taskId,
+    taskName: task.name,
+    controller: new AbortController(),
+    startedAt: null,
+    active: false
+  };
+  localTaskRuns.set(taskId, runContext);
+  try {
+    const config = await buildConfigForTask(task);
+    const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+    runContext.startedAt = new Date().toISOString();
+    runContext.active = true;
 
-  void notifyRunEvent("run_start", {
-    task: getTaskById(taskId)
-  });
-
-  runMintBot(config, {
-    signal: runController.signal,
-    onLog(entry) {
-      pushLog(entry);
-      updateTaskProgressFromLog(getTaskById(taskId), entry);
-    }
-  })
-    .then(async (result) => {
-      const summary = summarizeResults(result.results);
-      const taskAfterRun = getTaskById(taskId);
-      await updateTask(taskId, {
-        status: "completed",
-        progress: {
-          phase: "Completed",
-          percent: 100
-        },
-        summary,
-        lastRunAt: new Date().toISOString(),
-        history: [
-          {
-            id: createId("history"),
-            ranAt: new Date().toISOString(),
-            summary
-          },
-          ...(taskAfterRun.history || [])
-        ].slice(0, 8)
-      });
-      await notifyRunEvent("run_success", {
-        task: getTaskById(taskId),
-        summary
-      });
-    })
-    .catch(async (error) => {
-      const stopped = error instanceof AbortRunError || runController?.signal.aborted;
-      await updateTask(taskId, {
-        status: stopped ? "stopped" : "failed",
-        progress: {
-          phase: stopped ? "Stopped" : "Failed",
-          percent: stopped ? 0 : 100
-        }
-      });
-      pushLog({
-        level: "error",
-        message: formatError(error),
-        timestamp: new Date().toISOString()
-      });
-      await notifyRunEvent(stopped ? "run_stopped" : "run_failure", {
-        task: getTaskById(taskId),
-        error: formatError(error)
-      });
-    })
-    .catch(reportBackgroundError)
-    .finally(() => {
-      runController = null;
-      activeTaskId = null;
-      runStartedAt = null;
-      emitState();
+    await updateTask(taskId, {
+      schedulePending: false,
+      status: "running",
+      progress: {
+        phase: "Preparing",
+        percent: 8
+      },
+      summary: {
+        total: walletIds.length,
+        success: 0,
+        failed: 0,
+        stopped: 0,
+        hashes: []
+      }
     });
 
-  return { ok: true };
+    void notifyRunEvent("run_start", {
+      task: getTaskById(taskId)
+    });
+
+    runMintBot(config, {
+      signal: runContext.controller.signal,
+      onLog(entry) {
+        pushLog({
+          ...entry,
+          taskId,
+          message: `[task ${runContext.taskName}] ${entry.message}`
+        });
+        updateTaskProgressFromLog(getTaskById(taskId), entry);
+      }
+    })
+      .then(async (result) => {
+        const summary = summarizeResults(result.results);
+        const taskAfterRun = getTaskById(taskId);
+        await updateTask(taskId, {
+          status: "completed",
+          progress: {
+            phase: "Completed",
+            percent: 100
+          },
+          summary,
+          lastRunAt: new Date().toISOString(),
+          history: [
+            {
+              id: createId("history"),
+              ranAt: new Date().toISOString(),
+              summary
+            },
+            ...(taskAfterRun.history || [])
+          ].slice(0, 8)
+        });
+        await notifyRunEvent("run_success", {
+          task: getTaskById(taskId),
+          summary
+        });
+      })
+      .catch(async (error) => {
+        const stopped = error instanceof AbortRunError || runContext.controller.signal.aborted;
+        await updateTask(taskId, {
+          status: stopped ? "stopped" : "failed",
+          progress: {
+            phase: stopped ? "Stopped" : "Failed",
+            percent: stopped ? 0 : 100
+          }
+        });
+        pushLog({
+          level: "error",
+          taskId,
+          message: `[task ${runContext.taskName}] ${formatError(error)}`,
+          timestamp: new Date().toISOString()
+        });
+        await notifyRunEvent(stopped ? "run_stopped" : "run_failure", {
+          task: getTaskById(taskId),
+          error: formatError(error)
+        });
+      })
+      .catch(reportBackgroundError)
+      .finally(() => {
+        localTaskRuns.delete(taskId);
+        emitState();
+      });
+
+    emitState();
+    return { ok: true };
+  } catch (error) {
+    localTaskRuns.delete(taskId);
+    throw error;
+  }
 }
 
 async function startTaskRunQueued(taskId) {
@@ -1677,7 +1769,7 @@ async function startTaskRunQueued(taskId) {
     throw createHttpError("Task not found", 404);
   }
 
-  if (distributedQueuedTaskIds.has(taskId) || distributedRunState.activeTaskId === taskId) {
+  if (distributedQueuedTaskIds.has(taskId) || isTaskActive(taskId)) {
     throw createHttpError("Task is already queued or running", 409);
   }
 
@@ -1753,26 +1845,27 @@ async function handleTaskDuplicate(taskId, response) {
 
 function handleStopRun(response) {
   if (queueModeEnabled()) {
-    const activeTask = distributedRunState.activeTaskId;
-    if (!activeTask || distributedRunState.status !== "running") {
+    const activeTaskIds = listActiveTaskIds();
+    if (activeTaskIds.length === 0) {
       sendJson(response, 409, { error: "No task is running" });
       return;
     }
 
-    queueCoordinator
-      .requestStop(activeTask)
+    Promise.all(activeTaskIds.map((taskId) => queueCoordinator.requestStop(taskId)))
       .then(() => {
-        setDistributedTaskPatch(activeTask, {
-          progress: {
-            phase: "Stop requested",
-            percent: Math.max(
-              distributedTaskPatches.get(activeTask)?.progress?.percent || 0,
-              10
-            )
-          }
+        activeTaskIds.forEach((taskId) => {
+          setDistributedTaskPatch(taskId, {
+            progress: {
+              phase: "Stop requested",
+              percent: Math.max(
+                distributedTaskPatches.get(taskId)?.progress?.percent || 0,
+                10
+              )
+            }
+          });
         });
         emitState();
-        sendJson(response, 200, { ok: true });
+        sendJson(response, 200, { ok: true, stoppedTaskIds: activeTaskIds });
       })
       .catch((error) => {
         sendJson(response, 400, { error: formatError(error) });
@@ -1780,13 +1873,60 @@ function handleStopRun(response) {
     return;
   }
 
-  if (!runController) {
+  const activeTaskIds = listActiveTaskIds();
+  if (activeTaskIds.length === 0) {
     sendJson(response, 409, { error: "No task is running" });
     return;
   }
 
-  runController.abort();
-  sendJson(response, 200, { ok: true });
+  activeTaskIds.forEach((taskId) => {
+    localTaskRuns.get(taskId)?.controller.abort();
+  });
+  sendJson(response, 200, { ok: true, stoppedTaskIds: activeTaskIds });
+}
+
+function handleTaskStop(taskId, response) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    sendJson(response, 404, { error: "Task not found" });
+    return;
+  }
+
+  if (queueModeEnabled()) {
+    if (!isTaskActive(taskId)) {
+      sendJson(response, 409, { error: "Task is not running" });
+      return;
+    }
+
+    queueCoordinator
+      .requestStop(taskId)
+      .then(() => {
+        setDistributedTaskPatch(taskId, {
+          progress: {
+            phase: "Stop requested",
+            percent: Math.max(
+              distributedTaskPatches.get(taskId)?.progress?.percent || 0,
+              10
+            )
+          }
+        });
+        emitState();
+        sendJson(response, 200, { ok: true, taskId });
+      })
+      .catch((error) => {
+        sendJson(response, 400, { error: formatError(error) });
+      });
+    return;
+  }
+
+  const runContext = localTaskRuns.get(taskId);
+  if (!runContext) {
+    sendJson(response, 409, { error: "Task is not running" });
+    return;
+  }
+
+  runContext.controller.abort();
+  sendJson(response, 200, { ok: true, taskId });
 }
 
 async function handleTaskSave(request, response) {
@@ -1911,7 +2051,7 @@ async function handleTaskSave(request, response) {
 
 async function handleTaskDelete(taskId, response) {
   const currentRunState = getRunState();
-  if (distributedQueuedTaskIds.has(taskId) || currentRunState.activeTaskId === taskId) {
+  if (distributedQueuedTaskIds.has(taskId) || (currentRunState.activeTaskIds || []).includes(taskId)) {
     sendJson(response, 409, { error: "Stop or dequeue the task before deleting it" });
     return;
   }
@@ -2294,9 +2434,15 @@ function findPriorityTaskForRun() {
 }
 
 function buildSnapshot() {
+  const activeTasks = listActiveTaskIds()
+    .map((taskId) => getTaskById(taskId))
+    .filter(Boolean)
+    .map((task) => buildTaskResponse(task));
+
   return {
     createdAt: new Date().toISOString(),
-    activeTask: findActiveTask() ? buildTaskResponse(findActiveTask()) : null,
+    activeTask: activeTasks[0] || null,
+    activeTasks,
     taskCount: appState.tasks.length,
     walletCount: appState.wallets.length,
     rpcNodeCount: appState.rpcNodes.length,
@@ -2518,6 +2664,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && route[0] === "api" && route[1] === "tasks" && route[3] === "run") {
       await handleTaskRun(route[2], response);
+      return;
+    }
+
+    if (request.method === "POST" && route[0] === "api" && route[1] === "tasks" && route[3] === "stop") {
+      handleTaskStop(route[2], response);
       return;
     }
 

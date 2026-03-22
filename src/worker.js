@@ -285,6 +285,7 @@ async function buildConfigForTask(database, state, task) {
     WALLET_MODE: task.walletMode,
     WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
     PRE_SIGN_TRANSACTIONS: true,
+    MULTI_RPC_BROADCAST: task.multiRpcBroadcast,
     READY_CHECK_FUNCTION: task.readyCheckFunction,
     READY_CHECK_ARGS: task.readyCheckArgs,
     READY_CHECK_MODE: task.readyCheckMode,
@@ -353,6 +354,126 @@ async function notifyRunEvent(database, state, eventType, context = {}) {
   }
 }
 
+async function executeQueuedJob({
+  job,
+  queue,
+  database,
+  workerId,
+  abortController
+}) {
+  let state = null;
+  let task = null;
+
+  try {
+    state = await loadExecutionState(database);
+    task = state.tasks.find((entry) => entry.id === job.taskId) || null;
+    if (!task) {
+      throw new Error(`Task ${job.taskId} no longer exists`);
+    }
+
+    const startedAt = new Date().toISOString();
+    const walletCount = Array.isArray(task.walletIds) ? task.walletIds.length : 0;
+
+    await updateTaskRuntime(database, job.taskId, {
+      status: "running",
+      progress: {
+        phase: "Preparing",
+        percent: 8
+      },
+      summary: createEmptySummary(walletCount),
+      active: true,
+      queued: false,
+      error: null,
+      workerId,
+      startedAt
+    });
+    await queue.publishEvent("task-sync", { taskId: job.taskId });
+    await notifyRunEvent(database, state, "run_start", { task });
+
+    const config = await buildConfigForTask(database, state, task);
+    const result = await runMintBot(config, {
+      signal: abortController.signal,
+      onLog(entry) {
+        void queue.publishEvent("log", {
+          taskId: job.taskId,
+          entry: {
+            ...entry,
+            taskId: job.taskId,
+            message: `[task ${task.name}] ${entry.message}`
+          }
+        }).catch((error) => {
+          console.error("Unable to publish worker log event:");
+          console.error(error);
+        });
+      }
+    });
+
+    const summary = summarizeResults(result.results);
+    const completedAt = new Date().toISOString();
+    await updateTaskRuntime(database, job.taskId, {
+      status: "completed",
+      progress: {
+        phase: "Completed",
+        percent: 100
+      },
+      summary,
+      active: false,
+      queued: false,
+      error: null,
+      workerId,
+      startedAt: null,
+      lastRunAt: completedAt
+    });
+    await database.insertTaskHistory({
+      id: createId("history"),
+      taskId: job.taskId,
+      ranAt: completedAt,
+      summary
+    });
+    await database.pruneTaskHistory(job.taskId, 8);
+    await queue.publishEvent("task-sync", { taskId: job.taskId });
+    await notifyRunEvent(database, state, "run_success", {
+      task,
+      summary
+    });
+  } catch (error) {
+    const stopped = error instanceof AbortRunError || Boolean(abortController.signal.aborted);
+    const failedAt = new Date().toISOString();
+    const walletCount = Array.isArray(task?.walletIds) ? task.walletIds.length : 0;
+    await updateTaskRuntime(database, job.taskId, {
+      status: stopped ? "stopped" : "failed",
+      progress: {
+        phase: stopped ? "Stopped" : "Failed",
+        percent: stopped ? 0 : 100
+      },
+      summary: createEmptySummary(walletCount),
+      active: false,
+      queued: false,
+      error: formatError(error),
+      workerId,
+      startedAt: null,
+      lastRunAt: failedAt
+    });
+    await queue.publishEvent("log", {
+      taskId: job.taskId,
+      entry: {
+        level: "error",
+        taskId: job.taskId,
+        message: `[task ${task?.name || job.taskId}] ${formatError(error)}`,
+        timestamp: failedAt
+      }
+    });
+    await queue.publishEvent("task-sync", { taskId: job.taskId });
+
+    if (state && task) {
+      await notifyRunEvent(database, state, stopped ? "run_stopped" : "run_failure", {
+        task,
+        error: formatError(error)
+      });
+    }
+  }
+}
+
 async function startWorker() {
   const queueConfig = resolveQueueConfig(process.env);
   if (!queueConfig.enabled) {
@@ -360,6 +481,11 @@ async function startWorker() {
   }
 
   const workerId = queueConfig.workerId || `worker_${process.pid}`;
+  const parsedWorkerConcurrency = Number(process.env.WORKER_CONCURRENCY || 4);
+  const workerConcurrency =
+    Number.isFinite(parsedWorkerConcurrency) && parsedWorkerConcurrency > 0
+      ? Math.floor(parsedWorkerConcurrency)
+      : 4;
   const database = createDatabase();
   await database.ensureSchema();
   await database.ensureBaseState();
@@ -375,148 +501,63 @@ async function startWorker() {
     }
   );
 
-  let currentTaskId = null;
-  let currentAbortController = null;
+  const activeJobs = new Map();
 
   await queue.subscribeToControl((message) => {
     if (message?.type !== "stop-task") {
       return;
     }
 
-    if (message.payload?.taskId && message.payload.taskId === currentTaskId) {
-      currentAbortController?.abort();
+    if (message.payload?.taskId) {
+      activeJobs.get(message.payload.taskId)?.abortController.abort();
+      return;
     }
+
+    activeJobs.forEach((entry) => entry.abortController.abort());
   });
 
-  console.log(`Redis worker ${workerId} listening on ${queueConfig.redisUrl}`);
+  console.log(
+    `Redis worker ${workerId} listening on ${queueConfig.redisUrl} with concurrency ${workerConcurrency}`
+  );
 
   while (true) {
-    const job = await queue.dequeueTask();
-    if (!job?.taskId) {
+    if (activeJobs.size >= workerConcurrency) {
+      await Promise.race([...activeJobs.values()].map((entry) => entry.promise));
       continue;
     }
 
-    currentTaskId = job.taskId;
-    currentAbortController = new AbortController();
-
-    let state = null;
-    let task = null;
-
-    try {
-      state = await loadExecutionState(database);
-      task = state.tasks.find((entry) => entry.id === job.taskId) || null;
-      if (!task) {
-        throw new Error(`Task ${job.taskId} no longer exists`);
+    const job = await queue.dequeueTask(activeJobs.size > 0 ? 1 : queueConfig.blockTimeoutSeconds);
+    if (!job?.taskId) {
+      if (activeJobs.size > 0) {
+        await Promise.race([...activeJobs.values()].map((entry) => entry.promise));
       }
-
-      const startedAt = new Date().toISOString();
-      const walletCount = Array.isArray(task.walletIds) ? task.walletIds.length : 0;
-
-      await updateTaskRuntime(database, job.taskId, {
-        status: "running",
-        progress: {
-          phase: "Preparing",
-          percent: 8
-        },
-        summary: createEmptySummary(walletCount),
-        active: true,
-        queued: false,
-        error: null,
-        workerId,
-        startedAt
-      });
-      await queue.setRunState({
-        status: "running",
-        activeTaskId: job.taskId,
-        startedAt,
-        workerId,
-        queueMode: "redis"
-      });
-      await queue.publishEvent("task-sync", { taskId: job.taskId });
-      await notifyRunEvent(database, state, "run_start", { task });
-
-      const config = await buildConfigForTask(database, state, task);
-      const result = await runMintBot(config, {
-        signal: currentAbortController.signal,
-        onLog(entry) {
-          void queue.publishEvent("log", {
-            taskId: job.taskId,
-            entry
-          }).catch((error) => {
-            console.error("Unable to publish worker log event:");
-            console.error(error);
-          });
-        }
-      });
-
-      const summary = summarizeResults(result.results);
-      const completedAt = new Date().toISOString();
-      await updateTaskRuntime(database, job.taskId, {
-        status: "completed",
-        progress: {
-          phase: "Completed",
-          percent: 100
-        },
-        summary,
-        active: false,
-        queued: false,
-        error: null,
-        workerId,
-        startedAt: null,
-        lastRunAt: completedAt
-      });
-      await database.insertTaskHistory({
-        id: createId("history"),
-        taskId: job.taskId,
-        ranAt: completedAt,
-        summary
-      });
-      await database.pruneTaskHistory(job.taskId, 8);
-      await queue.publishEvent("task-sync", { taskId: job.taskId });
-      await notifyRunEvent(database, state, "run_success", {
-        task,
-        summary
-      });
-    } catch (error) {
-      const stopped =
-        error instanceof AbortRunError || Boolean(currentAbortController?.signal.aborted);
-      const failedAt = new Date().toISOString();
-      const walletCount = Array.isArray(task?.walletIds) ? task.walletIds.length : 0;
-      await updateTaskRuntime(database, job.taskId, {
-        status: stopped ? "stopped" : "failed",
-        progress: {
-          phase: stopped ? "Stopped" : "Failed",
-          percent: stopped ? 0 : 100
-        },
-        summary: createEmptySummary(walletCount),
-        active: false,
-        queued: false,
-        error: formatError(error),
-        workerId,
-        startedAt: null,
-        lastRunAt: failedAt
-      });
-      await queue.publishEvent("log", {
-        taskId: job.taskId,
-        entry: {
-          level: "error",
-          message: formatError(error),
-          timestamp: failedAt
-        }
-      });
-      await queue.publishEvent("task-sync", { taskId: job.taskId });
-
-      if (state && task) {
-        await notifyRunEvent(database, state, stopped ? "run_stopped" : "run_failure", {
-          task,
-          error: formatError(error)
-        });
-      }
-    } finally {
-      currentTaskId = null;
-      currentAbortController = null;
-      await queue.clearRunState();
+      continue;
     }
+
+    if (activeJobs.has(job.taskId)) {
+      continue;
+    }
+
+    const abortController = new AbortController();
+    const promise = executeQueuedJob({
+      job,
+      queue,
+      database,
+      workerId,
+      abortController
+    })
+      .catch((error) => {
+        console.error(`Worker job ${job.taskId} crashed unexpectedly:`);
+        console.error(error);
+      })
+      .finally(() => {
+        activeJobs.delete(job.taskId);
+      });
+
+    activeJobs.set(job.taskId, {
+      abortController,
+      promise
+    });
   }
 }
 

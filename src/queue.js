@@ -20,6 +20,8 @@ function createIdleRunState(config = resolveQueueConfig()) {
   return {
     status: "idle",
     activeTaskId: null,
+    activeTaskIds: [],
+    activeRuns: [],
     startedAt: null,
     workerId: null,
     queueMode: config.enabled ? "redis" : "local",

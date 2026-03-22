@@ -150,11 +150,11 @@ function buildBaseOverrides(config) {
     overrides.gasLimit = BigInt(config.gasLimit);
   }
 
-  if (config.maxFeeGwei) {
+  if (config.gasStrategy === "custom" && config.maxFeeGwei) {
     overrides.maxFeePerGas = ethers.parseUnits(String(config.maxFeeGwei), "gwei");
   }
 
-  if (config.maxPriorityFeeGwei) {
+  if (config.gasStrategy === "custom" && config.maxPriorityFeeGwei) {
     overrides.maxPriorityFeePerGas = ethers.parseUnits(
       String(config.maxPriorityFeeGwei),
       "gwei"
@@ -173,20 +173,54 @@ function applyPercentBoost(value, percent) {
   return (value * multiplier) / 10000n;
 }
 
+function resolveGasStrategyProfile(strategy) {
+  if (strategy === "aggressive") {
+    return {
+      maxFeeBoostPercent: 18,
+      priorityBoostPercent: 25
+    };
+  }
+
+  return {
+    maxFeeBoostPercent: 0,
+    priorityBoostPercent: 0
+  };
+}
+
+function getEffectiveGasBoostPercent(config) {
+  const profile = resolveGasStrategyProfile(config.gasStrategy);
+  return profile.maxFeeBoostPercent + (config.gasBoostPercent || 0);
+}
+
+function getEffectivePriorityBoostPercent(config) {
+  const profile = resolveGasStrategyProfile(config.gasStrategy);
+  return profile.priorityBoostPercent + (config.priorityBoostPercent || 0);
+}
+
 async function buildRuntimeOverrides(config, provider) {
   const overrides = buildBaseOverrides(config);
 
-  if (config.gasStrategy === "provider") {
-    const feeData = await provider.getFeeData();
+  const customNeedsNetworkFees =
+    config.gasStrategy === "custom" &&
+    (overrides.maxFeePerGas == null || overrides.maxPriorityFeePerGas == null);
 
-    if (!overrides.maxFeePerGas && feeData.maxFeePerGas != null) {
-      overrides.maxFeePerGas = applyPercentBoost(feeData.maxFeePerGas, config.gasBoostPercent);
+  if (config.gasStrategy !== "custom" || customNeedsNetworkFees) {
+    const feeData = await provider.getFeeData();
+    const gasBoostPercent =
+      config.gasStrategy === "custom" ? config.gasBoostPercent || 0 : getEffectiveGasBoostPercent(config);
+    const priorityBoostPercent =
+      config.gasStrategy === "custom"
+        ? config.priorityBoostPercent || 0
+        : getEffectivePriorityBoostPercent(config);
+
+    if (overrides.maxFeePerGas == null && feeData.maxFeePerGas != null) {
+      overrides.maxFeePerGas = applyPercentBoost(feeData.maxFeePerGas, gasBoostPercent);
     }
 
-    if (!overrides.maxPriorityFeePerGas && feeData.maxPriorityFeePerGas != null) {
+    if (overrides.maxPriorityFeePerGas == null && feeData.maxPriorityFeePerGas != null) {
       overrides.maxPriorityFeePerGas = applyPercentBoost(
         feeData.maxPriorityFeePerGas,
-        config.priorityBoostPercent
+        priorityBoostPercent
       );
     }
 
@@ -195,7 +229,7 @@ async function buildRuntimeOverrides(config, provider) {
       overrides.maxPriorityFeePerGas == null &&
       feeData.gasPrice != null
     ) {
-      overrides.gasPrice = applyPercentBoost(feeData.gasPrice, config.gasBoostPercent);
+      overrides.gasPrice = applyPercentBoost(feeData.gasPrice, gasBoostPercent);
     }
   }
 
@@ -349,15 +383,17 @@ function buildReplacementRequest(tx, feeOverrides) {
 
 async function buildReplacementFeeOverrides(config, provider, tx) {
   const feeData = await provider.getFeeData();
+  const gasBoostPercent = getEffectiveGasBoostPercent(config);
+  const priorityBoostPercent = getEffectivePriorityBoostPercent(config);
 
   if (tx.maxFeePerGas != null || tx.maxPriorityFeePerGas != null) {
     const maxPriorityFeePerGas = maxDefinedBigInt(
       bumpFeeValue(tx.maxPriorityFeePerGas, config.replacementBumpPercent),
-      applyPercentBoost(feeData.maxPriorityFeePerGas, config.priorityBoostPercent)
+      applyPercentBoost(feeData.maxPriorityFeePerGas, priorityBoostPercent)
     );
     const maxFeePerGas = maxDefinedBigInt(
       bumpFeeValue(tx.maxFeePerGas, config.replacementBumpPercent),
-      applyPercentBoost(feeData.maxFeePerGas, config.gasBoostPercent),
+      applyPercentBoost(feeData.maxFeePerGas, gasBoostPercent),
       maxPriorityFeePerGas
     );
 
@@ -369,7 +405,7 @@ async function buildReplacementFeeOverrides(config, provider, tx) {
 
   const gasPrice = maxDefinedBigInt(
     bumpFeeValue(tx.gasPrice, config.replacementBumpPercent),
-    applyPercentBoost(feeData.gasPrice, config.gasBoostPercent)
+    applyPercentBoost(feeData.gasPrice, gasBoostPercent)
   );
 
   return { gasPrice };
@@ -632,6 +668,7 @@ function aggregateTransferAssets(assets) {
 async function transferMintedAssets({
   config,
   provider,
+  rpcUrl,
   wallet,
   walletAddress,
   walletIndex,
@@ -678,6 +715,7 @@ async function transferMintedAssets({
               overrides: transferOverrides,
               wallet,
               provider,
+              rpcUrl,
               config,
               walletIndex,
               label: "Transfer",
@@ -687,6 +725,7 @@ async function transferMintedAssets({
             submitTransactionWithRoute({
               wallet,
               provider,
+              rpcUrl,
               config,
               txRequest,
               walletIndex,
@@ -713,6 +752,7 @@ async function transferMintedAssets({
               overrides: transferOverrides,
               wallet,
               provider,
+              rpcUrl,
               config,
               walletIndex,
               label: "Transfer",
@@ -722,6 +762,7 @@ async function transferMintedAssets({
             submitTransactionWithRoute({
               wallet,
               provider,
+              rpcUrl,
               config,
               txRequest,
               walletIndex,
@@ -962,8 +1003,160 @@ async function wrapSignedTransactionResponse(provider, signedTransaction) {
   return provider._wrapTransactionResponse(transaction, network).replaceableTransaction(blockNumber);
 }
 
+function buildBroadcastRpcMesh(config, preferredRpcUrl) {
+  const uniqueRpcUrls = [];
+  const seen = new Set();
+
+  for (const rpcUrl of [preferredRpcUrl, ...(config.rpcUrls || [])]) {
+    const normalized = String(rpcUrl || "").trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    uniqueRpcUrls.push(normalized);
+  }
+
+  return uniqueRpcUrls;
+}
+
+function isDuplicateBroadcastError(error) {
+  const message = formatError(error).toLowerCase();
+  return [
+    "already known",
+    "known transaction",
+    "already imported",
+    "already in mempool",
+    "already exists",
+    "tx already exists",
+    "already seen",
+    "already pending"
+  ].some((fragment) => message.includes(fragment));
+}
+
+async function broadcastSignedTransactionToRpcTarget({
+  sharedProvider,
+  primaryRpcUrl,
+  targetRpcUrl,
+  signedTransaction
+}) {
+  const isPrimary = targetRpcUrl === primaryRpcUrl;
+  const provider = isPrimary ? sharedProvider : createTransportProvider(targetRpcUrl);
+
+  try {
+    const tx = await provider.broadcastTransaction(signedTransaction);
+    return {
+      accepted: true,
+      duplicate: false,
+      rpcUrl: targetRpcUrl,
+      tx: isPrimary ? tx : null
+    };
+  } catch (error) {
+    if (isDuplicateBroadcastError(error)) {
+      return {
+        accepted: true,
+        duplicate: true,
+        rpcUrl: targetRpcUrl,
+        tx: null
+      };
+    }
+
+    throw attachErrorContext(error, {
+      rpcUrl: targetRpcUrl
+    });
+  } finally {
+    if (!isPrimary) {
+      await destroyProvider(provider);
+    }
+  }
+}
+
+async function submitSignedTransactionToPublicRpcMesh({
+  provider,
+  rpcUrl,
+  config,
+  signedTransaction,
+  walletIndex,
+  label,
+  logger
+}) {
+  const meshRpcUrls =
+    config.multiRpcBroadcast && (config.rpcUrls || []).length > 1
+      ? buildBroadcastRpcMesh(config, rpcUrl)
+      : [rpcUrl];
+
+  if (meshRpcUrls.length <= 1) {
+    return provider.broadcastTransaction(signedTransaction);
+  }
+
+  logger.info(
+    `[wallet ${walletIndex}] ${label} multi-RPC broadcast to ${meshRpcUrls.length} RPCs`
+  );
+
+  const attempts = meshRpcUrls.map((targetRpcUrl) =>
+    broadcastSignedTransactionToRpcTarget({
+      sharedProvider: provider,
+      primaryRpcUrl: rpcUrl,
+      targetRpcUrl,
+      signedTransaction
+    })
+  );
+
+  const acceptedPromise = Promise.any(
+    attempts.map((attempt) =>
+      attempt.then((result) => {
+        if (result.accepted) {
+          return result;
+        }
+
+        throw new Error(`RPC ${result.rpcUrl} did not accept the transaction`);
+      })
+    )
+  );
+
+  void Promise.allSettled(attempts).then((results) => {
+    const acceptedCount = results.filter(
+      (result) => result.status === "fulfilled" && result.value.accepted && !result.value.duplicate
+    ).length;
+    const duplicateCount = results.filter(
+      (result) => result.status === "fulfilled" && result.value.duplicate
+    ).length;
+    const failedCount = results.filter((result) => result.status === "rejected").length;
+
+    logger.info(
+      `[wallet ${walletIndex}] ${label} propagation summary: ${acceptedCount} accepted, ${duplicateCount} duplicate, ${failedCount} failed`
+    );
+  });
+
+  let acceptedResult = null;
+
+  try {
+    acceptedResult = await acceptedPromise;
+  } catch (error) {
+    if (error instanceof AggregateError) {
+      throw new Error(
+        `${label} multi-RPC broadcast failed across ${meshRpcUrls.length} RPCs: ${error.errors
+          .map((entry) => {
+            const rpcLabel = entry?.rpcUrl ? `${entry.rpcUrl} -> ` : "";
+            return `${rpcLabel}${formatError(entry)}`;
+          })
+          .join("; ")}`
+      );
+    }
+
+    throw error;
+  }
+
+  if (acceptedResult.tx) {
+    return acceptedResult.tx;
+  }
+
+  return wrapSignedTransactionResponse(provider, signedTransaction);
+}
+
 async function submitSignedTransactionWithRoute({
   provider,
+  rpcUrl,
   config,
   signedTransaction,
   walletIndex,
@@ -971,7 +1164,15 @@ async function submitSignedTransactionWithRoute({
   logger
 }) {
   if (!config.privateRelayEnabled) {
-    return provider.broadcastTransaction(signedTransaction);
+    return submitSignedTransactionToPublicRpcMesh({
+      provider,
+      rpcUrl,
+      config,
+      signedTransaction,
+      walletIndex,
+      label,
+      logger
+    });
   }
 
   try {
@@ -994,44 +1195,39 @@ async function submitSignedTransactionWithRoute({
     logger.error(
       `[wallet ${walletIndex}] Private relay submission failed, falling back to public RPC: ${formatError(error)}`
     );
-    return provider.broadcastTransaction(signedTransaction);
-  }
-}
-
-async function submitTransactionWithRoute({
-  wallet,
-  provider,
-  config,
-  txRequest,
-  walletIndex,
-  label,
-  logger
-}) {
-  if (!config.privateRelayEnabled) {
-    return wallet.sendTransaction(txRequest);
-  }
-
-  try {
-    const populatedTransaction = await wallet.populateTransaction(txRequest);
-    const signedTransaction = await wallet.signTransaction(populatedTransaction);
-    return await submitSignedTransactionWithRoute({
+    return submitSignedTransactionToPublicRpcMesh({
       provider,
+      rpcUrl,
       config,
       signedTransaction,
       walletIndex,
       label,
       logger
     });
-  } catch (error) {
-    if (config.privateRelayOnly) {
-      throw new Error(`Private relay submission failed: ${formatError(error)}`);
-    }
-
-    logger.error(
-      `[wallet ${walletIndex}] Private relay submission failed, falling back to public RPC: ${formatError(error)}`
-    );
-    return wallet.sendTransaction(txRequest);
   }
+}
+
+async function submitTransactionWithRoute({
+  wallet,
+  provider,
+  rpcUrl,
+  config,
+  txRequest,
+  walletIndex,
+  label,
+  logger
+}) {
+  const populatedTransaction = await wallet.populateTransaction(txRequest);
+  const signedTransaction = await wallet.signTransaction(populatedTransaction);
+  return submitSignedTransactionWithRoute({
+    provider,
+    rpcUrl,
+    config,
+    signedTransaction,
+    walletIndex,
+    label,
+    logger
+  });
 }
 
 async function sendContractTransaction({
@@ -1040,12 +1236,13 @@ async function sendContractTransaction({
   overrides,
   wallet,
   provider,
+  rpcUrl,
   config,
   walletIndex,
   label,
   logger
 }) {
-  if (!config.privateRelayEnabled) {
+  if (!config.privateRelayEnabled && !config.multiRpcBroadcast) {
     return contractMethod(...args, overrides);
   }
 
@@ -1053,6 +1250,7 @@ async function sendContractTransaction({
   return submitTransactionWithRoute({
     wallet,
     provider,
+    rpcUrl,
     config,
     txRequest,
     walletIndex,
@@ -1426,6 +1624,7 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
 
     return {
       provider,
+      rpcUrl,
       wallet,
       walletAddress,
       walletIndex,
@@ -1505,7 +1704,8 @@ async function closeWalletSessions(sessions) {
 
 async function executeWalletSession(config, session, context) {
   const { signal, logger } = context;
-  const { provider, wallet, walletAddress, walletIndex, contract, mintMethod, mintArgs } = session;
+  const { provider, rpcUrl, wallet, walletAddress, walletIndex, contract, mintMethod, mintArgs } =
+    session;
 
   try {
     await maybeWaitJitter(config.startJitterMs, walletIndex, signal, logger);
@@ -1564,6 +1764,7 @@ async function executeWalletSession(config, session, context) {
           send: () =>
             submitSignedTransactionWithRoute({
               provider,
+              rpcUrl,
               config,
               signedTransaction: preparedMint.signedTransaction,
               walletIndex,
@@ -1574,6 +1775,7 @@ async function executeWalletSession(config, session, context) {
             submitTransactionWithRoute({
               wallet,
               provider,
+              rpcUrl,
               config,
               txRequest,
               walletIndex,
@@ -1665,6 +1867,7 @@ async function executeWalletSession(config, session, context) {
       const transferResults = await transferMintedAssets({
         config,
         provider,
+        rpcUrl,
         wallet,
         walletAddress,
         walletIndex,
