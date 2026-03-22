@@ -546,6 +546,7 @@
               </label>
             </label>
             <p class="helper-copy">New tasks can split into GTD, allowlist, and public schedules automatically. Proof-based phases may still need review.</p>
+            <div id="task-phase-preview" class="stack-list"></div>
           </div>
 
           <div class="surface inset-surface">
@@ -571,10 +572,10 @@
             <div class="surface-header compact">
               <div>
                 <h4>Launch Timing</h4>
-                <p class="helper-copy">Pre-sign stays enabled internally. Use a timestamp or block trigger for hands-free launch.</p>
+                <p class="helper-copy">Manual timestamps are optional. Auto-arm can wait on detected start times and mint-open signals for you.</p>
               </div>
             </div>
-            <div class="form-grid four">
+            <div class="form-grid five">
               <label>
                 <span>Execution Profile</span>
                 <select id="task-latency-profile-input">
@@ -588,6 +589,13 @@
                 <span>Timestamp to Start</span>
                 <label class="switch-row">
                   <input id="task-schedule-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+              <label class="toggle-stack">
+                <span>Auto Arm After Save</span>
+                <label class="switch-row">
+                  <input id="task-auto-arm-toggle" type="checkbox" checked />
                   <span>Enable</span>
                 </label>
               </label>

@@ -282,6 +282,8 @@ function defaultTaskState() {
     warmupRpc: true,
     continueOnError: false,
     walletMode: "parallel",
+    autoArm: true,
+    autoArmPending: false,
     useSchedule: false,
     waitUntilIso: "",
     preSignTransactions: true,
@@ -341,6 +343,7 @@ function defaultTaskState() {
 
 function sanitizeTaskInput(payload, existingTask = null) {
   const base = existingTask ? { ...existingTask } : defaultTaskState();
+  const autoArm = Boolean(payload.autoArm ?? base.autoArm ?? true);
   const useSchedule = Boolean(payload.useSchedule ?? base.useSchedule ?? false);
   const waitUntilIso = String(payload.waitUntilIso ?? base.waitUntilIso ?? "").trim();
   const retryWindowMs = String(payload.retryWindowMs ?? base.retryWindowMs ?? "1800000").trim() || "1800000";
@@ -396,6 +399,8 @@ function sanitizeTaskInput(payload, existingTask = null) {
     warmupRpc: Boolean(payload.warmupRpc ?? base.warmupRpc ?? true),
     continueOnError: Boolean(payload.continueOnError ?? base.continueOnError ?? false),
     walletMode: String(payload.walletMode || base.walletMode || "parallel"),
+    autoArm,
+    autoArmPending: Boolean(payload.autoArmPending ?? base.autoArmPending ?? false),
     useSchedule,
     waitUntilIso,
     preSignTransactions: true,
@@ -800,7 +805,9 @@ async function createReadProviderForChain(chainKey) {
   let lastError = null;
 
   for (const rpcNode of chainRpcNodes) {
-    const provider = new ethers.JsonRpcProvider(rpcNode.url);
+    const provider = /^wss?:\/\//i.test(String(rpcNode.url || ""))
+      ? new ethers.WebSocketProvider(rpcNode.url)
+      : new ethers.JsonRpcProvider(rpcNode.url);
     try {
       await provider.getBlockNumber();
       return {
@@ -809,6 +816,9 @@ async function createReadProviderForChain(chainKey) {
         warning: null
       };
     } catch (error) {
+      if (typeof provider.destroy === "function") {
+        await provider.destroy().catch(() => {});
+      }
       lastError = error;
     }
   }
@@ -1028,6 +1038,187 @@ function hasProofLikeInput(entry) {
         )
       )
     : false;
+}
+
+function hasSignatureLikeInput(entry) {
+  return Array.isArray(entry?.inputs)
+    ? entry.inputs.some((input) =>
+        /sig|signature|voucher|permit|auth|signed/i.test(String(input?.name || ""))
+      )
+    : false;
+}
+
+function parseJsonArraySafely(value, fallback = null) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isEmptyProofLikeValue(value) {
+  if (value == null) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return (
+      normalized === "" ||
+      normalized === "0x" ||
+      /^0x0+$/.test(normalized) ||
+      normalized === String(mintAutomation.ZERO_BYTES_32 || "").toLowerCase()
+    );
+  }
+
+  return false;
+}
+
+function taskRequiresManualLaunchReview(task, abiEntries = null) {
+  const resolvedAbiEntries =
+    abiEntries ||
+    (() => {
+      try {
+        return parseTaskAbiEntries(task?.abiJson || "");
+      } catch {
+        return null;
+      }
+    })();
+
+  if (!resolvedAbiEntries || !task?.mintFunction) {
+    return false;
+  }
+
+  const mintEntry = findAbiFunctionEntry(resolvedAbiEntries, task.mintFunction);
+  if (!mintEntry || !Array.isArray(mintEntry.inputs) || mintEntry.inputs.length === 0) {
+    return false;
+  }
+
+  const args = parseJsonArraySafely(task.mintArgs, []);
+  if (!Array.isArray(args)) {
+    return true;
+  }
+
+  return mintEntry.inputs.some((input, index) => {
+    const label = String(input?.name || "").toLowerCase();
+    if (!/proof|merkle|allowlist|whitelist|allow|wl|sig|signature|voucher|permit|auth|signed/.test(label)) {
+      return false;
+    }
+
+    return isEmptyProofLikeValue(args[index]);
+  });
+}
+
+function taskHasAutomaticWaitGate(task) {
+  const triggerMode = String(task?.executionTriggerMode || "standard").trim().toLowerCase();
+  const mintStartDetectionConfig =
+    task?.mintStartDetectionConfig && typeof task.mintStartDetectionConfig === "object"
+      ? task.mintStartDetectionConfig
+      : {};
+
+  return Boolean(
+    task?.readyCheckFunction ||
+      (task?.mintStartDetectionEnabled &&
+        (mintStartDetectionConfig.saleActiveFunction || mintStartDetectionConfig.stateFunction)) ||
+      (triggerMode === "event" && task?.triggerEventSignature) ||
+      (triggerMode === "mempool" && task?.triggerMempoolSignature) ||
+      (triggerMode === "block" && task?.triggerBlockNumber)
+  );
+}
+
+function resolveTaskAutoLaunchPlan(task, abiEntries = null) {
+  const walletIds = Array.isArray(task?.walletIds) ? task.walletIds : [];
+  const hasReadyState =
+    Boolean(task?.contractAddress) &&
+    Boolean(task?.abiJson) &&
+    walletIds.length > 0 &&
+    getTaskRpcNodes(task).length > 0;
+
+  if (!task?.autoArm) {
+    return {
+      mode: "disabled",
+      pending: false
+    };
+  }
+
+  if (!hasReadyState) {
+    return {
+      mode: "not_ready",
+      pending: false
+    };
+  }
+
+  if (taskRequiresManualLaunchReview(task, abiEntries)) {
+    return {
+      mode: "review",
+      pending: false
+    };
+  }
+
+  const scheduledAt = scheduledTaskTimestamp(task);
+  if (scheduledAt != null && scheduledAt > Date.now()) {
+    return {
+      mode: "scheduled",
+      pending: false
+    };
+  }
+
+  if (taskHasAutomaticWaitGate(task)) {
+    return {
+      mode: "watch",
+      pending: true
+    };
+  }
+
+  return {
+    mode: "instant",
+    pending: true
+  };
+}
+
+function applyTaskAutoLaunchState(task, abiEntries = null) {
+  const plan = resolveTaskAutoLaunchPlan(task, abiEntries);
+  return {
+    ...task,
+    autoArmPending: plan.pending
+  };
+}
+
+function describeAutoLaunchMode(mode) {
+  if (mode === "scheduled") {
+    return "scheduled from on-chain start time";
+  }
+
+  if (mode === "watch") {
+    return "auto-armed and waiting for mint-open signals";
+  }
+
+  if (mode === "instant") {
+    return "ready to launch immediately after save";
+  }
+
+  if (mode === "review") {
+    return "needs manual proof or signature values";
+  }
+
+  if (mode === "not_ready") {
+    return "waiting for wallets, ABI, contract, or RPC selection";
+  }
+
+  return "automatic launch disabled";
 }
 
 function detectMintPhaseType(entry) {
@@ -1449,6 +1640,9 @@ async function createReadProviderForTask(task) {
         warning: null
       };
     } catch (error) {
+      if (typeof provider.destroy === "function") {
+        await provider.destroy().catch(() => {});
+      }
       lastError = error;
     }
   }
@@ -1763,32 +1957,12 @@ async function buildPhaseTasksFromTask(task, abiEntries) {
       phaseTags.push("review");
     }
 
-    const phaseNotes = mergeTaskNotes(
-      task.notes,
-      `Auto-generated ${mintPhaseLabels[phaseType]} phase using ${candidate.signature}`,
-      eligibleWalletIds.length > 0 ? `${eligibleWalletIds.length} wallet(s) confirmed eligible` : "",
-      reviewWalletIds.length > 0
-        ? `${reviewWalletIds.length} wallet(s) need review before launch`
-        : "",
-      ineligibleWalletLabels.length > 0
-        ? `${ineligibleWalletLabels.length} wallet(s) excluded as ineligible`
-        : "",
-      eligibilityFunction ? `Eligibility check: ${eligibilityFunction}(address)` : "",
-      priceInfo.priceSource ? `Price source: ${priceInfo.priceSource}` : "",
-      startTimeInfo.source ? `Start source: ${startTimeInfo.source}` : "",
-      rpcNode?.name ? `Planner RPC: ${rpcNode.name}` : "",
-      warning || "",
-      hasProofLikeInput(candidate) ? "Proof or signature inputs may still need manual values." : "",
-      !argResolution.supported ? `Args need review: ${argResolution.reason}` : ""
-    );
-
-    const phaseTask = applyPhaseGasProfile(
+    const phaseDraft = applyPhaseGasProfile(
       {
         ...task,
         id: createId("task"),
         name: buildPhaseTaskName(task.name, phaseType),
         tags: phaseTags,
-        notes: phaseNotes,
         walletIds: phaseWalletIds,
         mintFunction: candidate.name,
         mintArgs: argResolution.supported ? JSON.stringify(argResolution.args) : task.mintArgs,
@@ -1801,6 +1975,7 @@ async function buildPhaseTasksFromTask(task, abiEntries) {
               : "Generic EVM (auto-detect)",
         status: "draft",
         done: false,
+        autoArm: task.autoArm !== false,
         ...readyState,
         progress: {
           phase: "Ready",
@@ -1820,14 +1995,138 @@ async function buildPhaseTasksFromTask(task, abiEntries) {
       },
       phaseType
     );
+    const autoLaunchPlan = resolveTaskAutoLaunchPlan(phaseDraft, abiEntries);
+    const phaseNotes = mergeTaskNotes(
+      task.notes,
+      `Auto-generated ${mintPhaseLabels[phaseType]} phase using ${candidate.signature}`,
+      eligibleWalletIds.length > 0 ? `${eligibleWalletIds.length} wallet(s) confirmed eligible` : "",
+      reviewWalletIds.length > 0
+        ? `${reviewWalletIds.length} wallet(s) need review before launch`
+        : "",
+      ineligibleWalletLabels.length > 0
+        ? `${ineligibleWalletLabels.length} wallet(s) excluded as ineligible`
+        : "",
+      eligibilityFunction ? `Eligibility check: ${eligibilityFunction}(address)` : "",
+      priceInfo.priceSource ? `Price source: ${priceInfo.priceSource}` : "",
+      startTimeInfo.source ? `Start source: ${startTimeInfo.source}` : "",
+      rpcNode?.name ? `Planner RPC: ${rpcNode.name}` : "",
+      `Auto launch: ${describeAutoLaunchMode(autoLaunchPlan.mode)}`,
+      warning || "",
+      hasProofLikeInput(candidate) || hasSignatureLikeInput(candidate)
+        ? "Proof or signature inputs may still need manual values."
+        : "",
+      !argResolution.supported ? `Args need review: ${argResolution.reason}` : ""
+    );
 
-    phaseTasks.push(phaseTask);
+    phaseTasks.push(
+      applyTaskAutoLaunchState(
+        {
+          ...phaseDraft,
+          notes: phaseNotes
+        },
+        abiEntries
+      )
+    );
   }
 
   return phaseTasks.sort(
     (left, right) =>
       mintPhaseOrder.indexOf((left.tags || []).find((tag) => mintPhaseOrder.includes(tag)) || "public") -
       mintPhaseOrder.indexOf((right.tags || []).find((tag) => mintPhaseOrder.includes(tag)) || "public")
+  );
+}
+
+async function buildPhaseAutofillPreview({ chainKey, contractAddress, abiEntries }) {
+  const candidates = buildMintPhaseCandidates(abiEntries);
+  if (!candidates.length || !chainKey || !ethers.isAddress(contractAddress)) {
+    return [];
+  }
+
+  const { provider, rpcNode, warning } = await createReadProviderForChain(chainKey);
+  const contract = provider ? new ethers.Contract(contractAddress, abiEntries, provider) : null;
+
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      const phaseType = candidate.phaseType;
+      const priceInfo = contract
+        ? await readPhasePrice(contract, abiEntries, phaseType)
+        : { priceEth: null, priceSource: null };
+      const startTimeInfo = contract
+        ? await readPhaseStartTime(contract, abiEntries, phaseType)
+        : { waitUntilIso: null, source: null };
+      const readyState = buildPhaseTaskReadyState(
+        {
+          autoArm: true,
+          abiJson: JSON.stringify(abiEntries),
+          mintStartDetectionEnabled: false,
+          mintStartDetectionConfig: null,
+          readyCheckFunction: "",
+          readyCheckArgs: "[]",
+          readyCheckMode: "truthy",
+          readyCheckExpected: "",
+          executionTriggerMode: "standard",
+          triggerEventSignature: "",
+          triggerMempoolSignature: "",
+          triggerBlockNumber: "",
+          useSchedule: false,
+          waitUntilIso: "",
+          walletIds: ["preview"],
+          rpcNodeIds: [],
+          chainKey,
+          contractAddress,
+          mintFunction: candidate.name,
+          mintArgs: JSON.stringify(
+            mintAutomation.resolveFunctionArgsFromEntry(candidate, {
+              walletAddress: "{{wallet}}",
+              quantity: 1
+            }).args || []
+          )
+        },
+        abiEntries,
+        phaseType,
+        startTimeInfo.waitUntilIso
+      );
+      const previewTask = applyTaskAutoLaunchState(
+        {
+          autoArm: true,
+          abiJson: JSON.stringify(abiEntries),
+          chainKey,
+          contractAddress,
+          walletIds: ["preview"],
+          rpcNodeIds: [],
+          mintFunction: candidate.name,
+          mintArgs: JSON.stringify(
+            mintAutomation.resolveFunctionArgsFromEntry(candidate, {
+              walletAddress: "{{wallet}}",
+              quantity: 1
+            }).args || []
+          ),
+          executionTriggerMode: "standard",
+          triggerEventSignature: "",
+          triggerMempoolSignature: "",
+          triggerBlockNumber: "",
+          ...readyState
+        },
+        abiEntries
+      );
+      const autoLaunchPlan = resolveTaskAutoLaunchPlan(previewTask, abiEntries);
+
+      return {
+        phaseType,
+        label: mintPhaseLabels[phaseType] || phaseType,
+        mintFunction: candidate.name,
+        signature: candidate.signature,
+        priceEth: priceInfo.priceEth,
+        priceSource: priceInfo.priceSource,
+        waitUntilIso: startTimeInfo.waitUntilIso,
+        startTimeSource: startTimeInfo.source,
+        autoLaunchMode: autoLaunchPlan.mode,
+        autoLaunchLabel: describeAutoLaunchMode(autoLaunchPlan.mode),
+        requiresReview: taskRequiresManualLaunchReview(previewTask, abiEntries),
+        rpcNodeName: rpcNode?.name || null,
+        warning: warning || null
+      };
+    })
   );
 }
 
@@ -1849,6 +2148,12 @@ async function buildMintAutofill({ chainKey, contractAddress, abiEntries, reques
     warnings.push(priceResolution.warning);
   }
 
+  const phasePreview = await buildPhaseAutofillPreview({
+    chainKey,
+    contractAddress,
+    abiEntries
+  });
+
   return {
     mintFunction: resolvedMintFunction.mintFunction,
     mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
@@ -1857,6 +2162,7 @@ async function buildMintAutofill({ chainKey, contractAddress, abiEntries, reques
     platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
     detectedMintFunctions: resolvedMintFunction.detectedFunctions,
     mintStartDetection,
+    phasePreview,
     priceSource: priceResolution.priceSource,
     rpcNodeName: priceResolution.rpcNodeName || null,
     warnings
@@ -2643,6 +2949,8 @@ function cloneTask(task) {
     name: `${task.name} Copy`,
     status: "draft",
     done: false,
+    autoArm: task.autoArm !== false,
+    autoArmPending: false,
     schedulePending:
       Boolean(task.useSchedule && task.waitUntilIso) &&
       !Number.isNaN(new Date(task.waitUntilIso).getTime()) &&
@@ -2982,6 +3290,29 @@ function listDueScheduledTasks() {
     });
 }
 
+function listPendingAutoArmTasks() {
+  if (!appState?.tasks?.length) {
+    return [];
+  }
+
+  return appState.tasks
+    .filter(
+      (task) =>
+        Boolean(task.autoArmPending) &&
+        !task.done &&
+        !task.schedulePending &&
+        !["running", "queued", "completed"].includes(task.status)
+    )
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return new Date(left.createdAt || 0) - new Date(right.createdAt || 0);
+    });
+}
+
 async function markScheduledTaskLaunchFailure(taskId, error) {
   const task = getTaskById(taskId);
   if (!task) {
@@ -3004,7 +3335,29 @@ async function markScheduledTaskLaunchFailure(taskId, error) {
   });
 }
 
-async function scanAndRunScheduledTasks() {
+async function markAutoArmTaskLaunchFailure(taskId, error) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    return;
+  }
+
+  await updateTask(taskId, {
+    autoArmPending: false,
+    status: "failed",
+    progress: {
+      phase: "Auto-Arm Failed",
+      percent: 100
+    }
+  });
+
+  pushLog({
+    level: "error",
+    message: `Automatic launch failed for ${task.name}: ${formatError(error)}`,
+    timestamp: new Date().toISOString()
+  });
+}
+
+async function scanAndRunAutomaticTasks() {
   if (scheduledTaskScanInFlight || !initialized || !appState) {
     return;
   }
@@ -3013,11 +3366,12 @@ async function scanAndRunScheduledTasks() {
 
   try {
     const dueTasks = listDueScheduledTasks();
-    if (dueTasks.length === 0) {
+    const pendingAutoArmTasks = listPendingAutoArmTasks();
+    if (dueTasks.length === 0 && pendingAutoArmTasks.length === 0) {
       return;
     }
 
-    const tasksToLaunch = dueTasks;
+    const tasksToLaunch = [...dueTasks, ...pendingAutoArmTasks];
 
     for (const task of tasksToLaunch) {
       if (queueModeEnabled()) {
@@ -3030,7 +3384,9 @@ async function scanAndRunScheduledTasks() {
 
       pushLog({
         level: "info",
-        message: `Auto-starting scheduled task ${task.name}`,
+        message: task.schedulePending
+          ? `Auto-starting scheduled task ${task.name}`
+          : `Auto-arming task ${task.name}`,
         timestamp: new Date().toISOString()
       });
 
@@ -3041,7 +3397,11 @@ async function scanAndRunScheduledTasks() {
           continue;
         }
 
-        await markScheduledTaskLaunchFailure(task.id, error);
+        if (task.schedulePending) {
+          await markScheduledTaskLaunchFailure(task.id, error);
+        } else {
+          await markAutoArmTaskLaunchFailure(task.id, error);
+        }
       }
     }
   } finally {
@@ -3055,10 +3415,10 @@ function ensureScheduledTaskLoop() {
   }
 
   scheduledTaskLoop = setInterval(() => {
-    void scanAndRunScheduledTasks().catch(reportBackgroundError);
+    void scanAndRunAutomaticTasks().catch(reportBackgroundError);
   }, scheduledTaskPollIntervalMs);
 
-  void scanAndRunScheduledTasks().catch(reportBackgroundError);
+  void scanAndRunAutomaticTasks().catch(reportBackgroundError);
 }
 
 async function startTaskRunLocal(taskId) {
@@ -3086,6 +3446,7 @@ async function startTaskRunLocal(taskId) {
     runContext.active = true;
 
     await updateTask(taskId, {
+      autoArmPending: false,
       schedulePending: false,
       status: "running",
       progress: {
@@ -3188,6 +3549,7 @@ async function startTaskRunQueued(taskId) {
   }
 
   await updateTask(taskId, {
+    autoArmPending: false,
     schedulePending: false
   });
 
@@ -3236,11 +3598,17 @@ async function handleTaskDuplicate(taskId, response) {
     return;
   }
 
-  const duplicate = cloneTask(task);
+  let duplicate = cloneTask(task);
+  try {
+    duplicate = applyTaskAutoLaunchState(duplicate, parseTaskAbiEntries(duplicate.abiJson));
+  } catch {
+    // Keep the duplicate even if its ABI is currently invalid.
+  }
   appState.tasks.unshift(duplicate);
   await persistAppState();
+  await scanAndRunAutomaticTasks();
   emitState();
-  sendJson(response, 200, { ok: true, task: buildTaskResponse(duplicate) });
+  sendJson(response, 200, { ok: true, task: buildTaskResponse(getTaskById(duplicate.id) || duplicate) });
 }
 
 function handleStopRun(response) {
@@ -3449,17 +3817,20 @@ async function handleTaskSave(request, response) {
       }
     }
 
+    const preparedTask = applyTaskAutoLaunchState(task, abiEntries);
+
     const autoGeneratePhaseTasks = !existingTask && Boolean(payload.autoGeneratePhaseTasks);
     if (autoGeneratePhaseTasks) {
-      const generatedTasks = await buildPhaseTasksFromTask(task, abiEntries);
+      const generatedTasks = await buildPhaseTasksFromTask(preparedTask, abiEntries);
       if (generatedTasks.length > 0) {
         appState.tasks = [...generatedTasks, ...appState.tasks];
         await persistAppState();
+        await scanAndRunAutomaticTasks();
         emitState();
         sendJson(response, 200, {
           ok: true,
-          task: buildTaskResponse(generatedTasks[0]),
-          tasks: generatedTasks.map((entry) => buildTaskResponse(entry)),
+          task: buildTaskResponse(getTaskById(generatedTasks[0].id) || generatedTasks[0]),
+          tasks: generatedTasks.map((entry) => buildTaskResponse(getTaskById(entry.id) || entry)),
           autoGeneratedPhaseTasks: true
         });
         return;
@@ -3468,14 +3839,18 @@ async function handleTaskSave(request, response) {
 
     if (existingTask) {
       const index = appState.tasks.findIndex((entry) => entry.id === task.id);
-      appState.tasks[index] = task;
+      appState.tasks[index] = preparedTask;
     } else {
-      appState.tasks.unshift(task);
+      appState.tasks.unshift(preparedTask);
     }
 
     await persistAppState();
+    await scanAndRunAutomaticTasks();
     emitState();
-    sendJson(response, 200, { ok: true, task: buildTaskResponse(task) });
+    sendJson(response, 200, {
+      ok: true,
+      task: buildTaskResponse(getTaskById(preparedTask.id) || preparedTask)
+    });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
   }

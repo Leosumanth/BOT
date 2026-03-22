@@ -105,6 +105,7 @@ const taskPlatformInput = document.getElementById("task-platform-input");
 const taskFunctionInput = document.getElementById("task-function-input");
 const taskArgsInput = document.getElementById("task-args-input");
 const taskAutoPhaseToggle = document.getElementById("task-auto-phase-toggle");
+const taskPhasePreview = document.getElementById("task-phase-preview");
 const walletGroupTabs = document.getElementById("wallet-group-tabs");
 const walletSelector = document.getElementById("wallet-selector");
 const selectAllWalletsButton = document.getElementById("select-all-wallets-button");
@@ -114,6 +115,7 @@ const selectAllRpcButton = document.getElementById("select-all-rpc-button");
 const rpcSelectionCount = document.getElementById("rpc-selection-count");
 const taskLatencyProfileInput = document.getElementById("task-latency-profile-input");
 const taskScheduleToggle = document.getElementById("task-schedule-toggle");
+const taskAutoArmToggle = document.getElementById("task-auto-arm-toggle");
 const taskStartTimeInput = document.getElementById("task-start-time-input");
 const taskWalletModeInput = document.getElementById("task-wallet-mode-input");
 const taskGasStrategyInput = document.getElementById("task-gas-strategy-input");
@@ -2106,6 +2108,69 @@ function applyMintAutofill(autofill, options = {}) {
   }
 }
 
+function formatPhasePreviewTime(isoString) {
+  if (!isoString) {
+    return "Watch contract state";
+  }
+
+  const parsed = new Date(isoString);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Watch contract state";
+  }
+
+  return parsed.toLocaleString();
+}
+
+function renderPhasePreview(phasePreview = []) {
+  if (!taskPhasePreview) {
+    return;
+  }
+
+  if (!Array.isArray(phasePreview) || phasePreview.length === 0) {
+    taskPhasePreview.innerHTML =
+      '<div class="empty-state"><h3>No phases detected yet</h3><p>Load an ABI and contract to preview GTD, allowlist, and public/free-mint details.</p></div>';
+    return;
+  }
+
+  taskPhasePreview.innerHTML = phasePreview
+    .map((phase) => {
+      const priceLabel =
+        phase.priceEth !== undefined && phase.priceEth !== null
+          ? `${escapeHtml(String(phase.priceEth))} ETH`
+          : "Auto";
+      const statusTone =
+        phase.autoLaunchMode === "review"
+          ? "failed"
+          : phase.autoLaunchMode === "scheduled" || phase.autoLaunchMode === "watch"
+            ? "running"
+            : "";
+      const statusLabel =
+        phase.autoLaunchMode === "review"
+          ? "Review"
+          : phase.autoLaunchMode === "scheduled"
+            ? "Scheduled"
+            : phase.autoLaunchMode === "watch"
+              ? "Watching"
+              : phase.autoLaunchMode === "instant"
+                ? "Ready"
+                : "Auto";
+
+      return `
+        <div class="list-row">
+          <div>
+            <strong>${escapeHtml(phase.label || phase.phaseType || "Phase")}</strong>
+            <p class="muted-copy">${escapeHtml(phase.signature || phase.mintFunction || "Unknown mint")}</p>
+            <p class="muted-copy">Price: ${priceLabel}${phase.priceSource ? ` via ${escapeHtml(phase.priceSource)}` : ""}</p>
+            <p class="muted-copy">Start: ${escapeHtml(formatPhasePreviewTime(phase.waitUntilIso))}${phase.startTimeSource ? ` via ${escapeHtml(phase.startTimeSource)}` : ""}</p>
+            <p class="muted-copy">${escapeHtml(phase.autoLaunchLabel || "Automatic launch unavailable")}</p>
+          </div>
+          <span class="status-pill ${statusTone}">${escapeHtml(statusLabel)}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
   const parts = [];
   if (sourceLabel) {
@@ -2113,6 +2178,9 @@ function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
   }
   if (autofill?.mintStartDetection?.enabled) {
     parts.push("mint start detection armed");
+  }
+  if (Array.isArray(autofill?.phasePreview) && autofill.phasePreview.length > 0) {
+    parts.push(`${autofill.phasePreview.length} phase plan${autofill.phasePreview.length === 1 ? "" : "s"} detected`);
   }
   if (autofill?.priceSource) {
     parts.push(`price via ${autofill.priceSource}`);
@@ -2124,6 +2192,7 @@ function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
 
 function updateAbiStatus(sourceLabel = "") {
   if (!taskAbiInput.value.trim()) {
+    renderPhasePreview([]);
     abiStatus.textContent = state.settings.explorerApiKeyConfigured
       ? "Enter a contract address to auto-fetch ABI, or paste JSON manually."
       : "Paste JSON or load a file. Add an Etherscan API key in Settings to auto-fetch ABI.";
@@ -2150,6 +2219,7 @@ function updateAbiStatus(sourceLabel = "") {
 
     abiStatus.textContent = statusParts.join(" - ");
   } catch {
+    renderPhasePreview([]);
     abiStatus.textContent = "ABI JSON is not valid yet.";
   }
 }
@@ -2225,6 +2295,7 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
     }
 
     setMintStartDetectionState(autofill.mintStartDetection || null);
+    renderPhasePreview(autofill.phasePreview || []);
     applyMintAutofill(autofill, {
       includeFunction,
       includeArgs,
@@ -2236,6 +2307,7 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
     return autofill;
   } catch {
     if (requestId === abiAutofillRequestId) {
+      renderPhasePreview([]);
       updateAbiStatus(sourceLabel);
     }
     return null;
@@ -2269,6 +2341,7 @@ function applyAbiAutofillFromCurrentInput(options = {}) {
     const abiEntries = parseAbiEntries(taskAbiInput.value);
     const localAutofill = buildLocalMintAutofill(abiEntries, taskFunctionInput.value);
     setMintStartDetectionState(null);
+    renderPhasePreview([]);
     applyMintAutofill(localAutofill, {
       includeFunction,
       includeArgs,
@@ -2338,6 +2411,7 @@ async function fetchAbiForCurrentTask(options = {}) {
     taskAbiInput.value = JSON.stringify(payload.abi, null, 2);
     setTaskAbiOrigin("explorer", lookupKey);
     setMintStartDetectionState(payload.autofill?.mintStartDetection || null);
+    renderPhasePreview(payload.autofill?.phasePreview || []);
     applyMintAutofill(payload.autofill || buildLocalMintAutofill(payload.abi || [], taskFunctionInput.value));
     updateAbiStatus(
       buildAbiStatusSourceLabel(
@@ -2383,6 +2457,7 @@ function openTaskModal(task = null) {
   taskArgsInput.value = task?.mintArgs || "";
   taskAutoPhaseToggle.checked = !task;
   taskAutoPhaseToggle.disabled = Boolean(task);
+  taskAutoArmToggle.checked = task?.autoArm ?? true;
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
   taskStartTimeInput.value = task?.waitUntilIso ? task.waitUntilIso.slice(0, 16) : "";
   taskWalletModeInput.value = task?.walletMode || "parallel";
@@ -2442,6 +2517,7 @@ function openTaskModal(task = null) {
   );
   fetchAbiButton.disabled = false;
   fetchAbiButton.textContent = "Fetch from Explorer";
+  renderPhasePreview([]);
 
   if (!task) {
     applyLatencyProfile(taskLatencyProfileInput.value);
@@ -2479,6 +2555,7 @@ function buildTaskPayload() {
     mintFunction: taskFunctionInput.value,
     mintArgs: taskArgsInput.value,
     autoGeneratePhaseTasks: !taskIdInput.value && taskAutoPhaseToggle.checked,
+    autoArm: taskAutoArmToggle.checked,
     gasStrategy: taskGasStrategyInput.value,
     gasLimit: taskGasLimitInput.value,
     maxFeeGwei: taskMaxFeeInput.value,
@@ -2885,6 +2962,7 @@ taskChainInput.addEventListener("change", () => {
     taskAbiInput.value = "";
     setTaskAbiOrigin("", "");
     setMintStartDetectionState(null);
+    renderPhasePreview([]);
   }
 
   scheduleExplorerAbiFetch({
@@ -2909,6 +2987,7 @@ taskContractInput.addEventListener("input", () => {
     taskAbiInput.value = "";
     setTaskAbiOrigin("", "");
     setMintStartDetectionState(null);
+    renderPhasePreview([]);
     updateAbiStatus();
   }
 
@@ -3023,12 +3102,32 @@ taskForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(buildTaskPayload())
     });
     closeTaskModal();
+    const savedTasks = Array.isArray(payload.tasks)
+      ? payload.tasks
+      : payload.task
+        ? [payload.task]
+        : [];
+    const launchedCount = savedTasks.filter((task) => ["running", "queued"].includes(task.status)).length;
+    const scheduledCount = savedTasks.filter((task) => task.schedulePending).length;
+    const reviewCount = savedTasks.filter(
+      (task) => task.autoArm && !task.autoArmPending && !task.schedulePending && !["running", "queued"].includes(task.status)
+    ).length;
     if (Array.isArray(payload.tasks) && payload.tasks.length > 1) {
       showToast(
-        `${payload.tasks.length} phase schedules created. Delete the ones you do not want before launch.`,
+        `${payload.tasks.length} phase tasks created. ${launchedCount} armed now, ${scheduledCount} scheduled, ${reviewCount} awaiting review.`,
         "success",
         "Phase Tasks Created"
       );
+      return;
+    }
+
+    if (launchedCount > 0) {
+      showToast("Task saved and auto-armed immediately.", "success", "Task Armed");
+      return;
+    }
+
+    if (scheduledCount > 0) {
+      showToast("Task saved and scheduled automatically.", "success", "Task Scheduled");
       return;
     }
 
