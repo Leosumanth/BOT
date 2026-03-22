@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const mintAutomation = require("./mint-automation");
 
 class AbortRunError extends Error {
   constructor(message = "Run stopped by user") {
@@ -199,6 +200,12 @@ function getEffectivePriorityBoostPercent(config) {
 
 async function buildRuntimeOverrides(config, provider) {
   const overrides = buildBaseOverrides(config);
+  if (config.autoMintMode) {
+    return {
+      ...overrides,
+      ...(await buildCompetitiveFeeOverrides(provider, config))
+    };
+  }
 
   const customNeedsNetworkFees =
     config.gasStrategy === "custom" &&
@@ -234,6 +241,408 @@ async function buildRuntimeOverrides(config, provider) {
   }
 
   return overrides;
+}
+
+async function getAggressivePriorityFeePerGas(provider) {
+  try {
+    const feeHistory = await provider.send("eth_feeHistory", [5, "latest", [90, 95]]);
+    const rewards = Array.isArray(feeHistory?.reward)
+      ? feeHistory.reward
+          .flat()
+          .map((value) => {
+            try {
+              return BigInt(value);
+            } catch {
+              return null;
+            }
+          })
+          .filter((value) => value != null)
+      : [];
+
+    if (rewards.length > 0) {
+      return rewards.reduce((highest, value) => (value > highest ? value : highest), rewards[0]);
+    }
+  } catch {
+    // Fall back to simpler fee APIs when fee history is unavailable.
+  }
+
+  try {
+    const value = await provider.send("eth_maxPriorityFeePerGas", []);
+    if (value != null) {
+      return BigInt(value);
+    }
+  } catch {
+    // Keep falling back.
+  }
+
+  const feeData = await provider.getFeeData();
+  return feeData.maxPriorityFeePerGas ?? undefined;
+}
+
+async function buildCompetitiveFeeOverrides(provider, config, options = {}) {
+  const manualMaxFeePerGas =
+    config.maxFeeGwei != null ? ethers.parseUnits(String(config.maxFeeGwei), "gwei") : undefined;
+  const manualPriorityFeePerGas =
+    config.maxPriorityFeeGwei != null
+      ? ethers.parseUnits(String(config.maxPriorityFeeGwei), "gwei")
+      : undefined;
+
+  if (config.gasStrategy === "custom" && manualMaxFeePerGas != null && manualPriorityFeePerGas != null) {
+    return {
+      maxFeePerGas: maxDefinedBigInt(options.minMaxFeePerGas, manualMaxFeePerGas),
+      maxPriorityFeePerGas: maxDefinedBigInt(
+        options.minMaxPriorityFeePerGas,
+        manualPriorityFeePerGas
+      )
+    };
+  }
+
+  const retryBumpPercent = Math.max(
+    0,
+    (Math.max(1, Number(options.attempt || 1)) - 1) * (config.replacementBumpPercent || 0)
+  );
+  const gasBoostPercent = (config.gasBoostPercent || 0) + retryBumpPercent;
+  const priorityBoostPercent = (config.priorityBoostPercent || 0) + retryBumpPercent;
+  const latestBlock = await provider.getBlock("latest").catch(() => null);
+  const feeData = await provider.getFeeData();
+  const baseFeePerGas = latestBlock?.baseFeePerGas ?? feeData.lastBaseFeePerGas ?? null;
+  let maxPriorityFeePerGas = maxDefinedBigInt(
+    options.minMaxPriorityFeePerGas,
+    manualPriorityFeePerGas,
+    await getAggressivePriorityFeePerGas(provider),
+    feeData.maxPriorityFeePerGas
+  );
+
+  if (maxPriorityFeePerGas != null) {
+    maxPriorityFeePerGas = applyPercentBoost(maxPriorityFeePerGas, priorityBoostPercent);
+  }
+
+  if (baseFeePerGas != null && maxPriorityFeePerGas != null) {
+    let maxFeePerGas = baseFeePerGas * 2n + maxPriorityFeePerGas;
+    maxFeePerGas = applyPercentBoost(maxFeePerGas, gasBoostPercent);
+    maxFeePerGas = maxDefinedBigInt(options.minMaxFeePerGas, manualMaxFeePerGas, maxFeePerGas);
+
+    return {
+      maxFeePerGas: maxDefinedBigInt(maxFeePerGas, maxPriorityFeePerGas),
+      maxPriorityFeePerGas
+    };
+  }
+
+  const gasPrice = maxDefinedBigInt(
+    options.minGasPrice,
+    feeData.gasPrice != null ? applyPercentBoost(feeData.gasPrice, gasBoostPercent) : undefined
+  );
+
+  if (gasPrice != null) {
+    return { gasPrice };
+  }
+
+  return {};
+}
+
+function addGasBuffer(value, percent = 20) {
+  const multiplier = BigInt(Math.round((100 + percent) * 100));
+  const buffered = (BigInt(value) * multiplier) / 10000n;
+  return buffered > value ? buffered : BigInt(value) + 1n;
+}
+
+function formatEthValue(value) {
+  if (value == null) {
+    return "0";
+  }
+
+  const formatted = ethers.formatEther(value);
+  return formatted.includes(".") ? formatted.replace(/\.?0+$/, "") : formatted;
+}
+
+function extractRevertMessage(error) {
+  const candidates = [
+    error?.shortMessage,
+    error?.reason,
+    error?.message,
+    error?.info?.error?.message,
+    error?.info?.payload?.error?.message,
+    error?.error?.message,
+    error?.data?.message,
+    error?.receipt?.revertReason
+  ].filter(Boolean);
+
+  return candidates[0] || null;
+}
+
+function buildPlanFailureSummary(failures) {
+  return failures
+    .map((failure) => `${failure.signature}: ${failure.error}`)
+    .slice(0, 5)
+    .join(" | ");
+}
+
+function buildAutomatedMintArgs(config, session, candidate) {
+  if (
+    config.mintArgsProvided &&
+    config.mintFunctionProvided &&
+    String(candidate.name || "").toLowerCase() === String(config.mintFunction || "").toLowerCase()
+  ) {
+    return {
+      supported: true,
+      args: applyPlaceholders(config.mintArgsTemplate, {
+        walletAddress: session.walletAddress,
+        walletIndex: session.walletIndex,
+        timestamp: Date.now()
+      }),
+      source: "config"
+    };
+  }
+
+  const argResolution = mintAutomation.resolveFunctionArgsFromEntry(candidate, {
+    walletAddress: session.walletAddress,
+    quantity: 1
+  });
+  if (!argResolution.supported) {
+    return {
+      supported: false,
+      reason: argResolution.reason,
+      source: "auto"
+    };
+  }
+
+  return {
+    supported: true,
+    args: argResolution.args,
+    source: "auto"
+  };
+}
+
+function extractCandidateQuantity(candidate, args) {
+  const inputs = Array.isArray(candidate?.inputs) ? candidate.inputs : [];
+
+  for (const [index, input] of inputs.entries()) {
+    if (!mintAutomation.isIntegerAbiType(input?.type)) {
+      continue;
+    }
+
+    if (!/quantity|qty|amount|count|num|number|tokens|mintamount|purchaseamount|buyamount|claimamount/i.test(String(input?.name || ""))) {
+      continue;
+    }
+
+    const value = normalizeNumberish(args[index]);
+    if (value != null && value > 0n) {
+      return value;
+    }
+  }
+
+  return 1n;
+}
+
+async function readCommonMintPrice(session) {
+  if (session.cachedMintPrice !== undefined) {
+    return session.cachedMintPrice;
+  }
+
+  for (const functionName of mintAutomation.commonPriceReadFunctionNames) {
+    const priceEntry = mintAutomation.findAbiFunctionEntry(session.config.abi, functionName);
+    if (
+      !priceEntry ||
+      priceEntry.inputs?.length > 0 ||
+      !["view", "pure"].includes(String(priceEntry.stateMutability || "").toLowerCase())
+    ) {
+      continue;
+    }
+
+    try {
+      const value = await session.contract[priceEntry.name]();
+      if (typeof value === "bigint") {
+        session.cachedMintPrice = {
+          value,
+          functionName: priceEntry.name
+        };
+        return session.cachedMintPrice;
+      }
+    } catch {
+      // Keep probing other read functions.
+    }
+  }
+
+  session.cachedMintPrice = null;
+  return null;
+}
+
+async function simulateMintMethod(method, args, overrides) {
+  try {
+    await method.staticCall(...args, overrides);
+    return {
+      success: true,
+      error: null
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error
+    };
+  }
+}
+
+async function discoverAutomatedMintValue({ config, session, candidate, method, args }) {
+  if (!candidate.payable) {
+    return {
+      value: 0n,
+      source: "nonpayable",
+      lastError: null
+    };
+  }
+
+  if (config.mintValueProvided) {
+    return {
+      value: ethers.parseEther(config.mintValueEth),
+      source: "config",
+      lastError: null
+    };
+  }
+
+  const commonPrice = await readCommonMintPrice(session);
+  if (commonPrice?.value != null) {
+    return {
+      value: commonPrice.value * extractCandidateQuantity(candidate, args),
+      source: commonPrice.functionName,
+      lastError: null
+    };
+  }
+
+  const zeroValueSimulation = await simulateMintMethod(method, args, { value: 0n });
+  if (zeroValueSimulation.success) {
+    return {
+      value: 0n,
+      source: "simulation:free",
+      lastError: null
+    };
+  }
+
+  const probeValues = ["0.001", "0.01", "0.05", "0.1"].map((value) => ethers.parseEther(value));
+  let lastError = zeroValueSimulation.error;
+
+  for (const probeValue of probeValues) {
+    const simulation = await simulateMintMethod(method, args, { value: probeValue });
+    if (simulation.success) {
+      return {
+        value: probeValue,
+        source: `probe:${formatEthValue(probeValue)}`,
+        lastError
+      };
+    }
+
+    lastError = simulation.error;
+  }
+
+  return {
+    value: 0n,
+    source: "fallback:free",
+    lastError
+  };
+}
+
+async function buildAutomatedMintPlan(config, session, context, attempt) {
+  const { signal, logger } = context;
+  const failures = [];
+  const nonce = session.getPlannedNonce();
+
+  for (const candidate of session.automationAnalysis.candidates) {
+    throwIfAborted(signal);
+    const method = getContractMethod(session.contract, candidate.name);
+    const argResolution = buildAutomatedMintArgs(config, session, candidate);
+
+    if (!argResolution.supported) {
+      failures.push({
+        signature: candidate.signature,
+        error: argResolution.reason || "argument resolution failed"
+      });
+      continue;
+    }
+
+    const discoveredValue = await discoverAutomatedMintValue({
+      config,
+      session,
+      candidate,
+      method,
+      args: argResolution.args
+    });
+    const feeOverrides = await buildCompetitiveFeeOverrides(session.provider, config, {
+      attempt
+    });
+    const simulationOverrides = {
+      ...feeOverrides,
+      value: discoveredValue.value
+    };
+
+    if (config.autoMintMode || config.simulateTransaction) {
+      const simulation = await simulateMintMethod(method, argResolution.args, simulationOverrides);
+      if (!simulation.success) {
+        failures.push({
+          signature: candidate.signature,
+          error: extractRevertMessage(simulation.error) || "simulation reverted"
+        });
+        continue;
+      }
+    }
+
+    let estimatedGas;
+    try {
+      estimatedGas = await method.estimateGas(...argResolution.args, simulationOverrides);
+    } catch (error) {
+      failures.push({
+        signature: candidate.signature,
+        error: extractRevertMessage(error) || "gas estimation failed"
+      });
+      continue;
+    }
+
+    const txRequest = await method.populateTransaction(...argResolution.args, {
+      ...simulationOverrides,
+      gasLimit: config.gasLimit ? BigInt(config.gasLimit) : addGasBuffer(estimatedGas, 20),
+      nonce
+    });
+
+    logger.info(
+      `[wallet ${session.walletIndex}] Candidate ${candidate.signature} selected with args ${JSON.stringify(
+        argResolution.args
+      )}, value ${formatEthValue(discoveredValue.value)} ETH, estimated gas ${estimatedGas}`
+    );
+
+    return {
+      candidate,
+      method,
+      args: argResolution.args,
+      argsSource: argResolution.source,
+      value: discoveredValue.value,
+      valueSource: discoveredValue.source,
+      estimatedGas,
+      gasLimit: txRequest.gasLimit,
+      feeOverrides,
+      txRequest
+    };
+  }
+
+  const lastFailure = failures[failures.length - 1] || null;
+  throw attachErrorContext(
+    new Error(
+      `All automated mint candidates failed. ${buildPlanFailureSummary(failures) || "No candidate could be simulated"}`
+    ),
+    {
+      walletAddress: session.walletAddress,
+      lastRevertMessage: lastFailure?.error || null,
+      automationFailures: failures,
+      attemptedFunctions: session.automationAnalysis.candidates.map((candidate) => candidate.signature)
+    }
+  );
+}
+
+function buildGasSettingsSnapshot(source = {}) {
+  return {
+    gasLimit: source.gasLimit != null ? source.gasLimit.toString() : null,
+    gasPrice: source.gasPrice != null ? source.gasPrice.toString() : null,
+    maxFeePerGas: source.maxFeePerGas != null ? source.maxFeePerGas.toString() : null,
+    maxPriorityFeePerGas:
+      source.maxPriorityFeePerGas != null ? source.maxPriorityFeePerGas.toString() : null
+  };
 }
 
 function isSocketRpcUrl(rpcUrl) {
@@ -321,18 +730,19 @@ function messageIncludesAny(error, patterns) {
   return patterns.some((pattern) => text.includes(pattern));
 }
 
-function isRetryableMintError(error) {
+function isRetryableMintError(error, options = {}) {
+  const allowRevertRecovery = options.allowRevertRecovery === true;
+
   if (error instanceof AbortRunError) {
     return false;
   }
 
-  if (error?.receipt?.status === 0) {
+  if (error?.receipt?.status === 0 && !allowRevertRecovery) {
     return false;
   }
 
   const code = String(error?.code || "").toUpperCase();
   if (
-    code === "CALL_EXCEPTION" ||
     code === "INSUFFICIENT_FUNDS" ||
     code === "ACTION_REJECTED" ||
     code === "INVALID_ARGUMENT" ||
@@ -341,18 +751,30 @@ function isRetryableMintError(error) {
     return false;
   }
 
+  if (code === "CALL_EXCEPTION" && !allowRevertRecovery) {
+    return false;
+  }
+
   if (
     messageIncludesAny(error, [
-      "execution reverted",
-      "transaction reverted",
-      "mint transaction reverted",
-      "call exception",
       "insufficient funds",
       "user rejected",
       "user denied",
       "denied transaction",
       "invalid argument",
       "unsupported operation"
+    ])
+  ) {
+    return false;
+  }
+
+  if (
+    !allowRevertRecovery &&
+    messageIncludesAny(error, [
+      "execution reverted",
+      "transaction reverted",
+      "mint transaction reverted",
+      "call exception"
     ])
   ) {
     return false;
@@ -431,6 +853,15 @@ function buildReplacementRequest(tx, feeOverrides) {
 }
 
 async function buildReplacementFeeOverrides(config, provider, tx) {
+  if (config.autoMintMode || config.gasStrategy === "aggressive") {
+    return buildCompetitiveFeeOverrides(provider, config, {
+      attempt: 2,
+      minGasPrice: bumpFeeValue(tx.gasPrice, config.replacementBumpPercent),
+      minMaxFeePerGas: bumpFeeValue(tx.maxFeePerGas, config.replacementBumpPercent),
+      minMaxPriorityFeePerGas: bumpFeeValue(tx.maxPriorityFeePerGas, config.replacementBumpPercent)
+    });
+  }
+
   const feeData = await provider.getFeeData();
   const gasBoostPercent = getEffectiveGasBoostPercent(config);
   const priorityBoostPercent = getEffectivePriorityBoostPercent(config);
@@ -1876,6 +2307,22 @@ function buildFailureResult(walletIndex, privateKey, error) {
     result.receipt = error.receipt;
   }
 
+  if (error?.functionUsed) {
+    result.functionUsed = error.functionUsed;
+  }
+
+  if (error?.ethValueUsed != null) {
+    result.ethValueUsed = error.ethValueUsed;
+  }
+
+  if (error?.gasSettings) {
+    result.gasSettings = error.gasSettings;
+  }
+
+  if (error?.lastRevertMessage) {
+    result.lastRevertMessage = error.lastRevertMessage;
+  }
+
   if (Array.isArray(error?.transferTxHashes)) {
     result.transferTxHashes = error.transferTxHashes;
   }
@@ -1905,12 +2352,20 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
     const wallet = new ethers.Wallet(privateKey, provider);
     const walletAddress = await wallet.getAddress();
     const contract = new ethers.Contract(config.contractAddress, config.abi, wallet);
-    const mintMethod = getContractMethod(contract, config.mintFunction);
-    const mintArgs = applyPlaceholders(config.mintArgsTemplate, {
-      walletAddress,
-      walletIndex,
-      timestamp: Date.now()
-    });
+    const automationAnalysis = config.autoMintMode
+      ? mintAutomation.buildMintFunctionAnalysis(
+          config.abi,
+          config.mintFunctionProvided ? config.mintFunction : ""
+        )
+      : null;
+    const mintMethod = config.autoMintMode ? null : getContractMethod(contract, config.mintFunction);
+    const mintArgs = config.autoMintMode
+      ? []
+      : applyPlaceholders(config.mintArgsTemplate, {
+          walletAddress,
+          walletIndex,
+          timestamp: Date.now()
+        });
     let nextPlannedNonce =
       (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
 
@@ -1918,9 +2373,35 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
     logger.info(`[wallet ${walletIndex}] RPC: ${rpcUrl}`);
     logger.info(`[wallet ${walletIndex}] Chain ID: ${chainId}`);
     logger.info(`[wallet ${walletIndex}] Contract: ${config.contractAddress}`);
-    logger.info(`[wallet ${walletIndex}] Function: ${config.mintFunction}`);
-    logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
-    logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
+
+    if (config.autoMintMode) {
+      logger.info(`[wallet ${walletIndex}] Automated mint mode: enabled`);
+      logger.info(
+        `[wallet ${walletIndex}] Ranked candidates: ${
+          automationAnalysis?.candidates?.map((candidate) => candidate.signature).slice(0, 6).join(", ") ||
+          "none"
+        }`
+      );
+      logger.info(
+        `[wallet ${walletIndex}] Payable functions: ${
+          config.payableMintFunctions?.map((entry) => entry.signature).join(", ") || "none"
+        }`
+      );
+      if (config.mintFunctionProvided) {
+        logger.info(`[wallet ${walletIndex}] Preferred function hint: ${config.mintFunction}`);
+      }
+      if (config.mintArgsProvided) {
+        logger.info(`[wallet ${walletIndex}] Args hint: ${JSON.stringify(config.mintArgsTemplate)}`);
+      }
+      if (config.mintValueProvided) {
+        logger.info(`[wallet ${walletIndex}] Value hint: ${config.mintValueEth} ETH`);
+      }
+    } else {
+      logger.info(`[wallet ${walletIndex}] Function: ${config.mintFunction}`);
+      logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
+      logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
+    }
+
     logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
 
     if (config.warmupRpc) {
@@ -1931,12 +2412,15 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
     await ensureMinimumBalance(provider, walletAddress, config, walletIndex, logger);
 
     return {
+      config,
       provider,
       rpcUrl,
       wallet,
       walletAddress,
       walletIndex,
       contract,
+      automationAnalysis,
+      cachedMintPrice: undefined,
       mintMethod,
       mintArgs,
       getPlannedNonce() {
@@ -1947,7 +2431,8 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
           nextPlannedNonce = tx.nonce + 1;
         }
       },
-      preparedMint: null
+      preparedMint: null,
+      lastMintPlan: null
     };
   } catch (error) {
     await destroyProvider(provider);
@@ -1956,7 +2441,7 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
 }
 
 async function tryPreparePresignedMint(config, session, context) {
-  if (config.dryRun) {
+  if (config.dryRun || config.autoMintMode) {
     return null;
   }
 
@@ -2041,6 +2526,7 @@ async function executeWalletSession(config, session, context) {
 
     let mintResult = null;
     let lastAttemptError = null;
+    let successfulPlan = null;
     let attempt = 0;
 
     while (attempt === 0 || hasRetryBudgetRemaining(config, attempt, retryWindowDeadline)) {
@@ -2048,9 +2534,62 @@ async function executeWalletSession(config, session, context) {
       throwIfAborted(signal);
 
       let usedPreparedMint = false;
+      let currentPlan = null;
 
       try {
-        if (config.dryRun) {
+        if (config.autoMintMode) {
+          currentPlan = await buildAutomatedMintPlan(config, session, context, attempt);
+          session.lastMintPlan = currentPlan;
+
+          if (config.dryRun) {
+            logger.info(
+              `[wallet ${walletIndex}] Automated dry run passed with ${currentPlan.candidate.signature}`
+            );
+            return {
+              walletAddress,
+              walletIndex,
+              txHash: null,
+              status: "dry-run",
+              functionUsed: currentPlan.candidate.name,
+              ethValueUsed: formatEthValue(currentPlan.value),
+              gasSettings: buildGasSettingsSnapshot({
+                ...currentPlan.feeOverrides,
+                gasLimit: currentPlan.gasLimit
+              })
+            };
+          }
+
+          mintResult = await sendManagedTransaction({
+            send: () =>
+              submitTransactionWithRoute({
+                wallet,
+                provider,
+                rpcUrl,
+                config,
+                txRequest: currentPlan.txRequest,
+                walletIndex,
+                label: "Mint",
+                logger
+              }),
+            submitReplacement: (txRequest) =>
+              submitTransactionWithRoute({
+                wallet,
+                provider,
+                rpcUrl,
+                config,
+                txRequest,
+                walletIndex,
+                label: "Mint",
+                logger
+              }),
+            config,
+            walletIndex,
+            label: "Mint",
+            logger,
+            signal,
+            onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
+          });
+        } else if (config.dryRun) {
           const overrides = await buildRuntimeOverrides(config, provider);
 
           if (config.simulateTransaction) {
@@ -2066,50 +2605,50 @@ async function executeWalletSession(config, session, context) {
             txHash: null,
             status: "dry-run"
           };
-        }
+        } else {
+          const preparedMint = await ensurePreparedMint(config, session, context);
+          if (!preparedMint) {
+            throw new Error("Pre-signed mint transaction is unavailable");
+          }
 
-        const preparedMint = await ensurePreparedMint(config, session, context);
-        if (!preparedMint) {
-          throw new Error("Pre-signed mint transaction is unavailable");
-        }
+          usedPreparedMint = true;
+          logger.info(
+            `[wallet ${walletIndex}] Broadcasting pre-signed mint tx: ${preparedMint.hash}`
+          );
 
-        usedPreparedMint = true;
-        logger.info(
-          `[wallet ${walletIndex}] Broadcasting pre-signed mint tx: ${preparedMint.hash}`
-        );
+          mintResult = await sendManagedTransaction({
+            send: () =>
+              submitSignedTransactionWithRoute({
+                provider,
+                rpcUrl,
+                config,
+                signedTransaction: preparedMint.signedTransaction,
+                walletIndex,
+                label: "Mint",
+                logger
+              }),
+            submitReplacement: (txRequest) =>
+              submitTransactionWithRoute({
+                wallet,
+                provider,
+                rpcUrl,
+                config,
+                txRequest,
+                walletIndex,
+                label: "Mint",
+                logger
+              }),
+            config,
+            walletIndex,
+            label: "Mint",
+            logger,
+            signal,
+            onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
+          });
 
-        mintResult = await sendManagedTransaction({
-          send: () =>
-            submitSignedTransactionWithRoute({
-              provider,
-              rpcUrl,
-              config,
-              signedTransaction: preparedMint.signedTransaction,
-              walletIndex,
-              label: "Mint",
-              logger
-            }),
-          submitReplacement: (txRequest) =>
-            submitTransactionWithRoute({
-              wallet,
-              provider,
-              rpcUrl,
-              config,
-              txRequest,
-              walletIndex,
-              label: "Mint",
-              logger
-            }),
-          config,
-          walletIndex,
-          label: "Mint",
-          logger,
-          signal,
-          onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
-        });
-
-        if (usedPreparedMint) {
-          session.preparedMint = null;
+          if (usedPreparedMint) {
+            session.preparedMint = null;
+          }
         }
 
         if (config.waitForReceipt && mintResult.receipt?.status !== 1) {
@@ -2117,10 +2656,17 @@ async function executeWalletSession(config, session, context) {
             walletAddress,
             txHash: mintResult.tx.hash,
             mintTxHash: mintResult.tx.hash,
-            receipt: mintResult.receipt
+            receipt: mintResult.receipt,
+            functionUsed: currentPlan?.candidate?.name || config.mintFunction,
+            ethValueUsed: currentPlan
+              ? formatEthValue(currentPlan.value)
+              : formatEthValue(mintResult.tx.value),
+            gasSettings: buildGasSettingsSnapshot(mintResult.tx),
+            lastRevertMessage: extractRevertMessage(mintResult.receipt)
           });
         }
 
+        successfulPlan = currentPlan || successfulPlan;
         break;
       } catch (error) {
         if (error instanceof AbortRunError) {
@@ -2131,8 +2677,22 @@ async function executeWalletSession(config, session, context) {
           session.preparedMint = null;
         }
 
+        if (currentPlan) {
+          attachErrorContext(error, {
+            functionUsed: currentPlan.candidate.name,
+            ethValueUsed: formatEthValue(currentPlan.value),
+            gasSettings: buildGasSettingsSnapshot({
+              ...currentPlan.feeOverrides,
+              gasLimit: currentPlan.gasLimit
+            }),
+            lastRevertMessage: error.lastRevertMessage || extractRevertMessage(error)
+          });
+        }
+
         lastAttemptError = error;
-        const retryable = isRetryableMintError(error);
+        const retryable = isRetryableMintError(error, {
+          allowRevertRecovery: config.autoMintMode
+        });
         const willRetry = retryable && hasRetryBudgetRemaining(config, attempt, retryWindowDeadline);
         const retryWindowRemainingMs =
           retryWindowDeadline == null ? 0 : Math.max(0, retryWindowDeadline - Date.now());
@@ -2165,7 +2725,12 @@ async function executeWalletSession(config, session, context) {
         walletAddress,
         walletIndex,
         txHash: mintResult.tx.hash,
-        status: "submitted"
+        status: "submitted",
+        functionUsed: successfulPlan?.candidate?.name || config.mintFunction,
+        ethValueUsed: successfulPlan
+          ? formatEthValue(successfulPlan.value)
+          : formatEthValue(mintResult.tx.value),
+        gasSettings: buildGasSettingsSnapshot(mintResult.tx)
       };
     }
 
@@ -2176,7 +2741,12 @@ async function executeWalletSession(config, session, context) {
       mintTxHash: mintResult.tx.hash,
       receipt: mintResult.receipt,
       replacementCount: mintResult.replacementCount,
-      status: "success"
+      functionUsed: successfulPlan?.candidate?.name || config.mintFunction,
+      ethValueUsed: successfulPlan
+        ? formatEthValue(successfulPlan.value)
+        : formatEthValue(mintResult.tx.value),
+      gasSettings: buildGasSettingsSnapshot(mintResult.tx),
+      status: attempt > 1 || mintResult.replacementCount > 0 ? "retried" : "success"
     };
 
     if (!config.transferAfterMinted) {
@@ -2210,7 +2780,11 @@ async function executeWalletSession(config, session, context) {
         walletAddress,
         txHash: mintResult.tx.hash,
         mintTxHash: mintResult.tx.hash,
-        receipt: mintResult.receipt
+        receipt: mintResult.receipt,
+        functionUsed: result.functionUsed,
+        ethValueUsed: result.ethValueUsed,
+        gasSettings: result.gasSettings,
+        lastRevertMessage: error.lastRevertMessage || extractRevertMessage(error)
       });
     }
   } finally {
@@ -2337,6 +2911,7 @@ async function runMintBot(config, hooks = {}) {
   logger.info(`Configured RPC URLs: ${config.rpcUrls.length}`);
   logger.info(`Simulation: ${config.simulateTransaction ? "enabled" : "disabled"}`);
   logger.info(`Dry run: ${config.dryRun ? "enabled" : "disabled"}`);
+  logger.info(`Mint mode: ${config.autoMintMode ? "automated" : "manual"}`);
   logger.info(`Gas strategy: ${config.gasStrategy}`);
   logger.info(
     `Mint start detection: ${
@@ -2353,7 +2928,7 @@ async function runMintBot(config, hooks = {}) {
     logger.info(`Trigger block: ${config.triggerBlockNumber}`);
   }
   logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
-  logger.info("Pre-signed launch: required");
+  logger.info(`Pre-signed launch: ${config.autoMintMode ? "disabled in automated mode" : "required"}`);
 
   const preparedRun = await runMintBotWithPreparedWallets(config, { signal, logger });
   const results = preparedRun.results;

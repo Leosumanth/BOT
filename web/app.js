@@ -1286,7 +1286,7 @@ function renderTaskCard(task) {
         <div class="meta-item"><label>Wallets</label><strong>${task.walletCount}</strong></div>
         <div class="meta-item"><label>RPC</label><strong>${task.rpcCount}</strong></div>
         <div class="meta-item"><label>Qty</label><strong>${task.quantityPerWallet}</strong></div>
-        <div class="meta-item"><label>Price</label><strong>${escapeHtml(task.priceEth)} ETH</strong></div>
+        <div class="meta-item"><label>Price</label><strong>${escapeHtml(task.priceEth || "Auto")}${task.priceEth ? " ETH" : ""}</strong></div>
       </div>
 
       <div class="task-stats">
@@ -2285,11 +2285,11 @@ function openTaskModal(task = null) {
   taskContractInput.value = task?.contractAddress || "";
   taskChainInput.value = task?.chainKey || state.chains[0]?.key || "base_sepolia";
   taskQuantityInput.value = task?.quantityPerWallet || 1;
-  taskPriceInput.value = task?.priceEth || "0";
+  taskPriceInput.value = task?.priceEth || "";
   taskAbiInput.value = task?.abiJson || "";
   taskPlatformInput.value = task?.platform || "Generic EVM (auto-detect)";
-  taskFunctionInput.value = task?.mintFunction || "mint";
-  taskArgsInput.value = task?.mintArgs || "[1]";
+  taskFunctionInput.value = task?.mintFunction || "";
+  taskArgsInput.value = task?.mintArgs || "";
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
   taskStartTimeInput.value = task?.waitUntilIso ? task.waitUntilIso.slice(0, 16) : "";
   taskWalletModeInput.value = task?.walletMode || "parallel";

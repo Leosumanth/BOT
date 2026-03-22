@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const mintAutomation = require("./mint-automation");
 
 const defaultInputValues = {
   RPC_URL: "",
@@ -9,14 +10,15 @@ const defaultInputValues = {
   CONTRACT_ADDRESS: "",
   ABI_PATH: "./abi/contract.json",
   ABI_JSON: "",
-  MINT_FUNCTION: "mint",
-  MINT_ARGS: "[]",
-  MINT_VALUE_ETH: "0",
+  AUTO_MINT_MODE: true,
+  MINT_FUNCTION: "",
+  MINT_ARGS: "",
+  MINT_VALUE_ETH: "",
   RETRY_WINDOW_MS: "",
   GAS_LIMIT: "",
   MAX_FEE_GWEI: "",
   MAX_PRIORITY_FEE_GWEI: "",
-  GAS_STRATEGY: "normal",
+  GAS_STRATEGY: "aggressive",
   GAS_BOOST_PERCENT: "0",
   PRIORITY_BOOST_PERCENT: "0",
   WAIT_UNTIL_ISO: "",
@@ -25,15 +27,15 @@ const defaultInputValues = {
   WAIT_FOR_RECEIPT: true,
   SIMULATE_TRANSACTION: true,
   DRY_RUN: false,
-  MAX_RETRIES: "1",
-  RETRY_DELAY_MS: "1000",
+  MAX_RETRIES: "3",
+  RETRY_DELAY_MS: "500",
   WALLET_MODE: "parallel",
   CHAIN_ID: "",
   RECEIPT_CONFIRMATIONS: "1",
-  TX_TIMEOUT_MS: "",
+  TX_TIMEOUT_MS: "25000",
   START_JITTER_MS: "0",
   NONCE_OFFSET: "0",
-  MINT_START_DETECTION_ENABLED: false,
+  MINT_START_DETECTION_ENABLED: true,
   MINT_START_DETECTION_JSON: "",
   READY_CHECK_FUNCTION: "",
   READY_CHECK_ARGS: "[]",
@@ -46,9 +48,9 @@ const defaultInputValues = {
   MIN_BALANCE_ETH: "",
   TRANSFER_AFTER_MINTED: false,
   TRANSFER_ADDRESS: "",
-  SMART_GAS_REPLACEMENT: false,
-  REPLACEMENT_BUMP_PERCENT: "12",
-  REPLACEMENT_MAX_ATTEMPTS: "2",
+  SMART_GAS_REPLACEMENT: true,
+  REPLACEMENT_BUMP_PERCENT: "15",
+  REPLACEMENT_MAX_ATTEMPTS: "3",
   PRIVATE_RELAY_ENABLED: false,
   PRIVATE_RELAY_URL: "",
   PRIVATE_RELAY_METHOD: "eth_sendRawTransaction",
@@ -492,16 +494,44 @@ function normalizeConfig(raw) {
   const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
   const retryWindowMs = Math.max(0, optionalInteger(raw, "RETRY_WINDOW_MS") || 0);
   const abi = loadAbi(raw, abiPath);
-  const resolvedMintFunction = resolveMintFunctionFromAbi(
-    abi,
-    optionalString(raw, "MINT_FUNCTION") || "mint"
+  const autoMintMode = optionalBoolean(raw, "AUTO_MINT_MODE", true);
+  const requestedMintFunction = optionalString(raw, "MINT_FUNCTION") || "";
+  const resolvedMintFunction = mintAutomation.resolveMintFunctionFromAbi(abi, requestedMintFunction);
+  const mintAnalysis = mintAutomation.buildMintFunctionAnalysis(abi, requestedMintFunction);
+  const autoMintStartDetection = mintAutomation.detectMintStartFunctionsFromAbi(abi);
+  const configuredMintStartDetection = parseJsonObjectValue(
+    raw.MINT_START_DETECTION_JSON,
+    "MINT_START_DETECTION_JSON"
   );
+  const mintStartDetectionEnabled = optionalBoolean(
+    raw,
+    "MINT_START_DETECTION_ENABLED",
+    autoMintMode
+  );
+  const gasStrategy = (() => {
+    const strategy = normalizeGasStrategyValue(
+      optionalString(raw, "GAS_STRATEGY") || (autoMintMode ? "aggressive" : "normal")
+    );
+    const supportedStrategies = new Set(["aggressive", "normal", "custom"]);
+
+    if (!supportedStrategies.has(strategy)) {
+      throw new Error("GAS_STRATEGY must be aggressive, normal, or custom");
+    }
+
+    return strategy;
+  })();
   const normalized = {
     rpcUrls: loadRpcUrls(raw),
     privateKeys: loadPrivateKeys(raw),
     contractAddress: required(raw, "CONTRACT_ADDRESS"),
     abiPath,
     abi,
+    autoMintMode,
+    mintFunctionProvided: !isBlank(raw.MINT_FUNCTION),
+    mintArgsProvided: !isBlank(raw.MINT_ARGS),
+    mintValueProvided: !isBlank(raw.MINT_VALUE_ETH),
+    detectedMintFunctions: mintAnalysis.detectedFunctions,
+    payableMintFunctions: mintAnalysis.payableFunctions,
     mintFunction: resolvedMintFunction.mintFunction,
     mintArgsTemplate: parseJsonArrayValue(raw.MINT_ARGS, "MINT_ARGS", []),
     mintValueEth: optionalString(raw, "MINT_VALUE_ETH") || "0",
@@ -515,21 +545,21 @@ function normalizeConfig(raw) {
     waitForReceipt: optionalBoolean(raw, "WAIT_FOR_RECEIPT", true),
     simulateTransaction: optionalBoolean(raw, "SIMULATE_TRANSACTION", true),
     dryRun: optionalBoolean(raw, "DRY_RUN", false),
-    maxRetries: optionalInteger(raw, "MAX_RETRIES") || 1,
-    retryDelayMs: optionalInteger(raw, "RETRY_DELAY_MS") || 1000,
+    maxRetries: optionalInteger(raw, "MAX_RETRIES") || (autoMintMode ? 3 : 1),
+    retryDelayMs: optionalInteger(raw, "RETRY_DELAY_MS") || (autoMintMode ? 500 : 1000),
     retryWindowMs,
     walletMode: loadWalletMode(raw),
     requiredChainId: optionalInteger(raw, "CHAIN_ID"),
     receiptConfirmations: optionalInteger(raw, "RECEIPT_CONFIRMATIONS") || 1,
-    txTimeoutMs: optionalInteger(raw, "TX_TIMEOUT_MS"),
+    txTimeoutMs: optionalInteger(raw, "TX_TIMEOUT_MS") || (autoMintMode ? 25000 : undefined),
     startJitterMs: optionalInteger(raw, "START_JITTER_MS") || 0,
     nonceOffset: optionalInteger(raw, "NONCE_OFFSET") || 0,
-    mintStartDetectionEnabled: optionalBoolean(raw, "MINT_START_DETECTION_ENABLED", false),
-    mintStartDetectionConfig: parseJsonObjectValue(
-      raw.MINT_START_DETECTION_JSON,
-      "MINT_START_DETECTION_JSON"
-    ),
-    gasStrategy: loadGasStrategy(raw),
+    mintStartDetectionEnabled,
+    mintStartDetectionConfig:
+      Object.keys(configuredMintStartDetection).length > 0
+        ? configuredMintStartDetection
+        : autoMintStartDetection,
+    gasStrategy,
     gasBoostPercent: optionalNumber(raw, "GAS_BOOST_PERCENT") || 0,
     priorityBoostPercent: optionalNumber(raw, "PRIORITY_BOOST_PERCENT") || 0,
     readyCheckFunction: optionalString(raw, "READY_CHECK_FUNCTION"),
@@ -543,9 +573,10 @@ function normalizeConfig(raw) {
     minBalanceEth: optionalString(raw, "MIN_BALANCE_ETH"),
     transferAfterMinted: optionalBoolean(raw, "TRANSFER_AFTER_MINTED", false),
     transferAddress: optionalString(raw, "TRANSFER_ADDRESS"),
-    smartGasReplacement: optionalBoolean(raw, "SMART_GAS_REPLACEMENT", false),
-    replacementBumpPercent: optionalNumber(raw, "REPLACEMENT_BUMP_PERCENT") || 12,
-    replacementMaxAttempts: optionalInteger(raw, "REPLACEMENT_MAX_ATTEMPTS") || 2,
+    smartGasReplacement: optionalBoolean(raw, "SMART_GAS_REPLACEMENT", autoMintMode),
+    replacementBumpPercent: optionalNumber(raw, "REPLACEMENT_BUMP_PERCENT") || (autoMintMode ? 15 : 12),
+    replacementMaxAttempts:
+      optionalInteger(raw, "REPLACEMENT_MAX_ATTEMPTS") || (autoMintMode ? 3 : 2),
     privateRelayEnabled: optionalBoolean(raw, "PRIVATE_RELAY_ENABLED", false),
     privateRelayUrl: optionalString(raw, "PRIVATE_RELAY_URL"),
     privateRelayMethod: loadPrivateRelayMethod(raw),
@@ -561,9 +592,26 @@ function normalizeConfig(raw) {
     triggerTimeoutMs: optionalInteger(raw, "TRIGGER_TIMEOUT_MS")
   };
 
-  if (!normalized.mintFunction || !abiFunctionNameMap(normalized.abi).has(normalized.mintFunction.toLowerCase())) {
+  if (
+    normalized.autoMintMode &&
+    (!normalized.mintFunction ||
+      !abiFunctionNameMap(normalized.abi).has(normalized.mintFunction.toLowerCase())) &&
+    normalized.detectedMintFunctions.length === 0
+  ) {
     throw new Error(
-      `MINT_FUNCTION "${normalized.mintFunction || "(empty)"}" was not found in the ABI. ${describeMintFunctionDetection(
+      `No automated mint candidate was found in the ABI. ${mintAutomation.describeMintFunctionDetection(
+        normalized.abi,
+        mintAnalysis.detectedFunctions
+      )}.`
+    );
+  }
+
+  if (
+    !normalized.autoMintMode &&
+    (!normalized.mintFunction || !abiFunctionNameMap(normalized.abi).has(normalized.mintFunction.toLowerCase()))
+  ) {
+    throw new Error(
+      `MINT_FUNCTION "${normalized.mintFunction || "(empty)"}" was not found in the ABI. ${mintAutomation.describeMintFunctionDetection(
         normalized.abi,
         resolvedMintFunction.detectedFunctions
       )}.`

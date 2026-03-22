@@ -169,7 +169,7 @@ function summarizeResults(results) {
   return results.reduce(
     (summary, result) => {
       summary.total += 1;
-      if (result.status === "success" || result.status === "submitted") {
+      if (["success", "submitted", "retried"].includes(result.status)) {
         summary.success += 1;
       } else if (result.status === "stopped") {
         summary.stopped += 1;

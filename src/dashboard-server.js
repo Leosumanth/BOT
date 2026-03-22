@@ -226,7 +226,7 @@ function defaultTaskState() {
     contractAddress: "",
     chainKey: "base_sepolia",
     quantityPerWallet: 1,
-    priceEth: "0",
+    priceEth: "",
     abiJson: "",
     platform: "Generic EVM (auto-detect)",
     priority: "standard",
@@ -234,8 +234,8 @@ function defaultTaskState() {
     notes: "",
     walletIds: [],
     rpcNodeIds: [],
-    mintFunction: "mint",
-    mintArgs: "[1]",
+    mintFunction: "",
+    mintArgs: "",
     gasStrategy: "normal",
     gasLimit: "",
     maxFeeGwei: "",
@@ -333,7 +333,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     contractAddress: String(payload.contractAddress || "").trim(),
     chainKey: String(payload.chainKey || base.chainKey || "base_sepolia"),
     quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || base.quantityPerWallet || 1)),
-    priceEth: String(payload.priceEth ?? base.priceEth ?? "0").trim() || "0",
+    priceEth: String(payload.priceEth ?? base.priceEth ?? "").trim(),
     abiJson: String(payload.abiJson || base.abiJson || "").trim(),
     platform: String(payload.platform || base.platform || "Generic EVM (auto-detect)"),
     priority: String(payload.priority || base.priority || "standard"),
@@ -346,8 +346,8 @@ function sanitizeTaskInput(payload, existingTask = null) {
     notes: String(payload.notes ?? base.notes ?? "").trim(),
     walletIds: Array.isArray(payload.walletIds) ? payload.walletIds : base.walletIds || [],
     rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : base.rpcNodeIds || [],
-    mintFunction: String(payload.mintFunction || base.mintFunction || "mint").trim() || "mint",
-    mintArgs: String(payload.mintArgs || base.mintArgs || "[]").trim() || "[]",
+    mintFunction: String(payload.mintFunction ?? base.mintFunction ?? "").trim(),
+    mintArgs: String(payload.mintArgs ?? base.mintArgs ?? "").trim(),
     gasStrategy: normalizeGasStrategyValue(payload.gasStrategy || base.gasStrategy || "normal"),
     gasLimit: String(payload.gasLimit ?? base.gasLimit ?? "").trim(),
     maxFeeGwei: String(payload.maxFeeGwei ?? base.maxFeeGwei ?? "").trim(),
@@ -1859,7 +1859,7 @@ function summarizeResults(results) {
   return results.reduce(
     (summary, result) => {
       summary.total += 1;
-      if (result.status === "success" || result.status === "submitted") {
+      if (["success", "submitted", "retried"].includes(result.status)) {
         summary.success += 1;
       } else if (result.status === "stopped") {
         summary.stopped += 1;

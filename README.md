@@ -42,6 +42,8 @@ It is designed as a reusable template for contracts that expose a mint function 
 - can auto-detect `mint`, `publicMint`, and `safeMint` from ABI JSON to reduce task setup errors
 - can auto-fill the mint function, args template, platform, quantity default, and detected ETH price after ABI upload or explorer fetch
 - can auto-detect mint-start signals like `saleActive()`, `paused()`, `totalSupply()`, and contract state reads to fire as soon as mint opens
+- can run in a fully automated mode from only `RPC_URL`, `PRIVATE_KEY`, `CONTRACT_ADDRESS`, and the contract ABI
+- ranks likely public mint functions, auto-builds arguments, probes mint value, simulates before send, and falls back to alternate candidates automatically
 
 ## Setup
 
@@ -102,11 +104,11 @@ Copy-Item .env.example .env
 - `PRIVATE_KEYS`: optional comma-separated list of wallet private keys
 - `CONTRACT_ADDRESS`: NFT contract address
 - `ABI_PATH`: path to the ABI JSON file
-- `MINT_FUNCTION`: function name to call
-  If the configured name is missing or wrong and the ABI exposes `mint`, `publicMint`, or `safeMint`, the bot auto-detects the first matching function.
-- `MINT_ARGS`: JSON array of arguments, for example `[]` or `[2]`
+- `AUTO_MINT_MODE`: defaults to `true`; the bot analyzes the ABI, selects the best candidate mint function, builds arguments, discovers price, and simulates before broadcast
+- `MINT_FUNCTION`: optional hint or manual override for the function to call
+- `MINT_ARGS`: optional JSON array hint or manual override
   String values can include `{{wallet}}`, `{{index}}`, and `{{timestamp}}` placeholders.
-- `MINT_VALUE_ETH`: ETH value to send with the transaction
+- `MINT_VALUE_ETH`: optional ETH value hint or manual override
 - `GAS_LIMIT`: optional gas limit
 - `MAX_FEE_GWEI`: optional EIP-1559 max fee
 - `MAX_PRIORITY_FEE_GWEI`: optional EIP-1559 priority fee
@@ -136,7 +138,7 @@ Copy-Item .env.example .env
 - `PRIVATE_RELAY_ONLY`: fail the run instead of falling back to the public RPC when relay submission fails
 - `START_JITTER_MS`: random startup delay per wallet, useful in parallel mode
 - `NONCE_OFFSET`: optional nonce offset if you deliberately want to skip ahead
-- `MINT_START_DETECTION_ENABLED`: poll auto-detected sale-open signals before broadcasting
+- `MINT_START_DETECTION_ENABLED`: defaults to `true`; poll auto-detected sale-open signals like `saleActive()`, `isPublicSaleOpen()`, or `publicMintActive()` before broadcasting
 - `MINT_START_DETECTION_JSON`: optional JSON object describing sale-open detectors. `saleActiveFunction` and `stateFunction` are primary open signals; `pausedFunction` and `totalSupplyFunction` are supplemental context checks
 - `READY_CHECK_FUNCTION`: optional read function to poll before minting
 - `READY_CHECK_ARGS`: JSON array for the ready-check function
@@ -160,36 +162,32 @@ Copy-Item .env.example .env
 
 ## Examples
 
-Mint one free NFT with `mint()`:
+Minimal fully automated setup:
 
 ```env
-MINT_FUNCTION=mint
-MINT_ARGS=[]
-MINT_VALUE_ETH=0
+RPC_URL=https://rpc.example
+PRIVATE_KEY=0xyourprivatekey
+CONTRACT_ADDRESS=0xYourContract
+ABI_PATH=./abi/contract.json
+AUTO_MINT_MODE=true
 ```
 
-Mint 2 NFTs with `mint(uint256 quantity)`:
+Provide manual hints while keeping automation enabled:
 
 ```env
-MINT_FUNCTION=mint
-MINT_ARGS=[2]
-MINT_VALUE_ETH=0.08
+AUTO_MINT_MODE=true
+MINT_FUNCTION=publicMint
+MINT_ARGS=[1]
+MINT_VALUE_ETH=0.05
 ```
 
-Mint using an allowlist proof:
+Disable automation and run a fully manual call:
 
 ```env
+AUTO_MINT_MODE=false
 MINT_FUNCTION=publicSaleMint
 MINT_ARGS=[1,["0xabc...","0xdef..."]]
 MINT_VALUE_ETH=0.03
-```
-
-Use a wallet placeholder inside arguments:
-
-```env
-MINT_FUNCTION=mintTo
-MINT_ARGS=["{{wallet}}",1]
-MINT_VALUE_ETH=0.02
 ```
 
 Run three wallets in parallel with retry support:
@@ -212,14 +210,14 @@ RETRY_DELAY_MS=1500
 RETRY_WINDOW_MS=1800000
 ```
 
-Pre-signing is always enabled. For a scheduled mint, the bot now builds and signs before the launch gate and only broadcasts the raw payload at launch:
+Manual mode keeps pre-signing enabled. For a scheduled mint, the bot builds and signs before the launch gate and only broadcasts the raw payload at launch:
 
 ```env
 WAIT_UNTIL_ISO=2026-03-21T18:30:00Z
 GAS_LIMIT=200000
 ```
 
-If the contract cannot be gas-estimated before the sale opens, set `GAS_LIMIT` manually so the bot can sign ahead of time. If simulation would revert before the sale opens, disable `SIMULATE_TRANSACTION` for that task.
+If the contract cannot be gas-estimated before the sale opens, set `GAS_LIMIT` manually so the bot can sign ahead of time in manual mode. Automated mode skips pre-signing and resolves the transaction just-in-time after its preflight checks.
 
 Wait until a sale flag becomes live:
 
@@ -392,9 +390,7 @@ To mint successfully you typically need all of the following:
 - at least one healthy RPC endpoint for the target chain
 - the NFT contract address
 - the correct contract ABI
-- the exact mint function name
-- the exact mint arguments in JSON form
-- the correct mint price in native token, if the mint is not free
+- optionally, manual hints for function, args, or price if you want to override the automated path
 - the correct chain selection so the bot uses matching RPC nodes
 
 API and service requirements:
@@ -410,7 +406,8 @@ API and service requirements:
 ## Important notes
 
 - This bot assumes the target contract is on an EVM-compatible chain.
-- You must use the correct ABI and exact function arguments for the collection you want to mint.
+- The fully automated path only needs RPC, wallet, contract, and ABI, but it still depends on the ABI being correct and complete.
+- Automated mint mode prioritizes inclusion speed over gas cost: it simulates every candidate, uses aggressive EIP-1559 fees, and bumps replacement transactions by default.
 - The dashboard now auto-detects `mint`, `publicMint`, and `safeMint` from pasted, uploaded, or explorer-fetched ABIs and auto-fills the mint function when your current selection is not valid for that ABI.
 - When a contract address, chain, and ABI are available in the dashboard, the task builder now auto-fills the mint function, mint args template, platform, and default quantity, and it tries to read the mint price from common on-chain view functions such as `mintPrice()` or `publicSalePrice()`.
 - The dashboard also auto-detects mint-start signals from the ABI. When it finds strong indicators like `saleActive()`, `paused()`, or a sale state read, it arms mint-start detection automatically and uses `totalSupply()` as a supplemental signal when available.
