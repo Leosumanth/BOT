@@ -170,6 +170,18 @@ let chainlistRpcCatalogCache = {
   value: null,
   pending: null
 };
+let nativeUsdPriceCache = {
+  expiresAt: 0,
+  value: null,
+  pending: null
+};
+const nativeUsdPriceCacheTtlMs = Math.max(
+  60_000,
+  Number(process.env.NATIVE_USD_PRICE_CACHE_TTL_MS || 5 * 60 * 1000)
+);
+const nativeUsdPriceUrl =
+  process.env.NATIVE_USD_PRICE_URL ||
+  "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin&vs_currencies=usd";
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
