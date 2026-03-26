@@ -198,6 +198,161 @@ function createProviderForRpcUrl(rpcUrl) {
     : new ethers.JsonRpcProvider(rpcUrl);
 }
 
+function parseRpcHexNumber(value, label = "RPC value") {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    throw new Error(`${label} is missing`);
+  }
+
+  const parsed = normalized.startsWith("0x") ? Number.parseInt(normalized, 16) : Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} is invalid`);
+  }
+
+  return parsed;
+}
+
+function getWebSocketProbeImpl() {
+  if (typeof globalThis.WebSocket === "function") {
+    return globalThis.WebSocket;
+  }
+
+  throw new Error("WebSocket probing is unavailable on this server runtime");
+}
+
+async function probeSocketRpcEndpoint(rpcUrl, timeoutMs = 10000, options = {}) {
+  const { includeChainId = false } = options;
+  const WebSocketImpl = getWebSocketProbeImpl();
+
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const socket = new WebSocketImpl(rpcUrl);
+    const requestIds = {
+      chainId: `chain_${Date.now()}`,
+      blockNumber: `block_${Date.now()}`
+    };
+    const result = {
+      checkedAt: new Date().toISOString()
+    };
+    let settled = false;
+
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeoutId);
+
+      try {
+        if (socket.readyState === WebSocketImpl.OPEN || socket.readyState === WebSocketImpl.CONNECTING) {
+          socket.close();
+        }
+      } catch {
+        // Ignore websocket close errors.
+      }
+
+      callback(value);
+    };
+
+    const timeoutId = setTimeout(() => {
+      finish(reject, new Error("RPC websocket probe timed out"));
+    }, timeoutMs);
+
+    const sendBlockNumberRequest = () => {
+      socket.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: requestIds.blockNumber,
+          method: "eth_blockNumber",
+          params: []
+        })
+      );
+    };
+
+    socket.addEventListener("open", () => {
+      if (includeChainId) {
+        socket.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: requestIds.chainId,
+            method: "eth_chainId",
+            params: []
+          })
+        );
+        return;
+      }
+
+      sendBlockNumberRequest();
+    });
+
+    socket.addEventListener("message", (event) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(String(event.data || ""));
+      } catch {
+        return;
+      }
+
+      if (!payload || payload.jsonrpc !== "2.0") {
+        return;
+      }
+
+      if (payload.error) {
+        finish(reject, new Error(payload.error.message || "WebSocket RPC request failed"));
+        return;
+      }
+
+      if (payload.id === requestIds.chainId) {
+        try {
+          result.chainId = parseRpcHexNumber(payload.result, "RPC chain ID");
+        } catch (error) {
+          finish(reject, error);
+          return;
+        }
+
+        sendBlockNumberRequest();
+        return;
+      }
+
+      if (payload.id === requestIds.blockNumber) {
+        try {
+          result.blockNumber = parseRpcHexNumber(payload.result, "RPC block number");
+        } catch (error) {
+          finish(reject, error);
+          return;
+        }
+
+        result.latencyMs = Date.now() - started;
+        finish(resolve, result);
+      }
+    });
+
+    socket.addEventListener("error", (event) => {
+      const message =
+        event?.error?.message || event?.message || "WebSocket connection failed";
+      finish(reject, new Error(message));
+    });
+
+    socket.addEventListener("close", (event) => {
+      if (settled) {
+        return;
+      }
+
+      const reason = String(event?.reason || "").trim();
+      const code = Number(event?.code);
+      const message =
+        reason ||
+        (Number.isFinite(code) ? `WebSocket connection closed (${code})` : "WebSocket connection closed");
+      finish(reject, new Error(message));
+    });
+  });
+}
+
 async function destroyProvider(provider) {
   if (!provider) {
     return;
@@ -1980,6 +2135,23 @@ async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
     new URL(normalizedUrl);
   } catch {
     throw new Error("RPC URL is invalid");
+  }
+
+  if (isSocketRpcUrl(normalizedUrl)) {
+    const inspection = await probeSocketRpcEndpoint(normalizedUrl, timeoutMs, { includeChainId: true });
+    const chain = deriveChainDescriptor(inspection.chainId, normalizedUrl);
+    return {
+      url: normalizedUrl,
+      chainId: inspection.chainId,
+      chainKey: chain.key,
+      chainLabel: chain.label,
+      supportedChain: true,
+      cataloguedChain: Boolean(chain.catalogued),
+      blockNumber: inspection.blockNumber,
+      latencyMs: inspection.latencyMs,
+      checkedAt: inspection.checkedAt,
+      nameSuggestion: buildRpcNameSuggestion(normalizedUrl, chain, inspection.chainId)
+    };
   }
 
   let provider = null;
@@ -6377,6 +6549,17 @@ async function testRpcNodeHealth(rpcNode, timeoutMs = 10000) {
   let timeoutId = null;
 
   try {
+    if (isSocketRpcUrl(rpcNode.url)) {
+      const inspection = await probeSocketRpcEndpoint(rpcNode.url, timeoutMs);
+      rpcNode.lastHealth = {
+        status: "healthy",
+        latencyMs: inspection.latencyMs,
+        blockNumber: inspection.blockNumber,
+        checkedAt: inspection.checkedAt
+      };
+      return rpcNode.lastHealth;
+    }
+
     provider = createProviderForRpcUrl(rpcNode.url);
     const blockNumber = await Promise.race([
       provider.getBlockNumber(),
