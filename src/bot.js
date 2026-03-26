@@ -2015,6 +2015,22 @@ async function preparePresignedContractTransaction({
   logger
 }) {
   const txRequest = await contractMethod.populateTransaction(...args, overrides);
+  return preparePresignedTransactionRequest({
+    txRequest,
+    wallet,
+    walletIndex,
+    label,
+    logger
+  });
+}
+
+async function preparePresignedTransactionRequest({
+  txRequest,
+  wallet,
+  walletIndex,
+  label,
+  logger
+}) {
   const populatedTransaction = await wallet.populateTransaction(txRequest);
   const signedTransaction = await wallet.signTransaction(populatedTransaction);
   const transaction = ethers.Transaction.from(signedTransaction);
@@ -2515,7 +2531,18 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
         }
       },
       preparedMint: null,
-      lastMintPlan: null
+      lastMintPlan: null,
+      async refreshPlannedNonce() {
+        const pendingNonce =
+          (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
+        if (pendingNonce > nextPlannedNonce) {
+          logger.info(
+            `[wallet ${walletIndex}] Nonce plan refreshed from ${nextPlannedNonce} to ${pendingNonce}`
+          );
+          nextPlannedNonce = pendingNonce;
+        }
+        return nextPlannedNonce;
+      }
     };
   } catch (error) {
     await destroyProvider(provider);
@@ -2566,6 +2593,31 @@ async function tryPreparePresignedMint(config, session, context) {
   }
 }
 
+async function tryPrepareAutomatedPresignedMint(config, session, context, attempt = 1) {
+  if (config.dryRun || !config.autoMintMode || !config.preSignTransactions) {
+    return null;
+  }
+
+  const { logger } = context;
+  const plan = await buildAutomatedMintPlan(config, session, context, attempt);
+  const preparedMint = await preparePresignedTransactionRequest({
+    txRequest: plan.txRequest,
+    wallet: session.wallet,
+    walletIndex: session.walletIndex,
+    label: "Mint",
+    logger
+  });
+
+  logger.info(
+    `[wallet ${session.walletIndex}] Automated mint pre-signed using ${plan.candidate.signature}`
+  );
+
+  return {
+    ...preparedMint,
+    plan
+  };
+}
+
 async function ensurePreparedMint(config, session, context) {
   if (session.preparedMint) {
     return session.preparedMint;
@@ -2606,6 +2658,19 @@ async function executeWalletSession(config, session, context) {
 
     await waitForMintStartDetection(contract, config, walletIndex, signal, logger);
     await waitForReadyCheck(contract, config, walletIndex, signal, logger);
+    await session.refreshPlannedNonce();
+
+    if (config.autoMintMode && config.preSignTransactions && !session.preparedMint) {
+      try {
+        session.preparedMint = await tryPrepareAutomatedPresignedMint(config, session, context, 1);
+      } catch (error) {
+        logger.info(
+          `[wallet ${walletIndex}] Automated pre-sign unavailable, falling back to live signing: ${formatError(
+            error
+          )}`
+        );
+      }
+    }
 
     let mintResult = null;
     let lastAttemptError = null;
@@ -2621,59 +2686,100 @@ async function executeWalletSession(config, session, context) {
 
       try {
         if (config.autoMintMode) {
-          currentPlan = await buildAutomatedMintPlan(config, session, context, attempt);
-          session.lastMintPlan = currentPlan;
-
-          if (config.dryRun) {
+          const preparedMint = attempt === 1 ? session.preparedMint : null;
+          if (preparedMint) {
+            usedPreparedMint = true;
+            currentPlan = preparedMint.plan || null;
+            session.lastMintPlan = currentPlan;
             logger.info(
-              `[wallet ${walletIndex}] Automated dry run passed with ${currentPlan.candidate.signature}`
+              `[wallet ${walletIndex}] Broadcasting automated pre-signed mint tx: ${preparedMint.hash}`
             );
-            return {
-              walletAddress,
+            mintResult = await sendManagedTransaction({
+              send: () =>
+                submitSignedTransactionWithRoute({
+                  provider,
+                  rpcUrl,
+                  config,
+                  signedTransaction: preparedMint.signedTransaction,
+                  walletIndex,
+                  label: "Mint",
+                  logger,
+                  signal
+                }),
+              submitReplacement: (txRequest) =>
+                submitTransactionWithRoute({
+                  wallet,
+                  provider,
+                  rpcUrl,
+                  config,
+                  txRequest,
+                  walletIndex,
+                  label: "Mint",
+                  logger,
+                  signal
+                }),
+              config,
               walletIndex,
-              txHash: null,
-              status: "dry-run",
-              functionUsed: currentPlan.candidate.name,
-              ethValueUsed: formatEthValue(currentPlan.value),
-              gasSettings: buildGasSettingsSnapshot({
-                ...currentPlan.feeOverrides,
-                gasLimit: currentPlan.gasLimit
-              })
-            };
-          }
+              label: "Mint",
+              logger,
+              signal,
+              onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
+            });
+          } else {
+            currentPlan = await buildAutomatedMintPlan(config, session, context, attempt);
+            session.lastMintPlan = currentPlan;
 
-          mintResult = await sendManagedTransaction({
-            send: () =>
-              submitTransactionWithRoute({
-                wallet,
-                provider,
-                rpcUrl,
-                config,
-                txRequest: currentPlan.txRequest,
+            if (config.dryRun) {
+              logger.info(
+                `[wallet ${walletIndex}] Automated dry run passed with ${currentPlan.candidate.signature}`
+              );
+              return {
+                walletAddress,
                 walletIndex,
-                label: "Mint",
-                logger,
-                signal
-              }),
-            submitReplacement: (txRequest) =>
-              submitTransactionWithRoute({
-                wallet,
-                provider,
-                rpcUrl,
-                config,
-                txRequest,
-                walletIndex,
-                label: "Mint",
-                logger,
-                signal
-              }),
-            config,
-            walletIndex,
-            label: "Mint",
-            logger,
-            signal,
-            onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
-          });
+                txHash: null,
+                status: "dry-run",
+                functionUsed: currentPlan.candidate.name,
+                ethValueUsed: formatEthValue(currentPlan.value),
+                gasSettings: buildGasSettingsSnapshot({
+                  ...currentPlan.feeOverrides,
+                  gasLimit: currentPlan.gasLimit
+                })
+              };
+            }
+
+            mintResult = await sendManagedTransaction({
+              send: () =>
+                submitTransactionWithRoute({
+                  wallet,
+                  provider,
+                  rpcUrl,
+                  config,
+                  txRequest: currentPlan.txRequest,
+                  walletIndex,
+                  label: "Mint",
+                  logger,
+                  signal
+                }),
+              submitReplacement: (txRequest) =>
+                submitTransactionWithRoute({
+                  wallet,
+                  provider,
+                  rpcUrl,
+                  config,
+                  txRequest,
+                  walletIndex,
+                  label: "Mint",
+                  logger,
+                  signal
+                }),
+              config,
+              walletIndex,
+              label: "Mint",
+              logger,
+              signal,
+              onSubmitted: (tx) => session.reserveSubmittedNonce(tx)
+            });
+          }
         } else if (config.dryRun) {
           const overrides = await buildRuntimeOverrides(config, provider);
 
@@ -3015,7 +3121,15 @@ async function runMintBot(config, hooks = {}) {
     logger.info(`Trigger block: ${config.triggerBlockNumber}`);
   }
   logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
-  logger.info(`Pre-signed launch: ${config.autoMintMode ? "disabled in automated mode" : "required"}`);
+  logger.info(
+    `Pre-signed launch: ${
+      config.preSignTransactions
+        ? config.autoMintMode
+          ? "enabled when an automated mint plan can be resolved at launch"
+          : "required"
+        : "disabled"
+    }`
+  );
 
   const preparedRun = await runMintBotWithPreparedWallets(config, { signal, logger });
   const results = preparedRun.results;
