@@ -15,12 +15,12 @@
         <p class="eyebrow">Secure Access</p>
         <h2>Operator Login</h2>
         <p id="login-status" class="view-subtitle">
-          Sign in with the configured admin account to unlock dashboard state, tasks, and encrypted wallet secrets.
+          Sign in with the configured operator account to unlock dashboard state, tasks, and encrypted wallet secrets.
         </p>
         <form id="login-form" class="stack-form auth-form">
           <label>
             <span>Username</span>
-            <input id="login-username-input" type="text" autocomplete="username" placeholder="admin" />
+            <input id="login-username-input" type="text" autocomplete="username" placeholder="Username" />
           </label>
           <label>
             <span>Password</span>
@@ -59,19 +59,10 @@
             <button class="nav-button" data-view="transfer" type="button">Transfer</button>
             <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
             <button class="nav-button" data-view="settings" type="button">Settings</button>
-            <button class="nav-button" data-view="admin" type="button">Admin</button>
           </nav>
         </div>
 
         <div class="sidebar-footer">
-          <div class="account-card hud-panel" data-tilt>
-            <div class="account-avatar">0x</div>
-            <div>
-              <strong id="account-label">Local Operator</strong>
-              <p id="account-status">Ready</p>
-            </div>
-            <span class="status-dot"></span>
-          </div>
           <button id="logout-button" class="ghost-button fx-button" type="button">Sign Out</button>
           <button id="global-stop-button" class="danger-button fx-button" type="button">Stop Active Run</button>
         </div>
@@ -519,31 +510,55 @@
           </section>
         </section>
 
-        <section class="view" data-view-panel="admin">
-          <div class="view-header">
-            <div>
-              <h2>Admin</h2>
-              <p class="view-subtitle">Quick inspection of saved local data and runtime state.</p>
-            </div>
-          </div>
-
-          <div class="content-grid">
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <h3>Runtime State</h3>
-              </div>
-              <pre id="runtime-output" class="code-panel"></pre>
-            </section>
-
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <h3>Last Results</h3>
-              </div>
-              <pre id="results-output" class="code-panel">No results yet.</pre>
-            </section>
-          </div>
-        </section>
       </main>
+    </div>
+
+    <div id="assistant-root" class="assistant-root hidden">
+      <button
+        id="assistant-fab-button"
+        class="assistant-fab fx-button"
+        type="button"
+        aria-expanded="false"
+        aria-controls="assistant-panel"
+      >
+        <span class="assistant-fab-mark">AI</span>
+        <span class="assistant-fab-copy">
+          <strong>Operator AI</strong>
+          <span id="assistant-fab-status">Ask questions or automate tasks</span>
+        </span>
+      </button>
+
+      <section id="assistant-panel" class="assistant-panel" aria-label="Operator AI assistant">
+        <div class="assistant-panel-header">
+          <div>
+            <p class="eyebrow">Live Assistant</p>
+            <h3>Operator AI</h3>
+            <p id="assistant-status" class="helper-copy">
+              Ask about the app, or paste a contract plus ABI and tell me what to do.
+            </p>
+          </div>
+          <div class="assistant-panel-actions">
+            <button id="assistant-reset-button" class="ghost-button fx-button" type="button">Reset</button>
+            <button id="assistant-close-button" class="ghost-button fx-button" type="button">Close</button>
+          </div>
+        </div>
+
+        <div id="assistant-messages" class="assistant-messages"></div>
+
+        <form id="assistant-form" class="assistant-composer">
+          <label class="assistant-composer-field">
+            <span>Message</span>
+            <textarea
+              id="assistant-input"
+              rows="4"
+              placeholder="Example: Use contract 0x... on Base, this ABI, schedule the mint for 7:00 PM, and run it with my main wallet."
+            ></textarea>
+          </label>
+          <div class="assistant-composer-actions">
+            <button id="assistant-send-button" class="primary-button fx-button" type="submit">Send</button>
+          </div>
+        </form>
+      </section>
     </div>
 
     <div id="task-modal" class="modal hidden">

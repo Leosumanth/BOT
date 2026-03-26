@@ -123,6 +123,17 @@ const batchStatus = document.getElementById("batch-status");
 const globalStopButton = document.getElementById("global-stop-button");
 const logoutButton = document.getElementById("logout-button");
 const toastStack = document.getElementById("toast-stack");
+const assistantRoot = document.getElementById("assistant-root");
+const assistantFabButton = document.getElementById("assistant-fab-button");
+const assistantFabStatus = document.getElementById("assistant-fab-status");
+const assistantPanel = document.getElementById("assistant-panel");
+const assistantStatus = document.getElementById("assistant-status");
+const assistantCloseButton = document.getElementById("assistant-close-button");
+const assistantResetButton = document.getElementById("assistant-reset-button");
+const assistantMessages = document.getElementById("assistant-messages");
+const assistantForm = document.getElementById("assistant-form");
+const assistantInput = document.getElementById("assistant-input");
+const assistantSendButton = document.getElementById("assistant-send-button");
 
 const taskModal = document.getElementById("task-modal");
 const modalTitle = document.getElementById("modal-title");
@@ -228,6 +239,7 @@ let rpcPendingSavePayload = null;
 let rpcDiscoveryState = {
   query: "",
   chain: null,
+  match: null,
   candidates: [],
   selectedUrls: [],
   loading: false,
@@ -249,6 +261,11 @@ let rpcChainlistScan = {
 let currentMintStartDetection = {
   enabled: false,
   config: null
+};
+let assistantState = {
+  open: false,
+  loading: false,
+  messages: []
 };
 
 function escapeHtml(value) {
@@ -477,11 +494,24 @@ function setAuthState(authenticated, user = null, authRequired = true) {
 
   body.dataset.authState = authenticated || !authRequired ? "unlocked" : "locked";
   authOverlay.classList.toggle("hidden", authenticated || !authRequired);
-  logoutButton.classList.toggle("hidden", !authenticated || !authRequired);
+  if (logoutButton) {
+    logoutButton.classList.toggle("hidden", !authenticated || !authRequired);
+  }
+  assistantRoot.classList.toggle("hidden", !authenticated && authRequired);
 
   if (!authenticated && authRequired) {
-    accountLabel.textContent = "Secure Operator";
-    accountStatus.textContent = "Sign in required";
+    assistantState = {
+      open: false,
+      loading: false,
+      messages: []
+    };
+    assistantInput.value = "";
+    if (accountLabel) {
+      accountLabel.textContent = "Secure Operator";
+    }
+    if (accountStatus) {
+      accountStatus.textContent = "Sign in required";
+    }
     globalStopButton.disabled = true;
     loginPasswordInput.value = "";
     window.setTimeout(() => {
@@ -490,6 +520,8 @@ function setAuthState(authenticated, user = null, authRequired = true) {
       }
     }, 0);
   }
+
+  renderAssistant();
 }
 
 function handleUnauthorized(message = "Session expired. Sign in again.") {
@@ -988,6 +1020,242 @@ function showToast(message, tone = "info", title = null) {
   window.setTimeout(() => {
     toast.remove();
   }, 4200);
+}
+
+function assistantModelLabel() {
+  return state.settings.operatorAssistantModel || state.settings.openaiRpcAdvisorModel || "OpenAI";
+}
+
+function assistantAvailability() {
+  if (!state.session.authenticated && state.session.authRequired !== false) {
+    return {
+      ready: false,
+      fab: "Sign in required",
+      status: "Sign in to unlock the live operator assistant.",
+      emptyTitle: "Authentication required",
+      emptyCopy: "Sign in first, then I can answer questions and control the app for you."
+    };
+  }
+
+  if (!state.settings.openaiApiKeyConfigured) {
+    return {
+      ready: false,
+      fab: "OpenAI key required",
+      status: "Add an OpenAI API key in Settings to enable the live operator assistant.",
+      emptyTitle: "OpenAI key missing",
+      emptyCopy: "Save an OpenAI API key in Settings, then I can answer questions and create or run tasks."
+    };
+  }
+
+  return {
+    ready: true,
+    fab: `Ready via ${assistantModelLabel()}`,
+    status: `Live via ${assistantModelLabel()}. Ask about the app, or tell me to create, schedule, run, stop, or delete tasks.`,
+    emptyTitle: "Ask Operator AI",
+    emptyCopy: "Paste a contract plus ABI and tell me to schedule or run a mint, or ask questions about the current dashboard state."
+  };
+}
+
+function formatAssistantTimestamp(value) {
+  const parsed = new Date(value || "");
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+
+  return parsed.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function scrollAssistantMessagesToBottom() {
+  window.requestAnimationFrame(() => {
+    assistantMessages.scrollTop = assistantMessages.scrollHeight;
+  });
+}
+
+function renderAssistant() {
+  const availability = assistantAvailability();
+  const panelOpen = assistantState.open && !assistantRoot.classList.contains("hidden");
+
+  assistantFabButton.setAttribute("aria-expanded", panelOpen ? "true" : "false");
+  assistantFabStatus.textContent = assistantState.loading ? "Thinking..." : availability.fab;
+  assistantStatus.textContent = assistantState.loading
+    ? "Working through your request and checking live app state."
+    : availability.status;
+  assistantPanel.classList.toggle("open", panelOpen);
+
+  assistantInput.disabled = assistantState.loading || !availability.ready;
+  assistantSendButton.disabled =
+    assistantState.loading || !availability.ready || !assistantInput.value.trim();
+  assistantResetButton.disabled = assistantState.loading;
+
+  if (!availability.ready) {
+    assistantMessages.innerHTML = `
+      <div class="assistant-empty-state">
+        <h4>${escapeHtml(availability.emptyTitle)}</h4>
+        <p>${escapeHtml(availability.emptyCopy)}</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (!assistantState.messages.length && !assistantState.loading) {
+    assistantMessages.innerHTML = `
+      <div class="assistant-empty-state">
+        <h4>${escapeHtml(availability.emptyTitle)}</h4>
+        <p>${escapeHtml(availability.emptyCopy)}</p>
+      </div>
+    `;
+    return;
+  }
+
+  const messageMarkup = assistantState.messages
+    .map((entry) => {
+      const actions = Array.isArray(entry.actions) && entry.actions.length
+        ? `
+          <div class="assistant-message-actions">
+            ${entry.actions
+              .map((action) => `<span class="assistant-action-chip">${escapeHtml(action)}</span>`)
+              .join("")}
+          </div>
+        `
+        : "";
+
+      return `
+        <article class="assistant-message ${escapeHtml(entry.role)}">
+          <div class="assistant-bubble">${escapeHtml(entry.text || "").replace(/\n/g, "<br />")}</div>
+          ${actions}
+          <div class="assistant-message-meta">${escapeHtml(
+            entry.role === "user" ? "You" : "Operator AI"
+          )}${entry.timestamp ? ` · ${escapeHtml(formatAssistantTimestamp(entry.timestamp))}` : ""}</div>
+        </article>
+      `;
+    })
+    .join("");
+
+  const loadingMarkup = assistantState.loading
+    ? `
+      <article class="assistant-message assistant">
+        <div class="assistant-bubble">
+          <div class="assistant-typing" aria-label="Operator AI is typing">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+        <div class="assistant-message-meta">Operator AI</div>
+      </article>
+    `
+    : "";
+
+  assistantMessages.innerHTML = `${messageMarkup}${loadingMarkup}`;
+  scrollAssistantMessagesToBottom();
+}
+
+function toggleAssistantPanel(forceOpen = !assistantState.open) {
+  assistantState.open = Boolean(forceOpen);
+  renderAssistant();
+
+  if (assistantState.open && !assistantInput.disabled) {
+    window.setTimeout(() => {
+      assistantInput.focus();
+    }, 0);
+  }
+}
+
+async function resetAssistantConversation(options = {}) {
+  if (assistantState.loading) {
+    return;
+  }
+
+  const { silent = false } = options;
+  if (!silent && assistantState.messages.length > 0 && !window.confirm("Reset the Operator AI conversation?")) {
+    return;
+  }
+
+  assistantState.messages = [];
+  renderAssistant();
+
+  if (!state.session.authenticated) {
+    return;
+  }
+
+  try {
+    await request("/api/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reset: true }),
+      quiet: true
+    });
+  } catch {}
+
+  if (!silent) {
+    showToast("Operator AI conversation cleared.", "info", "AI Operator");
+  }
+}
+
+async function sendAssistantMessage() {
+  const message = assistantInput.value.trim();
+  if (!message || assistantState.loading || !assistantAvailability().ready) {
+    renderAssistant();
+    return;
+  }
+
+  const shouldResetConversation = assistantState.messages.length === 0;
+  assistantState.open = true;
+  assistantState.loading = true;
+  assistantState.messages = [
+    ...assistantState.messages,
+    {
+      role: "user",
+      text: message,
+      timestamp: new Date().toISOString()
+    }
+  ];
+  assistantInput.value = "";
+  renderAssistant();
+
+  try {
+    const payload = await request("/api/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        reset: shouldResetConversation
+      })
+    });
+
+    assistantState.messages = [
+      ...assistantState.messages,
+      {
+        role: "assistant",
+        text: payload.reply || "Request completed.",
+        actions: payload.actions || [],
+        timestamp: new Date().toISOString()
+      }
+    ];
+
+    if (payload.changedState) {
+      await loadState().catch(() => {});
+      showToast("Operator AI updated the app state.", "success", "AI Operator");
+    }
+  } catch (error) {
+    assistantState.messages = [
+      ...assistantState.messages,
+      {
+        role: "assistant",
+        text: error.message || "I could not complete that request.",
+        timestamp: new Date().toISOString()
+      }
+    ];
+  } finally {
+    assistantState.loading = false;
+    renderAssistant();
+    if (!assistantInput.disabled) {
+      assistantInput.focus();
+    }
+  }
 }
 
 function animateNumberNodes(root = document) {
@@ -1655,7 +1923,7 @@ function isRpcEditMode() {
 function defaultRpcDetectMessage() {
   return isRpcEditMode()
     ? "Editing stored node. Update the URL to re-detect its chain."
-    : "Type an EVM chain name and the dashboard will scan fast Chainlist RPCs you can keep or uncheck.";
+    : "Type any EVM chain name and the dashboard will look it up in Chainlist, then scan fast RPCs you can keep or uncheck.";
 }
 
 function setRpcDetectMessage(message) {
@@ -1710,7 +1978,7 @@ function updateRpcSubmitButton() {
   rpcImportChainlistButton.disabled = rpcDiscoveryState.loading || !rpcChainSearchInput.value.trim();
 }
 
-function renderRpcDiscoveryMatch(match = rpcDiscoveryState.chain ? resolveRpcChainQuery(rpcChainSearchInput.value) : null) {
+function renderRpcDiscoveryMatch(match = rpcDiscoveryState.match) {
   if (!rpcSearchMatch) {
     return;
   }
@@ -1730,10 +1998,13 @@ function renderRpcDiscoveryMatch(match = rpcDiscoveryState.chain ? resolveRpcCha
   const normalizedInput = normalizeChainSearchValue(rpcChainSearchInput.value);
   const chips = [`Matched ${match.chain.label}`];
   if (match.term && match.term !== normalizedInput) {
-    chips.push(`Alias: ${match.term}`);
+    chips.push(`Match: ${match.term}`);
   }
   if (match.mode === "fuzzy") {
     chips.push("Fuzzy match");
+  }
+  if (match.source === "chainlist_search") {
+    chips.push("Chainlist lookup");
   }
 
   rpcSearchMatch.classList.remove("hidden");
@@ -1802,7 +2073,7 @@ function renderRpcDiscoveryCandidates() {
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
         <h3>Search a chain</h3>
-        <p>Type Ethereum, Base, Sepolia, Arbitrum, Blast, Shape, or Plasma to scan healthy RPCs.</p>
+        <p>Type any EVM chain name and the dashboard will look it up in Chainlist before scanning healthy RPCs.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -1813,8 +2084,8 @@ function renderRpcDiscoveryCandidates() {
   if (!rpcDiscoveryState.chain) {
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
-        <h3>No supported chain match</h3>
-        <p>Try Ethereum, ETH, Base, Base Sepolia, Sepolia, Arbitrum, Blast, Shape, or Plasma.</p>
+        <h3>No Chainlist match yet</h3>
+        <p>Keep typing the chain name, or try a different EVM network spelling. Non-EVM chains like Aptos will not appear in Chainlist.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -1899,6 +2170,7 @@ function clearRpcDiscoveryState(options = {}) {
   rpcDiscoveryState = {
     query: preserveQuery ? String(rpcChainSearchInput.value || "").trim() : "",
     chain: null,
+    match: null,
     candidates: [],
     selectedUrls: [],
     loading: false,
@@ -1932,33 +2204,38 @@ async function runRpcDiscoveryScan(options = {}) {
 
   if (normalizedQuery.length < 2) {
     clearRpcDiscoveryState({ preserveQuery: true });
-    setRpcDetectMessage("Keep typing the chain name to start the RPC scan.");
+    setRpcDetectMessage("Keep typing the chain name to start the Chainlist lookup.");
     updateRpcSubmitButton();
     return;
   }
 
-  const match = resolveRpcChainQuery(query);
-  renderRpcDiscoveryMatch(match);
-  if (!match?.chain) {
-    clearRpcDiscoveryState({ preserveQuery: true });
-    setRpcDetectMessage(`No supported EVM chain matched "${query}". Try Ethereum, ETH, Base, or Arbitrum.`);
-    updateRpcSubmitButton();
-    return;
-  }
+  const localMatch = resolveRpcChainQuery(query);
 
   const requestId = ++rpcDiscoveryRequestId;
-  const priorSelection = match.chain.key === rpcDiscoveryState.chain?.key ? new Set(rpcDiscoveryState.selectedUrls || []) : new Set();
+  const provisionalChain = localMatch?.chain || null;
+  const priorSelection =
+    provisionalChain && provisionalChain.key === rpcDiscoveryState.chain?.key
+      ? new Set(rpcDiscoveryState.selectedUrls || [])
+      : new Set();
   rpcDiscoveryState = {
     query,
-    chain: match.chain,
+    chain: provisionalChain,
+    match: localMatch || null,
     candidates: [],
     selectedUrls: [],
     loading: true,
     summary: null
   };
-  rpcChainInput.value = match.chain.key;
+  if (provisionalChain?.key) {
+    rpcChainInput.value = provisionalChain.key;
+  }
   rpcFormGroup = "Chainlist";
-  setRpcDetectMessage(`Scanning fast Chainlist RPCs for ${match.chain.label}...`);
+  setRpcDetectMessage(
+    provisionalChain?.label
+      ? `Scanning fast Chainlist RPCs for ${provisionalChain.label}...`
+      : `Looking up "${query}" in Chainlist and scanning healthy RPCs...`
+  );
+  renderRpcDiscoveryMatch();
   renderRpcDiscoveryCandidates();
 
   try {
@@ -1966,7 +2243,8 @@ async function runRpcDiscoveryScan(options = {}) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chainKey: match.chain.key,
+        chainKey: localMatch?.chain?.key || "",
+        query,
         limit: 8,
         probeBudget: 20,
         forceRefresh
@@ -1979,14 +2257,30 @@ async function runRpcDiscoveryScan(options = {}) {
     }
 
     const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+    const resolvedChain = payload.chain || provisionalChain;
+    if (resolvedChain) {
+      ensureChainOption(resolvedChain);
+      rpcChainInput.value = resolvedChain.key;
+    }
     const healthyUrls = candidates
       .filter((candidate) => candidate.lastHealth?.status === "healthy")
       .map((candidate) => candidate.url);
     const selectedUrls = healthyUrls.filter((url) => priorSelection.has(url));
+    const resolution = payload.resolution || {};
+    const resolvedTerm = normalizeChainSearchValue(resolution.term || query);
+    const match = resolvedChain
+      ? {
+          chain: resolvedChain,
+          term: resolvedTerm,
+          mode: resolution.mode || localMatch?.mode || "exact",
+          source: resolution.source || (localMatch ? "local" : "chainlist_search")
+        }
+      : null;
 
     rpcDiscoveryState = {
       query,
-      chain: match.chain,
+      chain: resolvedChain,
+      match,
       candidates,
       selectedUrls: selectedUrls.length > 0 ? selectedUrls : healthyUrls,
       loading: false,
@@ -1996,25 +2290,27 @@ async function runRpcDiscoveryScan(options = {}) {
     const healthyCount = Number(payload.healthy || 0);
     setRpcDetectMessage(
       healthyCount > 0
-        ? `${match.chain.label} matched. The recommended RPC is highlighted, and all healthy results are preselected so you can uncheck any you do not want.`
-        : `${match.chain.label} matched, but no healthy RPC endpoints passed the live probe.`
+        ? `${resolvedChain.label} matched. The recommended RPC is highlighted, and all healthy results are preselected so you can uncheck any you do not want.`
+        : `${resolvedChain.label} matched, but no healthy RPC endpoints passed the live probe.`
     );
-  } catch {
+  } catch (error) {
     if (requestId !== rpcDiscoveryRequestId) {
       return;
     }
 
     rpcDiscoveryState = {
       query,
-      chain: match.chain,
+      chain: provisionalChain,
+      match: localMatch || null,
       candidates: [],
       selectedUrls: [],
       loading: false,
       summary: null
     };
-    setRpcDetectMessage(`RPC scan failed for ${match.chain.label}. Try Refresh Scan in a moment.`);
+    setRpcDetectMessage(error.message || `Chainlist scan failed for "${query}". Try Refresh Scan in a moment.`);
   }
 
+  renderRpcDiscoveryMatch();
   renderRpcDiscoveryCandidates();
 }
 
@@ -3378,6 +3674,10 @@ function renderSettings() {
 }
 
 function renderRuntime() {
+  if (!runtimeOutput) {
+    return;
+  }
+
   runtimeOutput.textContent = JSON.stringify(
     {
       view: state.currentView,
@@ -3393,6 +3693,10 @@ function renderRuntime() {
 }
 
 function renderResultsIfAvailable() {
+  if (!resultsOutput) {
+    return;
+  }
+
   const latestCompletedTask = [...state.tasks]
     .filter((task) => task.history?.length)
     .sort((left, right) => new Date(right.lastRunAt || 0) - new Date(left.lastRunAt || 0))[0];
@@ -3412,16 +3716,19 @@ function renderShellTelemetry() {
   const hasCriticalAlert = (telemetry.alerts || []).some((alert) => alert.severity === "critical");
 
   body.dataset.runState = state.runState.status;
-  accountLabel.textContent =
-    state.session.user?.username || state.settings.profileName || "Local Operator";
-  accountStatus.textContent =
-    state.runState.status === "running"
-      ? activeTaskCount > 1
-        ? `${activeTaskCount} tasks running`
-        : "Task running"
-      : (state.runState.queuedTaskIds || []).length > 0
-        ? "Queue armed"
-        : "Authenticated";
+  if (accountLabel) {
+    accountLabel.textContent = state.settings.profileName || "Local Operator";
+  }
+  if (accountStatus) {
+    accountStatus.textContent =
+      state.runState.status === "running"
+        ? activeTaskCount > 1
+          ? `${activeTaskCount} tasks running`
+          : "Task running"
+        : (state.runState.queuedTaskIds || []).length > 0
+          ? "Queue armed"
+          : "Operator mode";
+  }
   heroModeCopy.textContent = active
     ? activeTaskCount > 1
       ? `${pluralize(activeTaskCount, "task")} are executing concurrently. Primary run: ${active.name} on ${chainLabel(active.chainKey)} at ${active.progress?.percent || 0}% completion.`
@@ -3457,6 +3764,7 @@ function renderAll() {
   renderSettings();
   renderRuntime();
   renderResultsIfAvailable();
+  renderAssistant();
   initializeMotionSurfaces(document);
 }
 
@@ -4612,8 +4920,9 @@ rpcPagePulseButton.addEventListener("click", async () => {
 snapshotButton.addEventListener("click", async () => {
   try {
     const payload = await request("/api/control/snapshot", { method: "POST" });
-    runtimeOutput.textContent = JSON.stringify(payload.snapshot, null, 2);
-    setView("admin");
+    if (runtimeOutput) {
+      runtimeOutput.textContent = JSON.stringify(payload.snapshot, null, 2);
+    }
     showToast("Runtime snapshot captured.", "success", "Snapshot Ready");
   } catch {}
 });
@@ -4645,15 +4954,45 @@ globalStopButton.addEventListener("click", async () => {
   } catch {}
 });
 
-logoutButton.addEventListener("click", async () => {
-  try {
-    await request("/api/auth/logout", { method: "POST" });
-  } catch {}
+if (logoutButton) {
+  logoutButton.addEventListener("click", async () => {
+    try {
+      await request("/api/auth/logout", { method: "POST" });
+    } catch {}
 
-  disconnectEvents();
-  setAuthState(false, null, true);
-  setLoginStatus("Signed out. Sign in again to resume secure state access.");
-  showToast("Session closed.", "info", "Signed Out");
+    disconnectEvents();
+    setAuthState(false, null, true);
+    setLoginStatus("Signed out. Sign in again to resume secure state access.");
+    showToast("Session closed.", "info", "Signed Out");
+  });
+}
+
+assistantFabButton.addEventListener("click", () => {
+  toggleAssistantPanel();
+});
+
+assistantCloseButton.addEventListener("click", () => {
+  toggleAssistantPanel(false);
+});
+
+assistantResetButton.addEventListener("click", async () => {
+  await resetAssistantConversation();
+});
+
+assistantInput.addEventListener("input", () => {
+  renderAssistant();
+});
+
+assistantInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    void sendAssistantMessage();
+  }
+});
+
+assistantForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await sendAssistantMessage();
 });
 
 walletImportForm.addEventListener("submit", async (event) => {

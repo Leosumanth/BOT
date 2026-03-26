@@ -44,6 +44,11 @@ const chainlistRpcCacheTtlMs = Math.max(
 );
 const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2";
 const explorerKeyTestChainId = 1;
+const operatorAssistantModel = String(
+  process.env.OPENAI_OPERATOR_ASSISTANT_MODEL ||
+    process.env.OPENAI_RPC_ADVISOR_MODEL ||
+    "gpt-5-mini-2025-08-07"
+).trim();
 const mintPhaseOrder = ["gtd", "allowlist", "public"];
 const mintPhaseLabels = {
   gtd: "GTD",
@@ -137,6 +142,7 @@ let queueCoordinator = null;
 let distributedRunState = createIdleRunState(resolveQueueConfig());
 const distributedQueuedTaskIds = new Set();
 const distributedTaskPatches = new Map();
+const assistantConversations = new Map();
 let scheduledTaskLoop = null;
 let scheduledTaskScanInFlight = false;
 let shutdownPromise = null;
@@ -540,6 +546,15 @@ function findChainlistEntry(chainlistCatalog, chain) {
   );
 }
 
+function normalizeChainSearchQuery(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractChainlistRpcUrls(chainlistEntry) {
   const rawCandidates = [];
 
@@ -567,6 +582,226 @@ function extractChainlistRpcUrls(chainlistEntry) {
   return normalized;
 }
 
+function buildChainDescriptorFromChainlistEntry(entry = {}) {
+  const chainId = Number(entry?.chainId);
+  if (!Number.isFinite(chainId)) {
+    return null;
+  }
+
+  const knownChain = findChainByChainId(chainId);
+  if (knownChain) {
+    return {
+      ...knownChain,
+      catalogued: true
+    };
+  }
+
+  const labelCandidates = [
+    String(entry?.name || "").trim(),
+    String(entry?.chain || "").trim(),
+    titleCaseWords(String(entry?.chainSlug || "").replace(/[_-]+/g, " ")),
+    titleCaseWords(String(entry?.shortName || "").replace(/[_-]+/g, " "))
+  ].filter(Boolean);
+
+  const label = labelCandidates[0] || `Chain ${chainId}`;
+  const keySeed =
+    String(entry?.chainSlug || "").trim() ||
+    String(entry?.shortName || "").trim() ||
+    String(entry?.chain || "").trim() ||
+    label;
+
+  return {
+    key: slugifyChainKey(keySeed, chainId),
+    label,
+    chainId,
+    catalogued: false
+  };
+}
+
+function chainlistEntrySearchTerms(entry = {}, descriptor = null) {
+  const resolvedDescriptor = descriptor || buildChainDescriptorFromChainlistEntry(entry);
+  const rawTerms = [
+    resolvedDescriptor?.key,
+    resolvedDescriptor?.label,
+    String(resolvedDescriptor?.label || "").replace(/\b(mainnet|testnet|network)\b/gi, " "),
+    entry?.name,
+    entry?.chain,
+    entry?.chainSlug,
+    entry?.shortName
+  ];
+
+  return [...new Set(rawTerms.map((term) => normalizeChainSearchQuery(term)).filter(Boolean))];
+}
+
+function levenshteinDistance(left, right) {
+  const source = String(left || "");
+  const target = String(right || "");
+  if (!source) {
+    return target.length;
+  }
+
+  if (!target) {
+    return source.length;
+  }
+
+  const rows = Array.from({ length: source.length + 1 }, (_, index) => [index]);
+  for (let column = 0; column <= target.length; column += 1) {
+    rows[0][column] = column;
+  }
+
+  for (let row = 1; row <= source.length; row += 1) {
+    for (let column = 1; column <= target.length; column += 1) {
+      const substitutionCost = source[row - 1] === target[column - 1] ? 0 : 1;
+      rows[row][column] = Math.min(
+        rows[row - 1][column] + 1,
+        rows[row][column - 1] + 1,
+        rows[row - 1][column - 1] + substitutionCost
+      );
+    }
+  }
+
+  return rows[source.length][target.length];
+}
+
+function scoreChainSearchTerm(term, query) {
+  if (!term || !query) {
+    return null;
+  }
+
+  if (term === query) {
+    return { score: 0, mode: "exact" };
+  }
+
+  if (term.startsWith(query) || query.startsWith(term)) {
+    return {
+      score: 1 + Math.abs(term.length - query.length) / 100,
+      mode: "prefix"
+    };
+  }
+
+  if (term.includes(query) || query.includes(term)) {
+    return {
+      score: 2 + Math.abs(term.length - query.length) / 100,
+      mode: "contains"
+    };
+  }
+
+  const compactTerm = term.replace(/\s+/g, "");
+  const compactQuery = query.replace(/\s+/g, "");
+  const distance = levenshteinDistance(compactTerm, compactQuery);
+  const threshold = Math.max(1, Math.ceil(Math.max(compactTerm.length, compactQuery.length) * 0.22));
+  if (distance > threshold) {
+    return null;
+  }
+
+  return {
+    score: 3 + distance / 10,
+    mode: "fuzzy"
+  };
+}
+
+function searchChainlistCatalog(chainlistCatalog, query) {
+  const normalizedQuery = normalizeChainSearchQuery(query);
+  if (!normalizedQuery || !Array.isArray(chainlistCatalog)) {
+    return null;
+  }
+
+  let bestMatch = null;
+
+  chainlistCatalog.forEach((entry) => {
+    const descriptor = buildChainDescriptorFromChainlistEntry(entry);
+    if (!descriptor || extractChainlistRpcUrls(entry).length === 0) {
+      return;
+    }
+
+    const terms = chainlistEntrySearchTerms(entry, descriptor);
+    terms.forEach((term) => {
+      const score = scoreChainSearchTerm(term, normalizedQuery);
+      if (!score) {
+        return;
+      }
+
+      if (
+        !bestMatch ||
+        score.score < bestMatch.score ||
+        (score.score === bestMatch.score && term.length < bestMatch.term.length)
+      ) {
+        bestMatch = {
+          chain: descriptor,
+          entry,
+          term,
+          mode: score.mode,
+          score: score.score
+        };
+      }
+    });
+  });
+
+  return bestMatch;
+}
+
+async function resolveChainlistRequestChain(payload = {}) {
+  const directChainKey = String(payload.chainKey || "").trim();
+  if (directChainKey) {
+    const directMatch =
+      findAvailableChainByKey(directChainKey) ||
+      buildAvailableChains().find((entry) => String(entry.key || "").trim() === directChainKey);
+    if (directMatch) {
+      return {
+        chain: directMatch,
+        chainlistCatalog: null,
+        chainlistEntry: null,
+        resolution: {
+          source: "local",
+          term: normalizeChainSearchQuery(directMatch.label || directMatch.key),
+          mode: "exact"
+        }
+      };
+    }
+  }
+
+  const chainlistCatalog = await fetchChainlistRpcCatalog(Boolean(payload.forceRefresh));
+  const requestedChainId = Number(payload.chainId);
+  if (Number.isFinite(requestedChainId)) {
+    const exactEntry = chainlistCatalog.find((entry) => Number(entry?.chainId) === requestedChainId) || null;
+    if (exactEntry) {
+      return {
+        chain: buildChainDescriptorFromChainlistEntry(exactEntry),
+        chainlistCatalog,
+        chainlistEntry: exactEntry,
+        resolution: {
+          source: "chainlist_id",
+          term: String(requestedChainId),
+          mode: "exact"
+        }
+      };
+    }
+  }
+
+  const query = String(payload.query || payload.chainLabel || payload.chainName || "").trim();
+  if (!query) {
+    throw new Error("Choose a chain before scanning Chainlist RPCs");
+  }
+
+  const match = searchChainlistCatalog(chainlistCatalog, query);
+  if (!match) {
+    throw new Error(
+      `No Chainlist EVM chain matched "${query}". Chainlist only covers EVM-compatible networks, so non-EVM chains like Aptos will not appear.`
+    );
+  }
+
+  return {
+    chain: match.chain,
+    chainlistCatalog,
+    chainlistEntry: match.entry,
+    resolution: {
+      source: "chainlist_search",
+      term: match.term,
+      mode: match.mode
+    }
+  };
+}
+
 function buildUniqueRpcNodeName(desiredName, existingNodes = []) {
   const baseName = String(desiredName || "").trim() || "Custom RPC";
   const takenNames = new Set(existingNodes.map((node) => String(node?.name || "").trim().toLowerCase()));
@@ -589,8 +824,9 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
 
   const resultLimit = Math.min(10, Math.max(1, Number(options.limit || 6)));
   const probeBudget = Math.min(30, Math.max(resultLimit, Number(options.probeBudget || resultLimit * 4)));
-  const chainlistCatalog = await fetchChainlistRpcCatalog(Boolean(options.forceRefresh));
-  const chainlistEntry = findChainlistEntry(chainlistCatalog, chain);
+  const chainlistCatalog =
+    options.chainlistCatalog || (await fetchChainlistRpcCatalog(Boolean(options.forceRefresh)));
+  const chainlistEntry = options.chainlistEntry || findChainlistEntry(chainlistCatalog, chain);
   if (!chainlistEntry) {
     throw new Error(`Chainlist does not currently publish RPCs for ${chain.label}`);
   }
@@ -865,6 +1101,689 @@ async function requestRpcAdvisorBrief({ focusChainKey = "", operatorPrompt = "" 
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function assistantConversationKey(user) {
+  return String(user?.sessionId || user?.id || "local");
+}
+
+function buildAssistantStateSnapshot() {
+  const settings = buildPublicSettings();
+  const telemetry = buildTelemetry();
+
+  return {
+    generatedAt: new Date().toISOString(),
+    settings: {
+      explorerApiKeyConfigured: Boolean(settings.explorerApiKeyConfigured),
+      openaiApiKeyConfigured: Boolean(settings.openaiApiKeyConfigured),
+      queueMode: queueModeEnabled() ? "redis" : "local",
+      operatorAssistantModel
+    },
+    chains: getAvailableChains().map((chain) => ({
+      key: chain.key,
+      label: chain.label,
+      chainId: chain.chainId
+    })),
+    wallets: appState.wallets.map((wallet) => ({
+      id: wallet.id,
+      label: wallet.label,
+      address: wallet.address,
+      addressShort: wallet.addressShort,
+      group: wallet.group,
+      status: wallet.status,
+      source: wallet.source
+    })),
+    rpcNodes: appState.rpcNodes.map((node) => ({
+      id: node.id,
+      name: node.name,
+      chainKey: node.chainKey,
+      chainLabel: chainLabel(node.chainKey),
+      enabled: node.enabled !== false,
+      source: node.source,
+      transport: /^wss?:\/\//i.test(String(node.url || "")) ? "websocket" : "http",
+      url: node.url,
+      health: node.lastHealth?.status || "unknown",
+      latencyMs: node.lastHealth?.latencyMs || null,
+      checkedAt: node.lastHealth?.checkedAt || null
+    })),
+    tasks: appState.tasks.map((task) => {
+      const response = buildTaskResponse(task);
+      const readiness = taskReadiness(task);
+      return {
+        id: response.id,
+        name: response.name,
+        status: response.status,
+        priority: response.priority,
+        health: readiness.health,
+        issues: readiness.issues.slice(0, 4),
+        chainKey: response.chainKey,
+        chainLabel: chainLabel(response.chainKey),
+        contractAddress: response.contractAddress,
+        walletIds: response.walletIds,
+        rpcNodeIds: response.rpcNodeIds,
+        walletCount: response.walletCount,
+        rpcCount: readiness.rpcCount,
+        useSchedule: Boolean(response.useSchedule),
+        waitUntilIso: response.waitUntilIso || "",
+        schedulePending: Boolean(response.schedulePending),
+        autoArm: Boolean(response.autoArm),
+        autoArmPending: Boolean(response.autoArmPending),
+        executionTriggerMode: response.executionTriggerMode || "standard",
+        done: Boolean(response.done),
+        lastRunAt: response.lastRunAt || null,
+        progress: response.progress || null
+      };
+    }),
+    runState: {
+      ...getRunState(),
+      logs: undefined
+    },
+    alerts: telemetry.alerts.slice(0, 8),
+    recentLogs: liveLogs.slice(-16).map((entry) => ({
+      timestamp: entry.timestamp,
+      level: entry.level,
+      taskId: entry.taskId || null,
+      message: entry.message
+    }))
+  };
+}
+
+function normalizeAssistantRef(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveAssistantChainKey(requestedChain = "") {
+  const chains = getAvailableChains();
+  const normalized = normalizeAssistantRef(requestedChain);
+  if (!normalized) {
+    if (chains.length === 1) {
+      return chains[0].key;
+    }
+
+    throw new Error(
+      chains.length
+        ? `Choose a chain before scheduling. Available chains: ${chains.map((chain) => chain.label).join(", ")}.`
+        : "No chains are currently available. Add at least one RPC node first."
+    );
+  }
+
+  const exact =
+    chains.find((chain) => normalizeAssistantRef(chain.key) === normalized) ||
+    chains.find((chain) => normalizeAssistantRef(chain.label) === normalized) ||
+    chains.find((chain) => String(chain.chainId) === normalized);
+
+  if (exact) {
+    return exact.key;
+  }
+
+  throw new Error(
+    `Chain "${requestedChain}" was not recognized. Available chains: ${chains.map((chain) => chain.label).join(", ")}.`
+  );
+}
+
+function resolveAssistantWalletIds(walletRefs = []) {
+  const refs = Array.isArray(walletRefs)
+    ? walletRefs.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+
+  if (refs.length === 0) {
+    if (appState.wallets.length === 1) {
+      return [appState.wallets[0].id];
+    }
+
+    if (appState.wallets.length === 0) {
+      throw new Error("No wallets are loaded. Import a wallet before asking me to mint.");
+    }
+
+    throw new Error(
+      `Multiple wallets are loaded. Tell me which wallet(s) to use: ${appState.wallets
+        .map((wallet) => wallet.label || wallet.addressShort || wallet.address)
+        .join(", ")}.`
+    );
+  }
+
+  const resolvedIds = refs.map((ref) => {
+    const normalized = normalizeAssistantRef(ref);
+    const matches = appState.wallets.filter((wallet) => {
+      return [wallet.id, wallet.label, wallet.address, wallet.addressShort]
+        .filter(Boolean)
+        .some((candidate) => normalizeAssistantRef(candidate) === normalized);
+    });
+
+    if (matches.length === 1) {
+      return matches[0].id;
+    }
+
+    const partialMatches = appState.wallets.filter((wallet) => {
+      return [wallet.id, wallet.label, wallet.address, wallet.addressShort]
+        .filter(Boolean)
+        .some((candidate) => normalizeAssistantRef(candidate).includes(normalized));
+    });
+
+    if (partialMatches.length === 1) {
+      return partialMatches[0].id;
+    }
+
+    if (partialMatches.length > 1) {
+      throw new Error(`Wallet reference "${ref}" is ambiguous. Use one of: ${partialMatches.map((wallet) => wallet.label || wallet.addressShort || wallet.address).join(", ")}.`);
+    }
+
+    throw new Error(`Wallet "${ref}" was not found.`);
+  });
+
+  return [...new Set(resolvedIds)];
+}
+
+function resolveAssistantRpcNodeIds(chainKey, rpcRefs = []) {
+  const refs = Array.isArray(rpcRefs)
+    ? rpcRefs.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  const eligibleNodes = appState.rpcNodes.filter((node) => node.enabled !== false && node.chainKey === chainKey);
+
+  if (refs.length === 0) {
+    return eligibleNodes.map((node) => node.id);
+  }
+
+  const resolvedIds = refs.map((ref) => {
+    const normalized = normalizeAssistantRef(ref);
+    const exact = eligibleNodes.filter((node) => {
+      return [node.id, node.name, node.url]
+        .filter(Boolean)
+        .some((candidate) => normalizeAssistantRef(candidate) === normalized);
+    });
+
+    if (exact.length === 1) {
+      return exact[0].id;
+    }
+
+    const partial = eligibleNodes.filter((node) => {
+      return [node.id, node.name, node.url]
+        .filter(Boolean)
+        .some((candidate) => normalizeAssistantRef(candidate).includes(normalized));
+    });
+
+    if (partial.length === 1) {
+      return partial[0].id;
+    }
+
+    if (partial.length > 1) {
+      throw new Error(`RPC reference "${ref}" is ambiguous on ${chainLabel(chainKey)}.`);
+    }
+
+    throw new Error(`RPC "${ref}" was not found on ${chainLabel(chainKey)}.`);
+  });
+
+  return [...new Set(resolvedIds)];
+}
+
+function resolveAssistantTask(taskRef) {
+  const ref = String(taskRef || "").trim();
+  if (!ref) {
+    throw new Error("Task reference is required.");
+  }
+
+  const normalized = normalizeAssistantRef(ref);
+  const exact =
+    appState.tasks.find((task) => normalizeAssistantRef(task.id) === normalized) ||
+    appState.tasks.find((task) => normalizeAssistantRef(task.name) === normalized);
+  if (exact) {
+    return exact;
+  }
+
+  const partial = appState.tasks.filter((task) => normalizeAssistantRef(task.name).includes(normalized));
+  if (partial.length === 1) {
+    return partial[0];
+  }
+
+  if (partial.length > 1) {
+    throw new Error(`Task reference "${ref}" is ambiguous. Matching tasks: ${partial.map((task) => task.name).join(", ")}.`);
+  }
+
+  throw new Error(`Task "${ref}" was not found.`);
+}
+
+function normalizeAssistantJsonString(value, fallback = "") {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  return JSON.stringify(value);
+}
+
+function buildAssistantTaskPayload(args = {}) {
+  const existingTask = args.taskRef ? resolveAssistantTask(args.taskRef) : null;
+  const chainKey = resolveAssistantChainKey(args.chainKey || existingTask?.chainKey || "");
+  const walletIds = resolveAssistantWalletIds(
+    Array.isArray(args.walletRefs) && args.walletRefs.length > 0 ? args.walletRefs : existingTask?.walletIds || []
+  );
+  const rpcNodeIds = resolveAssistantRpcNodeIds(
+    chainKey,
+    Array.isArray(args.rpcRefs) && args.rpcRefs.length > 0 ? args.rpcRefs : existingTask?.rpcNodeIds || []
+  );
+
+  return {
+    id: existingTask?.id,
+    name: String(args.name || existingTask?.name || "").trim() || `AI Mint ${String(args.contractAddress || existingTask?.contractAddress || "").slice(0, 10)}`,
+    priority: String(args.priority || existingTask?.priority || "standard").trim() || "standard",
+    notes: String(args.notes || existingTask?.notes || "").trim(),
+    tags: Array.isArray(args.tags) ? args.tags : existingTask?.tags || [],
+    contractAddress: String(args.contractAddress || existingTask?.contractAddress || "").trim(),
+    chainKey,
+    quantityPerWallet: Math.max(1, Number(args.quantityPerWallet || existingTask?.quantityPerWallet || 1)),
+    priceEth: String(args.priceEth ?? existingTask?.priceEth ?? "").trim(),
+    abiJson: normalizeAssistantJsonString(args.abiJson, existingTask?.abiJson || ""),
+    platform: String(args.platform || existingTask?.platform || "AI Operator").trim() || "AI Operator",
+    walletIds,
+    rpcNodeIds,
+    mintFunction: String(args.mintFunction ?? existingTask?.mintFunction ?? "").trim(),
+    mintArgs: normalizeAssistantJsonString(args.mintArgs, existingTask?.mintArgs || ""),
+    autoGeneratePhaseTasks: Boolean(args.autoGeneratePhaseTasks),
+    autoArm: Boolean(args.autoArm ?? existingTask?.autoArm ?? true),
+    gasStrategy: String(args.gasStrategy || existingTask?.gasStrategy || "normal").trim() || "normal",
+    gasLimit: String(args.gasLimit ?? existingTask?.gasLimit ?? "").trim(),
+    maxFeeGwei: String(args.maxFeeGwei ?? existingTask?.maxFeeGwei ?? "").trim(),
+    maxPriorityFeeGwei: String(args.maxPriorityFeeGwei ?? existingTask?.maxPriorityFeeGwei ?? "").trim(),
+    simulateTransaction: Boolean(args.simulateTransaction ?? existingTask?.simulateTransaction ?? true),
+    dryRun: Boolean(args.dryRun ?? existingTask?.dryRun ?? false),
+    warmupRpc: Boolean(args.warmupRpc ?? existingTask?.warmupRpc ?? true),
+    multiRpcBroadcast: Boolean(args.multiRpcBroadcast ?? existingTask?.multiRpcBroadcast ?? false),
+    walletMode: String(args.walletMode || existingTask?.walletMode || "parallel").trim() || "parallel",
+    useSchedule: Boolean(args.useSchedule ?? existingTask?.useSchedule ?? false),
+    waitUntilIso: String(args.waitUntilIso ?? existingTask?.waitUntilIso ?? "").trim(),
+    pollIntervalMs: String(args.pollIntervalMs ?? existingTask?.pollIntervalMs ?? "1000").trim() || "1000",
+    txTimeoutMs: String(args.txTimeoutMs ?? existingTask?.txTimeoutMs ?? "").trim(),
+    maxRetries: String(args.maxRetries ?? existingTask?.maxRetries ?? "1").trim() || "1",
+    retryDelayMs: String(args.retryDelayMs ?? existingTask?.retryDelayMs ?? "1000").trim() || "1000",
+    retryWindowMs: String(args.retryWindowMs ?? existingTask?.retryWindowMs ?? "1800000").trim() || "1800000",
+    startJitterMs: String(args.startJitterMs ?? existingTask?.startJitterMs ?? "0").trim() || "0",
+    smartGasReplacement: Boolean(args.smartGasReplacement ?? existingTask?.smartGasReplacement ?? false),
+    replacementBumpPercent: String(
+      args.replacementBumpPercent ?? existingTask?.replacementBumpPercent ?? "12"
+    ).trim() || "12",
+    replacementMaxAttempts: String(
+      args.replacementMaxAttempts ?? existingTask?.replacementMaxAttempts ?? "2"
+    ).trim() || "2",
+    executionTriggerMode:
+      String(args.executionTriggerMode || existingTask?.executionTriggerMode || "standard").trim() || "standard",
+    triggerContractAddress: String(
+      args.triggerContractAddress ?? existingTask?.triggerContractAddress ?? ""
+    ).trim(),
+    triggerEventSignature: String(
+      args.triggerEventSignature ?? existingTask?.triggerEventSignature ?? ""
+    ).trim(),
+    triggerEventCondition: normalizeAssistantJsonString(
+      args.triggerEventCondition,
+      existingTask?.triggerEventCondition || ""
+    ),
+    triggerMempoolSignature: String(
+      args.triggerMempoolSignature ?? existingTask?.triggerMempoolSignature ?? ""
+    ).trim(),
+    triggerBlockNumber: String(args.triggerBlockNumber ?? existingTask?.triggerBlockNumber ?? "").trim(),
+    triggerTimeoutMs: String(args.triggerTimeoutMs ?? existingTask?.triggerTimeoutMs ?? "").trim(),
+    privateRelayEnabled: Boolean(args.privateRelayEnabled ?? existingTask?.privateRelayEnabled ?? false),
+    privateRelayUrl: String(args.privateRelayUrl ?? existingTask?.privateRelayUrl ?? "").trim(),
+    privateRelayMethod:
+      String(args.privateRelayMethod || existingTask?.privateRelayMethod || "eth_sendRawTransaction").trim() ||
+      "eth_sendRawTransaction",
+    privateRelayHeadersJson: normalizeAssistantJsonString(
+      args.privateRelayHeadersJson,
+      existingTask?.privateRelayHeadersJson || ""
+    ),
+    privateRelayOnly: Boolean(args.privateRelayOnly ?? existingTask?.privateRelayOnly ?? false)
+  };
+}
+
+function buildAssistantToolDefinitions() {
+  return [
+    {
+      type: "function",
+      name: "get_dashboard_state",
+      description: "Read the live dashboard state including wallets, RPC nodes, tasks, alerts, and recent logs.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "save_task",
+      description: "Create or update a mint task. Use this when the user wants a task drafted, scheduled, or prepared to mint.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskRef: { type: "string", description: "Existing task id or name to update. Leave empty to create a new task." },
+          name: { type: "string" },
+          contractAddress: { type: "string" },
+          chainKey: { type: "string", description: "Chain key like ethereum, base, base_sepolia, arbitrum, etc." },
+          abiJson: { type: "string", description: "Full contract ABI JSON string." },
+          quantityPerWallet: { type: "integer", minimum: 1 },
+          priceEth: { type: "string" },
+          mintFunction: { type: "string" },
+          mintArgs: { type: "string", description: "JSON string for mint args." },
+          walletRefs: { type: "array", items: { type: "string" } },
+          rpcRefs: { type: "array", items: { type: "string" } },
+          priority: { type: "string", enum: ["standard", "high", "critical"] },
+          notes: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          autoGeneratePhaseTasks: { type: "boolean" },
+          autoArm: { type: "boolean" },
+          useSchedule: { type: "boolean" },
+          waitUntilIso: { type: "string", description: "Scheduled time in ISO-8601 format." },
+          multiRpcBroadcast: { type: "boolean" },
+          warmupRpc: { type: "boolean" },
+          walletMode: { type: "string", enum: ["parallel", "sequential"] },
+          gasStrategy: { type: "string", enum: ["normal", "aggressive", "custom"] },
+          simulateTransaction: { type: "boolean" },
+          dryRun: { type: "boolean" },
+          pollIntervalMs: { type: "integer" },
+          txTimeoutMs: { type: "integer" },
+          maxRetries: { type: "integer" },
+          retryDelayMs: { type: "integer" },
+          retryWindowMs: { type: "integer" },
+          startJitterMs: { type: "integer" },
+          smartGasReplacement: { type: "boolean" },
+          replacementBumpPercent: { type: "integer" },
+          replacementMaxAttempts: { type: "integer" },
+          executionTriggerMode: { type: "string", enum: ["standard", "event", "mempool", "block"] },
+          triggerContractAddress: { type: "string" },
+          triggerEventSignature: { type: "string" },
+          triggerEventCondition: { type: "string" },
+          triggerMempoolSignature: { type: "string" },
+          triggerBlockNumber: { type: "integer" },
+          triggerTimeoutMs: { type: "integer" },
+          privateRelayEnabled: { type: "boolean" },
+          privateRelayUrl: { type: "string" },
+          privateRelayMethod: { type: "string", enum: ["eth_sendRawTransaction", "eth_sendPrivateTransaction"] },
+          privateRelayHeadersJson: { type: "string" },
+          privateRelayOnly: { type: "boolean" }
+        },
+        required: ["contractAddress", "abiJson"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "run_task",
+      description: "Run or queue an existing task immediately.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskRef: { type: "string", description: "Task id or task name." }
+        },
+        required: ["taskRef"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "stop_task",
+      description: "Request stop for a currently running or queued task.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskRef: { type: "string", description: "Task id or task name." }
+        },
+        required: ["taskRef"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "delete_task",
+      description: "Delete a task by id or name.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskRef: { type: "string", description: "Task id or task name." }
+        },
+        required: ["taskRef"],
+        additionalProperties: false
+      }
+    }
+  ];
+}
+
+function extractResponseFunctionCalls(payload = {}) {
+  return Array.isArray(payload.output)
+    ? payload.output
+        .filter((item) => item?.type === "function_call" && item?.name)
+        .map((item) => ({
+          name: item.name,
+          arguments: item.arguments || "{}",
+          callId: item.call_id || item.id
+        }))
+    : [];
+}
+
+async function createOpenAiResponse({
+  apiKey,
+  instructions,
+  input,
+  tools = [],
+  previousResponseId = "",
+  model = operatorAssistantModel
+}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        instructions,
+        previous_response_id: previousResponseId || undefined,
+        input,
+        tools,
+        text: {
+          format: {
+            type: "text"
+          }
+        },
+        max_output_tokens: 1400
+      }),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(
+        payload?.error?.message || payload?.error || `OpenAI request failed with status ${response.status}`
+      );
+    }
+
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("AI operator timed out.");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function executeAssistantToolCall(call) {
+  let parsedArgs = {};
+  try {
+    parsedArgs = JSON.parse(call.arguments || "{}");
+  } catch (error) {
+    return {
+      ok: false,
+      changedState: false,
+      action: `Tool ${call.name} failed`,
+      error: `Tool arguments were invalid JSON: ${formatError(error)}`
+    };
+  }
+
+  try {
+    if (call.name === "get_dashboard_state") {
+      return {
+        ok: true,
+        changedState: false,
+        action: "Read dashboard state",
+        snapshot: buildAssistantStateSnapshot()
+      };
+    }
+
+    if (call.name === "save_task") {
+      const result = await saveTaskPayload(buildAssistantTaskPayload(parsedArgs));
+      return {
+        ok: true,
+        changedState: true,
+        action: result.autoGeneratedPhaseTasks
+          ? `Created ${result.tasks?.length || 0} phase task(s)`
+          : `Saved task ${result.task?.name || ""}`.trim(),
+        result
+      };
+    }
+
+    if (call.name === "run_task") {
+      const task = resolveAssistantTask(parsedArgs.taskRef);
+      const result = await requestTaskRun(task.id);
+      return {
+        ok: true,
+        changedState: true,
+        action: `Run requested for ${task.name}`,
+        result: {
+          taskId: task.id,
+          taskName: task.name,
+          ...result
+        }
+      };
+    }
+
+    if (call.name === "stop_task") {
+      const task = resolveAssistantTask(parsedArgs.taskRef);
+      const result = await requestTaskStop(task.id);
+      return {
+        ok: true,
+        changedState: true,
+        action: `Stop requested for ${task.name}`,
+        result: {
+          taskId: task.id,
+          taskName: task.name,
+          ...result
+        }
+      };
+    }
+
+    if (call.name === "delete_task") {
+      const task = resolveAssistantTask(parsedArgs.taskRef);
+      const result = await deleteTaskById(task.id);
+      return {
+        ok: true,
+        changedState: true,
+        action: `Deleted task ${task.name}`,
+        result: {
+          taskId: task.id,
+          taskName: task.name,
+          ...result
+        }
+      };
+    }
+
+    return {
+      ok: false,
+      changedState: false,
+      action: `Tool ${call.name} is unavailable`,
+      error: `Unknown tool: ${call.name}`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      changedState: false,
+      action: `Tool ${call.name} failed`,
+      error: formatError(error)
+    };
+  }
+}
+
+async function requestOperatorAssistantReply({ message, previousResponseId = "" }) {
+  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+  const apiKey = String(resolvedSecrets.openaiApiKey || "").trim();
+  if (!apiKey) {
+    throw new Error("Add an OpenAI API key in Settings or OPENAI_API_KEY in .env to enable the AI operator.");
+  }
+
+  const instructions = [
+    "You are MintBot Operator, a floating in-app AI assistant with authenticated live control over the mint dashboard.",
+    "You can inspect the live dashboard state and use tools to create, update, schedule, run, stop, and delete tasks.",
+    "Use tools whenever the user asks about current app state or wants actions performed.",
+    "When the user gives a contract address plus ABI and asks to schedule or mint, create a real task instead of only explaining.",
+    "Be concise, operational, and explicit about what changed.",
+    "Do not invent wallets, RPC nodes, or chains. If wallet choice or chain choice is ambiguous, ask a brief clarifying question.",
+    "Default behavior: if exactly one wallet exists, you may use it automatically. If multiple wallets exist and none are specified, ask which one to use.",
+    "You may use all enabled RPC nodes on the chosen chain by default.",
+    "For destructive actions like deleting a task, only do it when the user clearly asked.",
+    "Assume the app's validation rules are authoritative. If a tool fails, explain the actual failure and what the user needs to fix."
+  ].join(" ");
+
+  const tools = buildAssistantToolDefinitions();
+  const actionLog = [];
+  let changedState = false;
+  let responsePayload = await createOpenAiResponse({
+    apiKey,
+    instructions,
+    previousResponseId,
+    input: [
+      {
+        role: "user",
+        content: [{ type: "input_text", text: String(message || "").trim() }]
+      }
+    ],
+    tools
+  });
+
+  for (let step = 0; step < 8; step += 1) {
+    const calls = extractResponseFunctionCalls(responsePayload);
+    if (calls.length === 0) {
+      break;
+    }
+
+    const toolOutputs = [];
+    for (const call of calls) {
+      const result = await executeAssistantToolCall(call);
+      if (result.action) {
+        actionLog.push(result.action);
+      }
+      changedState = changedState || Boolean(result.changedState);
+      toolOutputs.push({
+        type: "function_call_output",
+        call_id: call.callId,
+        output: JSON.stringify(result)
+      });
+    }
+
+    responsePayload = await createOpenAiResponse({
+      apiKey,
+      instructions,
+      previousResponseId: responsePayload.id || previousResponseId,
+      input: toolOutputs,
+      tools
+    });
+  }
+
+  const reply =
+    extractOpenAiResponseText(responsePayload) ||
+    (actionLog.length ? `Completed: ${actionLog.join("; ")}.` : "I reviewed the request, but I do not have a text reply yet.");
+
+  return {
+    reply,
+    responseId: responsePayload.id || previousResponseId,
+    changedState,
+    actions: actionLog
+  };
 }
 
 async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
@@ -3358,7 +4277,10 @@ async function reloadIntegrationSecrets() {
 }
 
 function buildPublicSettings() {
-  return buildClientSettings(appState?.settings, integrationSecrets);
+  return {
+    ...buildClientSettings(appState?.settings, integrationSecrets),
+    operatorAssistantModel
+  };
 }
 
 function extractPersistentState() {
@@ -4733,224 +5655,232 @@ function handleStopRun(response) {
   sendJson(response, 200, { ok: true, stoppedTaskIds: activeTaskIds });
 }
 
-function handleTaskStop(taskId, response) {
+async function requestTaskStop(taskId) {
   const task = getTaskById(taskId);
   if (!task) {
-    sendJson(response, 404, { error: "Task not found" });
-    return;
+    throw createHttpError("Task not found", 404);
   }
 
   if (queueModeEnabled()) {
-    if (!isTaskActive(taskId)) {
-      sendJson(response, 409, { error: "Task is not running" });
-      return;
+    if (distributedQueuedTaskIds.has(taskId)) {
+      await queueCoordinator.removeQueuedTask(taskId);
+      distributedQueuedTaskIds.delete(taskId);
+      clearDistributedTaskPatch(taskId);
+      await setTaskRuntimeRecord(taskId, {
+        status: "stopped",
+        progress: {
+          phase: "Queue cancelled",
+          percent: 0
+        },
+        summary: createEmptySummary((task.walletIds || []).length),
+        active: false,
+        queued: false,
+        error: null,
+        workerId: null,
+        startedAt: null,
+        lastRunAt: new Date().toISOString()
+      });
+      emitState();
+      return { ok: true, taskId, cancelledQueue: true };
     }
 
-    queueCoordinator
-      .requestStop(taskId)
-      .then(() => {
-        setDistributedTaskPatch(taskId, {
-          progress: {
-            phase: "Stop requested",
-            percent: Math.max(
-              distributedTaskPatches.get(taskId)?.progress?.percent || 0,
-              10
-            )
-          }
-        });
-        emitState();
-        sendJson(response, 200, { ok: true, taskId });
-      })
-      .catch((error) => {
-        sendJson(response, 400, { error: formatError(error) });
-      });
-    return;
+    if (!isTaskActive(taskId)) {
+      throw createHttpError("Task is not running", 409);
+    }
+
+    await queueCoordinator.requestStop(taskId);
+    setDistributedTaskPatch(taskId, {
+      progress: {
+        phase: "Stop requested",
+        percent: Math.max(
+          distributedTaskPatches.get(taskId)?.progress?.percent || 0,
+          10
+        )
+      }
+    });
+    emitState();
+    return { ok: true, taskId };
   }
 
   const runContext = localTaskRuns.get(taskId);
   if (!runContext) {
-    sendJson(response, 409, { error: "Task is not running" });
-    return;
+    throw createHttpError("Task is not running", 409);
   }
 
   runContext.controller.abort();
-  sendJson(response, 200, { ok: true, taskId });
+  return { ok: true, taskId };
 }
 
-async function handleTaskSave(request, response) {
-  try {
-    const payload = await readJsonBody(request);
-    const existingTask = payload.id ? getTaskById(payload.id) : null;
-    const task = sanitizeTaskInput(payload, existingTask);
-    let abiEntries = null;
+function validateAndPrepareTask(task, existingTask, payload) {
+  let abiEntries = null;
 
-    if (!task.contractAddress) {
-      throw new Error("Contract address is required");
-    }
-
-    if (!task.abiJson) {
-      throw new Error("ABI JSON is required");
-    }
-
-    try {
-      abiEntries = parseTaskAbiEntries(task.abiJson);
-    } catch (error) {
-      throw new Error(`ABI JSON is invalid: ${formatError(error)}`);
-    }
-
-    const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, task.mintFunction);
-    task.mintFunction = resolvedMintFunction.mintFunction;
-    if (!task.mintFunction || !abiFunctionNameMap(abiEntries).has(task.mintFunction.toLowerCase())) {
-      throw new Error(
-        `Mint function "${task.mintFunction || "(empty)"}" was not found in the ABI. ${describeMintFunctionDetection(
-          abiEntries,
-          resolvedMintFunction.detectedFunctions
-        )}.`
-      );
-    }
-
-    if ((task.walletIds || []).length === 0) {
-      throw new Error("Select at least one wallet");
-    }
-
-    if (task.useSchedule) {
-      if (!task.waitUntilIso) {
-        throw new Error("Start time is required when schedule is enabled");
-      }
-
-      const scheduledAt = new Date(task.waitUntilIso);
-      if (Number.isNaN(scheduledAt.getTime())) {
-        throw new Error("Scheduled start time is invalid");
-      }
-    }
-
-    const retryWindowMs = Number(task.retryWindowMs || 0);
-    if (!Number.isInteger(retryWindowMs) || retryWindowMs < 0) {
-      throw new Error("Retry window must be a whole number of milliseconds");
-    }
-
-    if (task.transferAfterMinted) {
-      if (!task.transferAddress) {
-        throw new Error("Transfer address is required when transfer-after-minted is enabled");
-      }
-
-      if (!ethers.isAddress(task.transferAddress)) {
-        throw new Error("Transfer address must be a valid EVM address");
-      }
-    }
-
-    if (task.smartGasReplacement && !task.txTimeoutMs) {
-      throw new Error("Receipt timeout is required when smart gas replacement is enabled");
-    }
-
-    if (task.privateRelayEnabled && !task.privateRelayUrl) {
-      throw new Error("Private relay URL is required when private relay mode is enabled");
-    }
-
-    if (task.privateRelayHeadersJson) {
-      let parsedHeaders;
-      try {
-        parsedHeaders = JSON.parse(task.privateRelayHeadersJson);
-      } catch (error) {
-        throw new Error(`Private relay headers JSON is invalid: ${formatError(error)}`);
-      }
-
-      if (!parsedHeaders || typeof parsedHeaders !== "object" || Array.isArray(parsedHeaders)) {
-        throw new Error("Private relay headers must be a JSON object");
-      }
-
-      if (Object.values(parsedHeaders).some((value) => typeof value !== "string")) {
-        throw new Error("Private relay header values must all be strings");
-      }
-    }
-
-    if (task.triggerContractAddress && !ethers.isAddress(task.triggerContractAddress)) {
-      throw new Error("Trigger contract address must be a valid EVM address");
-    }
-
-    if (task.executionTriggerMode === "event" && !task.triggerEventSignature) {
-      throw new Error("Event signature is required for event-driven execution");
-    }
-
-    if (task.executionTriggerMode === "block") {
-      const triggerBlockNumber = Number(task.triggerBlockNumber);
-      if (!Number.isInteger(triggerBlockNumber) || triggerBlockNumber < 1) {
-        throw new Error("Target block must be a positive whole number for block-driven execution");
-      }
-    }
-
-    if (task.executionTriggerMode === "mempool") {
-      const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
-      const configuredRpcNodes = appState.rpcNodes.filter(
-        (node) =>
-          node.enabled &&
-          node.chainKey === task.chainKey &&
-          (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
-      );
-
-      if (
-        !configuredRpcNodes.some((node) => /^wss?:\/\//i.test(String(node.url || "")))
-      ) {
-        throw new Error(
-          "Mempool execution requires at least one enabled ws:// or wss:// RPC URL for the selected chain"
-        );
-      }
-    }
-
-    const preparedTask = applyTaskAutoLaunchState(task, abiEntries);
-
-    const autoGeneratePhaseTasks = !existingTask && Boolean(payload.autoGeneratePhaseTasks);
-    if (autoGeneratePhaseTasks) {
-      const generatedTasks = await buildPhaseTasksFromTask(preparedTask, abiEntries);
-      if (generatedTasks.length > 0) {
-        appState.tasks = [...generatedTasks, ...appState.tasks];
-        await persistAppState();
-        await scanAndRunAutomaticTasks();
-        emitState();
-        sendJson(response, 200, {
-          ok: true,
-          task: buildTaskResponse(getTaskById(generatedTasks[0].id) || generatedTasks[0]),
-          tasks: generatedTasks.map((entry) => buildTaskResponse(getTaskById(entry.id) || entry)),
-          autoGeneratedPhaseTasks: true
-        });
-        return;
-      }
-    }
-
-    if (existingTask) {
-      const index = appState.tasks.findIndex((entry) => entry.id === task.id);
-      appState.tasks[index] = preparedTask;
-    } else {
-      appState.tasks.unshift(preparedTask);
-    }
-
-    await persistAppState();
-    await scanAndRunAutomaticTasks();
-    emitState();
-    sendJson(response, 200, {
-      ok: true,
-      task: buildTaskResponse(getTaskById(preparedTask.id) || preparedTask)
-    });
-  } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+  if (!task.contractAddress) {
+    throw new Error("Contract address is required");
   }
+
+  if (!task.abiJson) {
+    throw new Error("ABI JSON is required");
+  }
+
+  try {
+    abiEntries = parseTaskAbiEntries(task.abiJson);
+  } catch (error) {
+    throw new Error(`ABI JSON is invalid: ${formatError(error)}`);
+  }
+
+  const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, task.mintFunction);
+  task.mintFunction = resolvedMintFunction.mintFunction;
+  if (!task.mintFunction || !abiFunctionNameMap(abiEntries).has(task.mintFunction.toLowerCase())) {
+    throw new Error(
+      `Mint function "${task.mintFunction || "(empty)"}" was not found in the ABI. ${describeMintFunctionDetection(
+        abiEntries,
+        resolvedMintFunction.detectedFunctions
+      )}.`
+    );
+  }
+
+  if ((task.walletIds || []).length === 0) {
+    throw new Error("Select at least one wallet");
+  }
+
+  if (task.useSchedule) {
+    if (!task.waitUntilIso) {
+      throw new Error("Start time is required when schedule is enabled");
+    }
+
+    const scheduledAt = new Date(task.waitUntilIso);
+    if (Number.isNaN(scheduledAt.getTime())) {
+      throw new Error("Scheduled start time is invalid");
+    }
+  }
+
+  const retryWindowMs = Number(task.retryWindowMs || 0);
+  if (!Number.isInteger(retryWindowMs) || retryWindowMs < 0) {
+    throw new Error("Retry window must be a whole number of milliseconds");
+  }
+
+  if (task.transferAfterMinted) {
+    if (!task.transferAddress) {
+      throw new Error("Transfer address is required when transfer-after-minted is enabled");
+    }
+
+    if (!ethers.isAddress(task.transferAddress)) {
+      throw new Error("Transfer address must be a valid EVM address");
+    }
+  }
+
+  if (task.smartGasReplacement && !task.txTimeoutMs) {
+    throw new Error("Receipt timeout is required when smart gas replacement is enabled");
+  }
+
+  if (task.privateRelayEnabled && !task.privateRelayUrl) {
+    throw new Error("Private relay URL is required when private relay mode is enabled");
+  }
+
+  if (task.privateRelayHeadersJson) {
+    let parsedHeaders;
+    try {
+      parsedHeaders = JSON.parse(task.privateRelayHeadersJson);
+    } catch (error) {
+      throw new Error(`Private relay headers JSON is invalid: ${formatError(error)}`);
+    }
+
+    if (!parsedHeaders || typeof parsedHeaders !== "object" || Array.isArray(parsedHeaders)) {
+      throw new Error("Private relay headers must be a JSON object");
+    }
+
+    if (Object.values(parsedHeaders).some((value) => typeof value !== "string")) {
+      throw new Error("Private relay header values must all be strings");
+    }
+  }
+
+  if (task.triggerContractAddress && !ethers.isAddress(task.triggerContractAddress)) {
+    throw new Error("Trigger contract address must be a valid EVM address");
+  }
+
+  if (task.executionTriggerMode === "event" && !task.triggerEventSignature) {
+    throw new Error("Event signature is required for event-driven execution");
+  }
+
+  if (task.executionTriggerMode === "block") {
+    const triggerBlockNumber = Number(task.triggerBlockNumber);
+    if (!Number.isInteger(triggerBlockNumber) || triggerBlockNumber < 1) {
+      throw new Error("Target block must be a positive whole number for block-driven execution");
+    }
+  }
+
+  if (task.executionTriggerMode === "mempool") {
+    const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+    const configuredRpcNodes = appState.rpcNodes.filter(
+      (node) =>
+        node.enabled &&
+        node.chainKey === task.chainKey &&
+        (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+    );
+
+    if (!configuredRpcNodes.some((node) => /^wss?:\/\//i.test(String(node.url || "")))) {
+      throw new Error(
+        "Mempool execution requires at least one enabled ws:// or wss:// RPC URL for the selected chain"
+      );
+    }
+  }
+
+  return {
+    abiEntries,
+    preparedTask: applyTaskAutoLaunchState(task, abiEntries),
+    autoGeneratePhaseTasks: !existingTask && Boolean(payload.autoGeneratePhaseTasks)
+  };
 }
 
-async function handleTaskDelete(taskId, response) {
+async function saveTaskPayload(payload) {
+  const existingTask = payload.id ? getTaskById(payload.id) : null;
+  const task = sanitizeTaskInput(payload, existingTask);
+  const { abiEntries, preparedTask, autoGeneratePhaseTasks } = validateAndPrepareTask(
+    task,
+    existingTask,
+    payload
+  );
+
+  if (autoGeneratePhaseTasks) {
+    const generatedTasks = await buildPhaseTasksFromTask(preparedTask, abiEntries);
+    if (generatedTasks.length > 0) {
+      appState.tasks = [...generatedTasks, ...appState.tasks];
+      await persistAppState();
+      await scanAndRunAutomaticTasks();
+      emitState();
+      return {
+        ok: true,
+        task: buildTaskResponse(getTaskById(generatedTasks[0].id) || generatedTasks[0]),
+        tasks: generatedTasks.map((entry) => buildTaskResponse(getTaskById(entry.id) || entry)),
+        autoGeneratedPhaseTasks: true
+      };
+    }
+  }
+
+  if (existingTask) {
+    const index = appState.tasks.findIndex((entry) => entry.id === task.id);
+    appState.tasks[index] = preparedTask;
+  } else {
+    appState.tasks.unshift(preparedTask);
+  }
+
+  await persistAppState();
+  await scanAndRunAutomaticTasks();
+  emitState();
+  return {
+    ok: true,
+    task: buildTaskResponse(getTaskById(preparedTask.id) || preparedTask)
+  };
+}
+
+async function deleteTaskById(taskId) {
   const currentRunState = getRunState();
   if ((currentRunState.activeTaskIds || []).includes(taskId)) {
-    sendJson(response, 409, { error: "Stop the running task before deleting it" });
-    return;
+    throw createHttpError("Stop the running task before deleting it", 409);
   }
 
   if (queueModeEnabled() && distributedQueuedTaskIds.has(taskId)) {
-    try {
-      await queueCoordinator.removeQueuedTask(taskId);
-    } catch (error) {
-      sendJson(response, 400, { error: formatError(error) });
-      return;
-    }
-
+    await queueCoordinator.removeQueuedTask(taskId);
     distributedQueuedTaskIds.delete(taskId);
     clearDistributedTaskPatch(taskId);
   }
@@ -4959,8 +5889,7 @@ async function handleTaskDelete(taskId, response) {
   appState.tasks = appState.tasks.filter((task) => task.id !== taskId);
 
   if (appState.tasks.length === before) {
-    sendJson(response, 404, { error: "Task not found" });
-    return;
+    throw createHttpError("Task not found", 404);
   }
 
   await persistAppState();
@@ -4973,7 +5902,35 @@ async function handleTaskDelete(taskId, response) {
   }
   clearDistributedTaskPatch(taskId);
   emitState();
-  sendJson(response, 200, { ok: true });
+  return { ok: true };
+}
+
+async function handleTaskStop(taskId, response) {
+  try {
+    const payload = await requestTaskStop(taskId);
+    sendJson(response, 200, payload);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
+  }
+}
+
+async function handleTaskSave(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const result = await saveTaskPayload(payload);
+    sendJson(response, 200, result);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
+  }
+}
+
+async function handleTaskDelete(taskId, response) {
+  try {
+    const result = await deleteTaskById(taskId);
+    sendJson(response, 200, result);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
+  }
 }
 
 async function handleTaskDone(taskId, response) {
@@ -5130,11 +6087,15 @@ async function handleRpcSave(request, response) {
 async function handleChainlistRpcImport(request, response) {
   try {
     const payload = await readJsonBody(request);
-    const chain = findAvailableChainByKey(payload.chainKey);
+    const resolvedChain = await resolveChainlistRequestChain(payload);
+    const chain = resolvedChain.chain;
     const importLimit = Math.min(10, Math.max(1, Number(payload.limit || 5)));
     const preview = await collectChainlistRpcCandidates(chain, {
       limit: importLimit,
-      probeBudget: Math.max(importLimit * 4, importLimit)
+      probeBudget: Math.max(importLimit * 4, importLimit),
+      forceRefresh: payload.forceRefresh,
+      chainlistCatalog: resolvedChain.chainlistCatalog,
+      chainlistEntry: resolvedChain.chainlistEntry
     });
     const importableNodes = preview.candidates.filter((node) => node.lastHealth?.status === "healthy");
 
@@ -5188,11 +6149,14 @@ async function handleChainlistRpcImport(request, response) {
 async function handleChainlistRpcCandidates(request, response) {
   try {
     const payload = await readJsonBody(request);
-    const chain = findAvailableChainByKey(payload.chainKey);
+    const resolvedChain = await resolveChainlistRequestChain(payload);
+    const chain = resolvedChain.chain;
     const preview = await collectChainlistRpcCandidates(chain, {
       limit: payload.limit,
       probeBudget: payload.probeBudget,
-      forceRefresh: payload.forceRefresh
+      forceRefresh: payload.forceRefresh,
+      chainlistCatalog: resolvedChain.chainlistCatalog,
+      chainlistEntry: resolvedChain.chainlistEntry
     });
 
     sendJson(response, 200, {
@@ -5202,6 +6166,7 @@ async function handleChainlistRpcCandidates(request, response) {
         label: preview.chain.label,
         chainId: preview.chain.chainId
       },
+      resolution: resolvedChain.resolution,
       published: preview.publishedCount,
       skippedExisting: preview.skippedExistingCount,
       skippedProbeBudget: preview.skippedProbeBudgetCount,
@@ -5275,6 +6240,53 @@ async function handleRpcAiAdvice(request, response) {
     });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleAssistantChat(request, response) {
+  try {
+    const user = await getAuthenticatedUser(request);
+    const payload = await readJsonBody(request);
+    const conversationKey = assistantConversationKey(user);
+
+    if (payload.reset) {
+      assistantConversations.delete(conversationKey);
+      if (!String(payload.message || "").trim()) {
+        sendJson(response, 200, {
+          ok: true,
+          reset: true,
+          changedState: false,
+          reply: "Conversation reset. I’m ready for a new task."
+        });
+        return;
+      }
+    }
+
+    const message = String(payload.message || "").trim();
+    if (!message) {
+      throw new Error("Message is required");
+    }
+
+    const conversation = assistantConversations.get(conversationKey) || null;
+    const result = await requestOperatorAssistantReply({
+      message,
+      previousResponseId: conversation?.previousResponseId || ""
+    });
+
+    assistantConversations.set(conversationKey, {
+      previousResponseId: result.responseId || "",
+      updatedAt: new Date().toISOString()
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      reply: result.reply,
+      actions: result.actions || [],
+      changedState: Boolean(result.changedState),
+      model: operatorAssistantModel
+    });
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
@@ -5869,7 +6881,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && route[0] === "api" && route[1] === "tasks" && route[3] === "stop") {
-      handleTaskStop(route[2], response);
+      await handleTaskStop(route[2], response);
       return;
     }
 
@@ -5935,6 +6947,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/rpc-nodes/ai-advice") {
       await handleRpcAiAdvice(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/assistant/chat") {
+      await handleAssistantChat(request, response);
       return;
     }
 
