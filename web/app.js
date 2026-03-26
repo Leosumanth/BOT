@@ -134,6 +134,7 @@ const assistantResetButton = document.getElementById("assistant-reset-button");
 const assistantMessages = document.getElementById("assistant-messages");
 const assistantForm = document.getElementById("assistant-form");
 const assistantInput = document.getElementById("assistant-input");
+const assistantStopButton = document.getElementById("assistant-stop-button");
 const assistantSendButton = document.getElementById("assistant-send-button");
 
 const taskModal = document.getElementById("task-modal");
@@ -268,6 +269,8 @@ let assistantState = {
   loading: false,
   messages: []
 };
+let assistantRequestController = null;
+let assistantRequestToken = 0;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1024,7 +1027,8 @@ function showToast(message, tone = "info", title = null) {
 }
 
 function assistantModelLabel() {
-  return state.settings.operatorAssistantModel || state.settings.openaiRpcAdvisorModel || "OpenAI";
+  const model = state.settings.operatorAssistantModel || state.settings.openaiRpcAdvisorModel || "OpenAI";
+  return /^gpt-5-mini(?:-|$)/i.test(String(model || "").trim()) ? "gpt-5-mini" : model;
 }
 
 function assistantAvailability() {
@@ -1051,9 +1055,9 @@ function assistantAvailability() {
   return {
     ready: true,
     fab: `Ready via ${assistantModelLabel()}`,
-    status: `Live via ${assistantModelLabel()}. Ask about the app, or tell me to create, schedule, run, stop, or delete tasks.`,
-    emptyTitle: "Ask Operator AI",
-    emptyCopy: "Paste a contract plus ABI and tell me to schedule or run a mint, or ask questions about the current dashboard state."
+    status: `Live via ${assistantModelLabel()}.`,
+    emptyTitle: "",
+    emptyCopy: ""
   };
 }
 
@@ -1087,6 +1091,8 @@ function renderAssistant() {
   assistantPanel.classList.toggle("open", panelOpen);
 
   assistantInput.disabled = assistantState.loading || !availability.ready;
+  assistantStopButton.classList.toggle("hidden", !assistantState.loading);
+  assistantStopButton.disabled = !assistantState.loading;
   assistantSendButton.disabled =
     assistantState.loading || !availability.ready || !assistantInput.value.trim();
   assistantResetButton.disabled = assistantState.loading;
@@ -1102,12 +1108,7 @@ function renderAssistant() {
   }
 
   if (!assistantState.messages.length && !assistantState.loading) {
-    assistantMessages.innerHTML = `
-      <div class="assistant-empty-state">
-        <h4>${escapeHtml(availability.emptyTitle)}</h4>
-        <p>${escapeHtml(availability.emptyCopy)}</p>
-      </div>
-    `;
+    assistantMessages.innerHTML = "";
     return;
   }
 
@@ -1165,6 +1166,31 @@ function toggleAssistantPanel(forceOpen = !assistantState.open) {
   }
 }
 
+function stopAssistantMessage(options = {}) {
+  if (!assistantState.loading) {
+    return;
+  }
+
+  const { notify = true } = options;
+  assistantRequestToken += 1;
+
+  if (assistantRequestController) {
+    assistantRequestController.abort();
+    assistantRequestController = null;
+  }
+
+  assistantState.loading = false;
+  renderAssistant();
+
+  if (notify) {
+    showToast("Operator AI response stopped.", "info", "AI Operator");
+  }
+
+  if (!assistantInput.disabled) {
+    assistantInput.focus();
+  }
+}
+
 async function resetAssistantConversation(options = {}) {
   if (assistantState.loading) {
     return;
@@ -1217,6 +1243,10 @@ async function sendAssistantMessage() {
   assistantInput.value = "";
   renderAssistant();
 
+  const requestToken = ++assistantRequestToken;
+  const controller = new AbortController();
+  assistantRequestController = controller;
+
   try {
     const payload = await request("/api/assistant/chat", {
       method: "POST",
@@ -1224,8 +1254,14 @@ async function sendAssistantMessage() {
       body: JSON.stringify({
         message,
         reset: shouldResetConversation
-      })
+      }),
+      quiet: true,
+      signal: controller.signal
     });
+
+    if (requestToken !== assistantRequestToken) {
+      return;
+    }
 
     assistantState.messages = [
       ...assistantState.messages,
@@ -1242,6 +1278,10 @@ async function sendAssistantMessage() {
       showToast("Operator AI updated the app state.", "success", "AI Operator");
     }
   } catch (error) {
+    if (error.name === "AbortError" || requestToken !== assistantRequestToken) {
+      return;
+    }
+
     assistantState.messages = [
       ...assistantState.messages,
       {
@@ -1251,6 +1291,11 @@ async function sendAssistantMessage() {
       }
     ];
   } finally {
+    if (requestToken !== assistantRequestToken) {
+      return;
+    }
+
+    assistantRequestController = null;
     assistantState.loading = false;
     renderAssistant();
     if (!assistantInput.disabled) {
@@ -5000,6 +5045,10 @@ assistantCloseButton.addEventListener("click", () => {
 
 assistantResetButton.addEventListener("click", async () => {
   await resetAssistantConversation();
+});
+
+assistantStopButton.addEventListener("click", () => {
+  stopAssistantMessage();
 });
 
 assistantInput.addEventListener("input", () => {

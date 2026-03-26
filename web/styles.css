@@ -1964,11 +1964,12 @@ select:focus {
 
 .assistant-root {
   position: fixed;
-  right: 20px;
+  left: calc(320px + 36px);
   bottom: 20px;
+  right: auto;
   z-index: 95;
   display: grid;
-  justify-items: end;
+  justify-items: start;
   gap: 14px;
   pointer-events: none;
 }
@@ -2031,8 +2032,9 @@ select:focus {
 
 .assistant-panel {
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 14px);
+  right: auto;
   width: min(430px, calc(100vw - 32px));
   max-height: min(78vh, 760px);
   border-radius: 30px;
@@ -2070,6 +2072,10 @@ select:focus {
   gap: 16px;
   border-bottom: 1px solid rgba(124, 223, 255, 0.1);
   background: linear-gradient(180deg, rgba(113, 224, 255, 0.05), transparent);
+}
+
+.assistant-panel-header .helper-copy:empty {
+  display: none;
 }
 
 .assistant-panel-header h3 {
@@ -2465,9 +2471,9 @@ body[data-auth-state="locked"] .assistant-root {
   }
 
   .assistant-root {
+    left: 14px;
     right: 14px;
     bottom: 14px;
-    left: 14px;
     justify-items: stretch;
   }
 
@@ -2479,6 +2485,8 @@ body[data-auth-state="locked"] .assistant-root {
   .assistant-panel {
     width: 100%;
     max-height: min(72vh, 640px);
+    left: 0;
+    right: 0;
   }
 
   .assistant-panel-header,

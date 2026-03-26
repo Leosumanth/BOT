@@ -524,7 +524,7 @@
         <span class="assistant-fab-mark">AI</span>
         <span class="assistant-fab-copy">
           <strong>Operator AI</strong>
-          <span id="assistant-fab-status">Ask questions or automate tasks</span>
+          <span id="assistant-fab-status">Ready via gpt-5-mini</span>
         </span>
       </button>
 
@@ -533,9 +533,7 @@
           <div>
             <p class="eyebrow">Live Assistant</p>
             <h3>Operator AI</h3>
-            <p id="assistant-status" class="helper-copy">
-              Ask about the app, or paste a contract plus ABI and tell me what to do.
-            </p>
+            <p id="assistant-status" class="helper-copy"></p>
           </div>
           <div class="assistant-panel-actions">
             <button id="assistant-reset-button" class="ghost-button fx-button" type="button">Reset</button>
@@ -551,10 +549,11 @@
             <textarea
               id="assistant-input"
               rows="4"
-              placeholder="Example: Use contract 0x... on Base, this ABI, schedule the mint for 7:00 PM, and run it with my main wallet."
+              placeholder="Send a message to Operator AI"
             ></textarea>
           </label>
           <div class="assistant-composer-actions">
+            <button id="assistant-stop-button" class="ghost-button fx-button hidden" type="button">Stop</button>
             <button id="assistant-send-button" class="primary-button fx-button" type="submit">Send</button>
           </div>
         </form>
