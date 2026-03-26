@@ -93,6 +93,7 @@ const distributedQueuedTaskIds = new Set();
 const distributedTaskPatches = new Map();
 let scheduledTaskLoop = null;
 let scheduledTaskScanInFlight = false;
+let shutdownPromise = null;
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -4968,11 +4969,86 @@ async function startServer() {
     server.once("error", onError);
     server.listen(port, host, () => {
       server.off("error", onError);
-      console.log(`Mint dashboard running at http://${host}:${port}`);
+      const address = server.address();
+      const boundPort =
+        address && typeof address === "object" && "port" in address ? address.port : port;
+      console.log(`Mint dashboard running at http://${host}:${boundPort}`);
       resolve(server);
     });
   });
 }
+
+async function cleanupServerResources() {
+  if (shutdownPromise) {
+    return shutdownPromise;
+  }
+
+  shutdownPromise = (async () => {
+    if (scheduledTaskLoop) {
+      clearInterval(scheduledTaskLoop);
+      scheduledTaskLoop = null;
+    }
+    scheduledTaskScanInFlight = false;
+
+    const coordinatorToClose = queueCoordinator;
+    const databaseToClose = database;
+
+    queueCoordinator = null;
+    database = null;
+    initialized = false;
+
+    distributedRunState = createIdleRunState(getQueueConfig());
+    distributedQueuedTaskIds.clear();
+    distributedTaskPatches.clear();
+
+    const shutdownErrors = [];
+
+    if (coordinatorToClose?.close) {
+      try {
+        await coordinatorToClose.close();
+      } catch (error) {
+        shutdownErrors.push(error);
+      }
+    }
+
+    if (databaseToClose?.close) {
+      try {
+        await databaseToClose.close();
+      } catch (error) {
+        shutdownErrors.push(error);
+      }
+    }
+
+    if (shutdownErrors.length > 0) {
+      throw shutdownErrors[0];
+    }
+  })().finally(() => {
+    shutdownPromise = null;
+  });
+
+  return shutdownPromise;
+}
+
+async function stopServer() {
+  if (server.listening) {
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  }
+
+  await cleanupServerResources();
+}
+
+server.on("close", () => {
+  void cleanupServerResources().catch(reportBackgroundError);
+});
 
 if (require.main === module) {
   startServer().catch((error) => {
@@ -4985,5 +5061,6 @@ if (require.main === module) {
 module.exports = {
   resolveHost,
   resolvePort,
-  startServer
+  startServer,
+  stopServer
 };

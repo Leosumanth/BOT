@@ -1,4 +1,4 @@
-const { startServer, resolveHost, resolvePort } = require("./dashboard-server");
+const { startServer, stopServer, resolveHost, resolvePort } = require("./dashboard-server");
 
 if (require.main === module) {
   startServer().catch((error) => {
@@ -11,5 +11,6 @@ if (require.main === module) {
 module.exports = {
   resolveHost,
   resolvePort,
-  startServer
+  startServer,
+  stopServer
 };
