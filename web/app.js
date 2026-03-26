@@ -2750,6 +2750,7 @@ async function runRpcDiscoveryScan(options = {}) {
       match,
       candidates,
       selectedUrls: selectedUrls.length > 0 ? selectedUrls : healthyUrls,
+      transportFilter,
       loading: false,
       summary: payload,
       error: ""
