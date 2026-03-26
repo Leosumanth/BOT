@@ -36,11 +36,29 @@ const scheduledTaskPollIntervalMs = Math.max(
   1000,
   Number(process.env.SCHEDULE_POLL_INTERVAL_MS || 1000)
 );
-const chainlistRpcCatalogUrl =
-  process.env.CHAINLIST_RPC_CATALOG_URL || "https://chainlist.org/rpcs.json";
+const defaultChainlistRpcCatalogUrls = [
+  "https://chainlist.org/rpcs.json",
+  "https://chainid.network/chains.json"
+];
+const chainlistRpcCatalogUrls = [
+  ...new Set(
+    (
+      process.env.CHAINLIST_RPC_CATALOG_URLS ||
+      process.env.CHAINLIST_RPC_CATALOG_URL ||
+      defaultChainlistRpcCatalogUrls.join(",")
+    )
+      .split(",")
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  )
+];
 const chainlistRpcCacheTtlMs = Math.max(
   60_000,
   Number(process.env.CHAINLIST_RPC_CACHE_TTL_MS || 15 * 60 * 1000)
+);
+const chainlistRpcFetchTimeoutMs = Math.max(
+  5_000,
+  Number(process.env.CHAINLIST_RPC_FETCH_TIMEOUT_MS || 15_000)
 );
 const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const explorerKeyTestChainId = 1;
@@ -531,28 +549,60 @@ async function fetchChainlistRpcCatalog(forceRefresh = false) {
   }
 
   const pending = (async () => {
-    const response = await fetch(chainlistRpcCatalogUrl, {
-      headers: {
-        accept: "application/json"
+    const fetchErrors = [];
+
+    for (const catalogUrl of chainlistRpcCatalogUrls) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), chainlistRpcFetchTimeoutMs);
+
+      try {
+        const response = await fetch(catalogUrl, {
+          headers: {
+            accept: "application/json"
+          },
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          fetchErrors.push(`${catalogUrl} returned ${response.status}`);
+          continue;
+        }
+
+        const payload = await response.json();
+        if (!Array.isArray(payload)) {
+          fetchErrors.push(`${catalogUrl} returned an unexpected payload`);
+          continue;
+        }
+
+        chainlistRpcCatalogCache = {
+          expiresAt: Date.now() + chainlistRpcCacheTtlMs,
+          value: payload,
+          pending: null
+        };
+
+        return payload;
+      } catch (error) {
+        const message =
+          error?.name === "AbortError"
+            ? `${catalogUrl} timed out after ${chainlistRpcFetchTimeoutMs}ms`
+            : `${catalogUrl} failed: ${formatError(error)}`;
+        fetchErrors.push(message);
+      } finally {
+        clearTimeout(timeoutId);
       }
-    });
-
-    if (!response.ok) {
-      throw new Error(`Chainlist RPC catalog request failed with status ${response.status}`);
     }
 
-    const payload = await response.json();
-    if (!Array.isArray(payload)) {
-      throw new Error("Chainlist RPC catalog returned an unexpected payload");
+    if (chainlistRpcCatalogCache.value) {
+      chainlistRpcCatalogCache = {
+        ...chainlistRpcCatalogCache,
+        pending: null
+      };
+      return chainlistRpcCatalogCache.value;
     }
 
-    chainlistRpcCatalogCache = {
-      expiresAt: Date.now() + chainlistRpcCacheTtlMs,
-      value: payload,
-      pending: null
-    };
-
-    return payload;
+    throw new Error(
+      `RPC catalog is temporarily unavailable. ${fetchErrors.join(" | ")}`
+    );
   })();
 
   chainlistRpcCatalogCache.pending = pending;
