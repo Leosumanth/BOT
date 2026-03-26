@@ -879,7 +879,19 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
   const freshUrls = publishedUrls.filter((rpcUrl) => !existingUrls.has(rpcUrl));
 
   if (freshUrls.length === 0) {
-    throw new Error(`All published Chainlist RPC URLs for ${chain.label} are already configured`);
+    return {
+      chain,
+      publishedCount: publishedUrls.length,
+      publishedSocketCount: publishedUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl)).length,
+      skippedExistingCount,
+      skippedProbeBudgetCount: 0,
+      probedCount: 0,
+      probedSocketCount: 0,
+      healthyCount: 0,
+      healthySocketCount: 0,
+      allConfigured: true,
+      candidates: []
+    };
   }
 
   const candidateUrls = selectChainlistProbeUrls(freshUrls, probeBudget);
@@ -948,6 +960,7 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
     healthySocketCount: probeResults.filter(
       (candidate) => candidate.lastHealth?.status === "healthy" && isSocketRpcUrl(candidate.url)
     ).length,
+    allConfigured: false,
     candidates: namedCandidates
   };
 }
@@ -6232,10 +6245,14 @@ async function handleChainlistRpcCandidates(request, response) {
       },
       resolution: resolvedChain.resolution,
       published: preview.publishedCount,
+      publishedSocketCount: preview.publishedSocketCount,
       skippedExisting: preview.skippedExistingCount,
       skippedProbeBudget: preview.skippedProbeBudgetCount,
       probed: preview.probedCount,
+      probedSocketCount: preview.probedSocketCount,
       healthy: preview.healthyCount,
+      healthySocketCount: preview.healthySocketCount,
+      allConfigured: preview.allConfigured,
       candidates: preview.candidates
     });
   } catch (error) {

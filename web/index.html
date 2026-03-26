@@ -316,7 +316,7 @@
                   </p>
                 </div>
                 <div class="queue-actions">
-                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Pulse Mesh</button>
+                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Refresh</button>
                 </div>
               </div>
               <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
@@ -344,6 +344,10 @@
                       autocomplete="off"
                     />
                   </label>
+                  <div id="rpc-transport-tabs" class="group-tabs rpc-transport-tabs">
+                    <button class="group-tab active" data-rpc-transport-filter="http" type="button">Normal RPC</button>
+                    <button class="group-tab" data-rpc-transport-filter="ws" type="button">WebSockets</button>
+                  </div>
                   <div id="rpc-search-match" class="chip-row rpc-search-match hidden"></div>
                   <div id="rpc-manual-fields" class="stack-form hidden">
                     <label>

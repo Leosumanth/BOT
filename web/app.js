@@ -66,6 +66,7 @@ const rpcSubmitButton = document.getElementById("rpc-submit-button");
 const rpcImportChainlistButton = document.getElementById("rpc-import-chainlist-button");
 const rpcChainSearchField = document.getElementById("rpc-chain-search-field");
 const rpcChainSearchInput = document.getElementById("rpc-chain-search-input");
+const rpcTransportTabs = document.getElementById("rpc-transport-tabs");
 const rpcSearchMatch = document.getElementById("rpc-search-match");
 const rpcManualFields = document.getElementById("rpc-manual-fields");
 const rpcNameInput = document.getElementById("rpc-name-input");
@@ -239,8 +240,10 @@ let rpcDiscoveryState = {
   match: null,
   candidates: [],
   selectedUrls: [],
+  transportFilter: "http",
   loading: false,
-  summary: null
+  summary: null,
+  error: ""
 };
 let rpcChainlistScan = {
   chainKey: "",
@@ -2347,9 +2350,22 @@ function healthyRpcDiscoveryCandidates() {
   return (rpcDiscoveryState.candidates || []).filter((candidate) => candidate.lastHealth?.status === "healthy");
 }
 
+function rpcDiscoveryCandidatesByTransport(candidates = rpcDiscoveryState.candidates || []) {
+  const transportFilter = String(rpcDiscoveryState.transportFilter || "http");
+  if (transportFilter === "ws") {
+    return candidates.filter((candidate) => isSocketRpcUrl(candidate.url));
+  }
+
+  return candidates.filter((candidate) => !isSocketRpcUrl(candidate.url));
+}
+
+function healthyVisibleRpcDiscoveryCandidates() {
+  return rpcDiscoveryCandidatesByTransport(healthyRpcDiscoveryCandidates());
+}
+
 function selectedRpcDiscoveryCandidates() {
   const selectedUrls = new Set(rpcDiscoveryState.selectedUrls || []);
-  return healthyRpcDiscoveryCandidates().filter((candidate) => selectedUrls.has(candidate.url));
+  return healthyVisibleRpcDiscoveryCandidates().filter((candidate) => selectedUrls.has(candidate.url));
 }
 
 function updateRpcSubmitButton() {
@@ -2428,14 +2444,16 @@ function renderRpcDiscoverySummary() {
     rpcInlineSummary.innerHTML = chips.map((chip) => `<span class="queue-chip">${escapeHtml(chip)}</span>`).join("");
   }
 
-  const visibleCount = healthyRpcDiscoveryCandidates().length;
-  const selectedCount = selectedRpcDiscoveryCandidates().length;
+  const visibleCount = healthyVisibleRpcDiscoveryCandidates().length;
+  const selectedCount = healthyVisibleRpcDiscoveryCandidates().filter((candidate) =>
+    (rpcDiscoveryState.selectedUrls || []).includes(candidate.url)
+  ).length;
   if (visibleCount === 0) {
     rpcInlineSelectionStatus.classList.add("hidden");
     rpcInlineSelectionStatus.textContent = "";
   } else {
     rpcInlineSelectionStatus.classList.remove("hidden");
-    rpcInlineSelectionStatus.textContent = `${pluralize(selectedCount, "RPC node")} selected from ${pluralize(visibleCount, "healthy result")}.`;
+    rpcInlineSelectionStatus.textContent = `${pluralize(selectedCount, "RPC node")} selected from ${pluralize(visibleCount, "healthy result")} in this view.`;
   }
 }
 
@@ -2484,12 +2502,40 @@ function renderRpcDiscoveryCandidates() {
     return;
   }
 
-  const candidates = healthyRpcDiscoveryCandidates();
-  if (candidates.length === 0) {
+  if (rpcDiscoveryState.error) {
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
-        <h3>No healthy RPCs ready</h3>
-        <p>The live probe did not find a healthy low-latency endpoint for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
+        <h3>Scan failed</h3>
+        <p>${escapeHtml(rpcDiscoveryState.error)}</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const filteredCandidates = rpcDiscoveryCandidatesByTransport(rpcDiscoveryState.candidates || []);
+  if (filteredCandidates.length === 0) {
+    if (rpcDiscoveryState.summary?.allConfigured) {
+      rpcInlineCandidateList.innerHTML = `
+        <div class="empty-state">
+          <h3>Already configured</h3>
+          <p>All published Chainlist RPCs for ${escapeHtml(rpcDiscoveryState.chain.label)} are already saved in your dashboard.</p>
+        </div>
+      `;
+      renderRpcDiscoverySummary();
+      updateRpcSubmitButton();
+      return;
+    }
+
+    const transportLabel =
+      rpcDiscoveryState.transportFilter === "ws"
+        ? "websocket RPCs"
+        : "normal RPCs";
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>No ${escapeHtml(transportLabel)} ready</h3>
+        <p>No scanned ${escapeHtml(transportLabel)} are available for ${escapeHtml(rpcDiscoveryState.chain.label)} in the current result set.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -2498,20 +2544,22 @@ function renderRpcDiscoveryCandidates() {
   }
 
   const selectedUrls = new Set(rpcDiscoveryState.selectedUrls || []);
-  rpcInlineCandidateList.innerHTML = candidates
+  rpcInlineCandidateList.innerHTML = filteredCandidates
     .map((candidate) => {
       const isSelected = selectedUrls.has(candidate.url);
       const rankingChip = candidate.recommended ? "Recommended" : `Rank #${candidate.rank || "?"}`;
       const transportLabel = isSocketRpcUrl(candidate.url) ? "WebSocket" : "HTTPS";
+      const isHealthy = candidate.lastHealth?.status === "healthy";
 
       return `
-        <label class="rpc-candidate-card ${isSelected ? "selected" : ""}">
+        <label class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""} ${isHealthy ? "" : "is-disabled"}">
           <div class="rpc-candidate-head">
             <div class="rpc-candidate-select">
               <input
                 type="checkbox"
                 data-rpc-discovery-toggle="${escapeHtml(candidate.url)}"
                 ${isSelected ? "checked" : ""}
+                ${isHealthy ? "" : "disabled"}
               />
             </div>
             <div class="rpc-candidate-copy">
@@ -2566,20 +2614,33 @@ function clearRpcDiscoveryState(options = {}) {
     match: null,
     candidates: [],
     selectedUrls: [],
+    transportFilter: rpcDiscoveryState.transportFilter || "http",
     loading: false,
-    summary: null
+    summary: null,
+    error: ""
   };
 
   if (!preserveQuery) {
     rpcChainSearchInput.value = "";
   }
 
+  renderRpcTransportTabs();
   renderRpcDiscoveryMatch(null);
   renderRpcDiscoveryCandidates();
 }
 
+function renderRpcTransportTabs() {
+  if (!rpcTransportTabs) {
+    return;
+  }
+
+  rpcTransportTabs.querySelectorAll("[data-rpc-transport-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.rpcTransportFilter === rpcDiscoveryState.transportFilter);
+  });
+}
+
 async function runRpcDiscoveryScan(options = {}) {
-  const { forceRefresh = false } = options;
+  const { forceRefresh = false, retryOnFailure = true } = options;
   if (isRpcEditMode()) {
     return;
   }
@@ -2616,8 +2677,10 @@ async function runRpcDiscoveryScan(options = {}) {
     match: localMatch || null,
     candidates: [],
     selectedUrls: [],
+    transportFilter: rpcDiscoveryState.transportFilter || "http",
     loading: true,
-    summary: null
+    summary: null,
+    error: ""
   };
   if (provisionalChain?.key) {
     rpcChainInput.value = provisionalChain.key;
@@ -2677,12 +2740,15 @@ async function runRpcDiscoveryScan(options = {}) {
       candidates,
       selectedUrls: selectedUrls.length > 0 ? selectedUrls : healthyUrls,
       loading: false,
-      summary: payload
+      summary: payload,
+      error: ""
     };
 
     const healthyCount = Number(payload.healthy || 0);
     setRpcDetectMessage(
-      healthyCount > 0
+      payload.allConfigured
+        ? `${resolvedChain.label} matched. All published Chainlist RPCs for this chain are already configured.`
+        : healthyCount > 0
         ? `${resolvedChain.label} matched. The recommended RPC is highlighted, and all healthy results are preselected so you can uncheck any you do not want.`
         : `${resolvedChain.label} matched, but no healthy RPC endpoints passed the live probe.`
     );
@@ -2691,18 +2757,27 @@ async function runRpcDiscoveryScan(options = {}) {
       return;
     }
 
+    const message = error.message || `Chainlist scan failed for "${query}". Try Refresh in a moment.`;
     rpcDiscoveryState = {
       query,
       chain: provisionalChain,
       match: localMatch || null,
       candidates: [],
       selectedUrls: [],
+      transportFilter: rpcDiscoveryState.transportFilter || "http",
       loading: false,
-      summary: null
+      summary: null,
+      error: message
     };
-    setRpcDetectMessage(error.message || `Chainlist scan failed for "${query}". Try Refresh Scan in a moment.`);
+    if (retryOnFailure && !forceRefresh) {
+      await runRpcDiscoveryScan({ forceRefresh: true, retryOnFailure: false });
+      return;
+    }
+
+    setRpcDetectMessage(message);
   }
 
+  renderRpcTransportTabs();
   renderRpcDiscoveryMatch();
   renderRpcDiscoveryCandidates();
 }
@@ -5129,7 +5204,21 @@ async function request(url, options = {}) {
     throw error;
   }
 
-  const payload = await response.json().catch(() => ({}));
+  const rawPayload = await response.text().catch(() => "");
+  let payload = {};
+  if (rawPayload) {
+    try {
+      payload = JSON.parse(rawPayload);
+    } catch {
+      payload = {};
+    }
+  }
+  const fallbackMessage =
+    payload.error ||
+    (rawPayload && !/^\s*</.test(rawPayload) ? rawPayload.trim() : "") ||
+    response.statusText ||
+    "Request failed";
+
   if (response.status === 401) {
     const message = payload.error || "Session expired. Sign in again.";
     handleUnauthorized(message);
@@ -5141,7 +5230,7 @@ async function request(url, options = {}) {
   }
 
   if (!response.ok) {
-    const message = payload.error || "Request failed";
+    const message = fallbackMessage;
     if (!quiet) {
       pushLocalLog("error", message);
       showToast(message, "error");
@@ -5444,6 +5533,26 @@ rpcChainSearchInput.addEventListener("blur", () => {
 
   scheduleRpcDiscoveryScan({ immediate: true });
 });
+
+if (rpcTransportTabs) {
+  rpcTransportTabs.querySelectorAll("[data-rpc-transport-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (isRpcEditMode()) {
+        return;
+      }
+
+      const nextFilter = String(button.dataset.rpcTransportFilter || "http");
+      if (nextFilter === rpcDiscoveryState.transportFilter) {
+        return;
+      }
+
+      rpcDiscoveryState.transportFilter = nextFilter;
+      renderRpcTransportTabs();
+      renderRpcDiscoverySummary();
+      renderRpcDiscoveryCandidates();
+    });
+  });
+}
 
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
