@@ -582,6 +582,75 @@ function buildUniqueRpcNodeName(desiredName, existingNodes = []) {
   return `${baseName} ${suffix}`;
 }
 
+async function collectChainlistRpcCandidates(chain, options = {}) {
+  if (!chain?.chainId) {
+    throw new Error("Choose a chain before scanning Chainlist RPCs");
+  }
+
+  const resultLimit = Math.min(10, Math.max(1, Number(options.limit || 6)));
+  const probeBudget = Math.min(30, Math.max(resultLimit, Number(options.probeBudget || resultLimit * 4)));
+  const chainlistCatalog = await fetchChainlistRpcCatalog(Boolean(options.forceRefresh));
+  const chainlistEntry = findChainlistEntry(chainlistCatalog, chain);
+  if (!chainlistEntry) {
+    throw new Error(`Chainlist does not currently publish RPCs for ${chain.label}`);
+  }
+
+  const publishedUrls = extractChainlistRpcUrls(chainlistEntry);
+  if (publishedUrls.length === 0) {
+    throw new Error(`Chainlist does not currently publish usable RPC URLs for ${chain.label}`);
+  }
+
+  const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
+  const skippedExistingCount = publishedUrls.filter((rpcUrl) => existingUrls.has(rpcUrl)).length;
+  const freshUrls = publishedUrls.filter((rpcUrl) => !existingUrls.has(rpcUrl));
+
+  if (freshUrls.length === 0) {
+    throw new Error(`All published Chainlist RPC URLs for ${chain.label} are already configured`);
+  }
+
+  const candidateUrls = freshUrls.slice(0, probeBudget);
+  const probeResults = await Promise.all(
+    candidateUrls.map(async (rpcUrl) => {
+      const candidate = {
+        id: createId("rpc_probe"),
+        name: buildRpcNameSuggestion(rpcUrl, chain, chain.chainId),
+        url: rpcUrl,
+        chainKey: chain.key,
+        chainId: chain.chainId,
+        chainLabel: chain.label,
+        enabled: true,
+        group: "Chainlist",
+        source: "preview",
+        lastHealth: null
+      };
+
+      await testRpcNodeHealth(candidate);
+      return candidate;
+    })
+  );
+
+  const rankedCandidates = rankRpcNodesByLatency(probeResults).slice(0, resultLimit);
+  const namedCandidates = [];
+  rankedCandidates.forEach((candidate, index) => {
+    namedCandidates.push({
+      ...candidate,
+      name: buildUniqueRpcNodeName(candidate.name, namedCandidates),
+      recommended: index === 0 && candidate.lastHealth?.status === "healthy",
+      rank: index + 1
+    });
+  });
+
+  return {
+    chain,
+    publishedCount: publishedUrls.length,
+    skippedExistingCount,
+    skippedProbeBudgetCount: Math.max(0, freshUrls.length - candidateUrls.length),
+    probedCount: candidateUrls.length,
+    healthyCount: probeResults.filter((candidate) => candidate.lastHealth?.status === "healthy").length,
+    candidates: namedCandidates
+  };
+}
+
 async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
   const normalizedUrl = String(rpcUrl || "").trim();
   if (!normalizedUrl) {
@@ -596,6 +665,7 @@ async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
 
   let provider = null;
   let timeoutId = null;
+  const started = Date.now();
   try {
     provider = createProviderForRpcUrl(normalizedUrl);
     const [network, blockNumber] = await Promise.race([
@@ -610,6 +680,7 @@ async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
     }
 
     const chain = deriveChainDescriptor(chainId, normalizedUrl);
+    const checkedAt = new Date().toISOString();
     return {
       url: normalizedUrl,
       chainId,
@@ -618,6 +689,8 @@ async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
       supportedChain: true,
       cataloguedChain: Boolean(chain.catalogued),
       blockNumber,
+      latencyMs: Date.now() - started,
+      checkedAt,
       nameSuggestion: buildRpcNameSuggestion(normalizedUrl, chain, chainId)
     };
   } finally {
@@ -4791,6 +4864,14 @@ async function handleRpcSave(request, response) {
     const resolvedName =
       String(payload.name || "").trim() || inspection.nameSuggestion || "Custom RPC";
 
+    const duplicateNode = appState.rpcNodes.find(
+      (node) => node.id !== payload.id && String(node.url || "").trim() === inspection.url
+    );
+    if (duplicateNode) {
+      throw new Error(`${duplicateNode.name || "Another RPC node"} already uses this RPC URL`);
+    }
+
+    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
     const rpcNode = {
       id: payload.id || createId("rpc"),
       name: resolvedName,
@@ -4803,13 +4884,12 @@ async function handleRpcSave(request, response) {
       source: "stored",
       lastHealth: {
         status: "healthy",
-        latencyMs: null,
+        latencyMs: inspection.latencyMs,
         blockNumber: inspection.blockNumber,
-        checkedAt: new Date().toISOString()
+        checkedAt: inspection.checkedAt || new Date().toISOString()
       }
     };
 
-    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
     const existingIndex = storedNodes.findIndex((node) => node.id === rpcNode.id);
     if (existingIndex === -1) {
       storedNodes.unshift(rpcNode);
@@ -4835,50 +4915,12 @@ async function handleChainlistRpcImport(request, response) {
   try {
     const payload = await readJsonBody(request);
     const chain = findAvailableChainByKey(payload.chainKey);
-    if (!chain?.chainId) {
-      throw new Error("Choose a chain before importing Chainlist RPCs");
-    }
-
     const importLimit = Math.min(10, Math.max(1, Number(payload.limit || 5)));
-    const probeBudget = Math.min(20, Math.max(importLimit * 3, importLimit));
-    const chainlistCatalog = await fetchChainlistRpcCatalog();
-    const chainlistEntry = findChainlistEntry(chainlistCatalog, chain);
-    if (!chainlistEntry) {
-      throw new Error(`Chainlist does not currently publish RPCs for ${chain.label}`);
-    }
-
-    const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
-    const candidateUrls = extractChainlistRpcUrls(chainlistEntry)
-      .filter((rpcUrl) => !existingUrls.has(rpcUrl))
-      .slice(0, probeBudget);
-
-    if (candidateUrls.length === 0) {
-      throw new Error(`No new Chainlist RPC URLs were available for ${chain.label}`);
-    }
-
-    const healthResults = await Promise.all(
-      candidateUrls.map(async (rpcUrl) => {
-        const temporaryNode = {
-          id: createId("rpc_probe"),
-          name: buildRpcNameSuggestion(rpcUrl, chain, chain.chainId),
-          url: rpcUrl,
-          chainKey: chain.key,
-          chainId: chain.chainId,
-          chainLabel: chain.label,
-          enabled: true,
-          group: "Chainlist",
-          source: "stored",
-          lastHealth: null
-        };
-
-        await testRpcNodeHealth(temporaryNode);
-        return temporaryNode;
-      })
-    );
-
-    const importableNodes = rankRpcNodesByLatency(
-      healthResults.filter((node) => node.lastHealth?.status === "healthy")
-    ).slice(0, importLimit);
+    const preview = await collectChainlistRpcCandidates(chain, {
+      limit: importLimit,
+      probeBudget: Math.max(importLimit * 4, importLimit)
+    });
+    const importableNodes = preview.candidates.filter((node) => node.lastHealth?.status === "healthy");
 
     if (importableNodes.length === 0) {
       throw new Error(`Chainlist RPCs for ${chain.label} did not pass the health probe`);
@@ -4919,7 +4961,7 @@ async function handleChainlistRpcImport(request, response) {
         label: chain.label,
         chainId: chain.chainId
       },
-      skipped: candidateUrls.length - nodesToPersist.length,
+      skipped: preview.probedCount - nodesToPersist.length,
       rpcNodes: nodesToPersist
     });
   } catch (error) {
@@ -4927,13 +4969,48 @@ async function handleChainlistRpcImport(request, response) {
   }
 }
 
-async function testRpcNodeHealth(rpcNode) {
+async function handleChainlistRpcCandidates(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const chain = findAvailableChainByKey(payload.chainKey);
+    const preview = await collectChainlistRpcCandidates(chain, {
+      limit: payload.limit,
+      probeBudget: payload.probeBudget,
+      forceRefresh: payload.forceRefresh
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      chain: {
+        key: preview.chain.key,
+        label: preview.chain.label,
+        chainId: preview.chain.chainId
+      },
+      published: preview.publishedCount,
+      skippedExisting: preview.skippedExistingCount,
+      skippedProbeBudget: preview.skippedProbeBudgetCount,
+      probed: preview.probedCount,
+      healthy: preview.healthyCount,
+      candidates: preview.candidates
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function testRpcNodeHealth(rpcNode, timeoutMs = 10000) {
   const started = Date.now();
   let provider = null;
+  let timeoutId = null;
 
   try {
     provider = createProviderForRpcUrl(rpcNode.url);
-    const blockNumber = await provider.getBlockNumber();
+    const blockNumber = await Promise.race([
+      provider.getBlockNumber(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("RPC health probe timed out")), timeoutMs);
+      })
+    ]);
     const latencyMs = Date.now() - started;
 
     rpcNode.lastHealth = {
@@ -4949,6 +5026,9 @@ async function testRpcNodeHealth(rpcNode) {
       checkedAt: new Date().toISOString()
     };
   } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
     await destroyProvider(provider);
   }
 
@@ -5529,6 +5609,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/rpc-nodes/inspect") {
       await handleRpcInspect(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/chainlist-candidates") {
+      await handleChainlistRpcCandidates(request, response);
       return;
     }
 

@@ -342,7 +342,7 @@
                     class="ghost-button fx-button"
                     type="button"
                   >
-                    Import Chainlist RPCs
+                    Find Fast Chainlist RPCs
                   </button>
                   <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
                   <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Save RPC Node</button>
@@ -943,6 +943,85 @@
             <button class="primary-button fx-button" type="submit">Create Task</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div id="rpc-chainlist-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-rpc-chainlist-modal="true"></div>
+      <div class="modal-card rpc-chainlist-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="rpc-chainlist-modal-title">Chainlist RPC Scan</h3>
+            <p id="rpc-chainlist-modal-subtitle" class="muted-copy">
+              Probe published endpoints, rank them by live latency, and choose which RPC to stage.
+            </p>
+          </div>
+          <button id="rpc-chainlist-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="modal-form">
+          <div class="rpc-chainlist-toolbar">
+            <p id="rpc-chainlist-status" class="helper-copy">
+              Choose a chain, then scan Chainlist to compare healthy RPC endpoints.
+            </p>
+            <button id="rpc-chainlist-refresh-button" class="ghost-button fx-button" type="button">Refresh Scan</button>
+          </div>
+          <div id="rpc-chainlist-summary" class="chip-row rpc-chainlist-summary hidden"></div>
+          <div id="rpc-chainlist-candidate-list" class="rpc-chainlist-candidate-list"></div>
+          <div class="modal-actions">
+            <button id="rpc-chainlist-cancel-button" class="ghost-button fx-button" type="button">Close</button>
+            <button id="rpc-chainlist-apply-button" class="primary-button fx-button" type="button" disabled>
+              Use Selected RPC
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="rpc-confirm-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-rpc-confirm-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="rpc-confirm-title">Confirm RPC Save</h3>
+            <p id="rpc-confirm-subtitle" class="muted-copy">
+              Review the selected endpoint before it is added to the failover mesh.
+            </p>
+          </div>
+          <button id="rpc-confirm-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Name</span>
+            <strong id="rpc-confirm-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Chain</span>
+            <strong id="rpc-confirm-chain">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Source</span>
+            <strong id="rpc-confirm-source">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Observed Latency</span>
+            <strong id="rpc-confirm-latency">Fresh check on save</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>URL</span>
+            <strong id="rpc-confirm-url">-</strong>
+          </div>
+        </div>
+
+        <p id="rpc-confirm-note" class="helper-copy">
+          A fresh endpoint inspection will run when you confirm this save.
+        </p>
+
+        <div class="modal-actions">
+          <button id="rpc-confirm-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="rpc-confirm-submit-button" class="primary-button fx-button" type="button">Confirm and Save</button>
+        </div>
       </div>
     </div>
 

@@ -68,6 +68,28 @@ const rpcChainInput = document.getElementById("rpc-chain-input");
 const rpcUrlInput = document.getElementById("rpc-url-input");
 const rpcDetectStatus = document.getElementById("rpc-detect-status");
 const rpcList = document.getElementById("rpc-list");
+const rpcChainlistModal = document.getElementById("rpc-chainlist-modal");
+const rpcChainlistModalTitle = document.getElementById("rpc-chainlist-modal-title");
+const rpcChainlistModalSubtitle = document.getElementById("rpc-chainlist-modal-subtitle");
+const rpcChainlistStatus = document.getElementById("rpc-chainlist-status");
+const rpcChainlistSummary = document.getElementById("rpc-chainlist-summary");
+const rpcChainlistCandidateList = document.getElementById("rpc-chainlist-candidate-list");
+const rpcChainlistCloseButton = document.getElementById("rpc-chainlist-close-button");
+const rpcChainlistCancelButton = document.getElementById("rpc-chainlist-cancel-button");
+const rpcChainlistRefreshButton = document.getElementById("rpc-chainlist-refresh-button");
+const rpcChainlistApplyButton = document.getElementById("rpc-chainlist-apply-button");
+const rpcConfirmModal = document.getElementById("rpc-confirm-modal");
+const rpcConfirmCloseButton = document.getElementById("rpc-confirm-close-button");
+const rpcConfirmCancelButton = document.getElementById("rpc-confirm-cancel-button");
+const rpcConfirmSubmitButton = document.getElementById("rpc-confirm-submit-button");
+const rpcConfirmTitle = document.getElementById("rpc-confirm-title");
+const rpcConfirmSubtitle = document.getElementById("rpc-confirm-subtitle");
+const rpcConfirmName = document.getElementById("rpc-confirm-name");
+const rpcConfirmChain = document.getElementById("rpc-confirm-chain");
+const rpcConfirmSource = document.getElementById("rpc-confirm-source");
+const rpcConfirmLatency = document.getElementById("rpc-confirm-latency");
+const rpcConfirmUrl = document.getElementById("rpc-confirm-url");
+const rpcConfirmNote = document.getElementById("rpc-confirm-note");
 const settingsForm = document.getElementById("settings-form");
 const profileNameInput = document.getElementById("profile-name-input");
 const themeInput = document.getElementById("theme-input");
@@ -180,6 +202,16 @@ let rpcInspectTimer = null;
 let rpcInspectRequestId = 0;
 let rpcAutoSuggestedName = "";
 let activeRpcEditId = null;
+let rpcFormGroup = "Custom";
+let rpcSelectedChainlistCandidate = null;
+let rpcPendingSavePayload = null;
+let rpcChainlistScan = {
+  chainKey: "",
+  candidates: [],
+  selectedUrl: "",
+  loading: false,
+  summary: null
+};
 let currentMintStartDetection = {
   enabled: false,
   config: null
@@ -1473,6 +1505,8 @@ function rpcHealthDetail(node) {
 function resetRpcForm(options = {}) {
   activeRpcEditId = null;
   rpcAutoSuggestedName = "";
+  rpcFormGroup = "Custom";
+  rpcSelectedChainlistCandidate = null;
   rpcFormTitle.textContent = "Add RPC Node";
   rpcFormSubtitle.textContent = "Create a stronger mesh with multiple fallback nodes.";
   rpcFormBadge.classList.add("hidden");
@@ -1498,6 +1532,8 @@ function startRpcEdit(node) {
   }
 
   activeRpcEditId = node.id;
+  rpcFormGroup = node.group || "Custom";
+  rpcSelectedChainlistCandidate = null;
   rpcFormTitle.textContent = "Edit RPC Node";
   rpcFormSubtitle.textContent = "Correct the chain, label, or endpoint URL for this stored node.";
   rpcFormBadge.classList.remove("hidden");
@@ -1537,6 +1573,364 @@ function maybeApplySuggestedRpcName(nameSuggestion) {
   }
 
   return false;
+}
+
+function formatLatencyLabel(latencyMs) {
+  const normalized = Number(latencyMs);
+  return Number.isFinite(normalized) ? `${Math.round(normalized)}ms` : "Untested";
+}
+
+function clearSelectedChainlistCandidate(options = {}) {
+  const { preserveGroup = false } = options;
+  rpcSelectedChainlistCandidate = null;
+  if (!preserveGroup && !activeRpcEditId) {
+    rpcFormGroup = "Custom";
+  }
+}
+
+function syncSelectedChainlistCandidateWithForm() {
+  if (!rpcSelectedChainlistCandidate) {
+    return;
+  }
+
+  const currentUrl = String(rpcUrlInput.value || "").trim();
+  const selectedUrl = String(rpcSelectedChainlistCandidate.url || "").trim();
+  if (currentUrl && currentUrl === selectedUrl) {
+    return;
+  }
+
+  clearSelectedChainlistCandidate();
+}
+
+function selectedChainlistCandidate() {
+  return (
+    rpcChainlistScan.candidates.find((candidate) => candidate.url === rpcChainlistScan.selectedUrl) || null
+  );
+}
+
+function setRpcChainlistStatus(message) {
+  if (!rpcChainlistStatus) {
+    return;
+  }
+
+  rpcChainlistStatus.textContent =
+    message || "Choose a chain, then scan Chainlist to compare healthy RPC endpoints.";
+}
+
+function renderRpcChainlistSummary() {
+  if (!rpcChainlistSummary) {
+    return;
+  }
+
+  const summary = rpcChainlistScan.summary;
+  if (!summary) {
+    rpcChainlistSummary.classList.add("hidden");
+    rpcChainlistSummary.innerHTML = "";
+    return;
+  }
+
+  const chips = [
+    `${Number(summary.published || 0)} published`,
+    `${Number(summary.probed || 0)} probed`,
+    `${Number(summary.healthy || 0)} healthy`,
+    Number(summary.skippedExisting || 0) > 0 ? `${Number(summary.skippedExisting)} already saved` : null,
+    Number(summary.skippedProbeBudget || 0) > 0 ? `${Number(summary.skippedProbeBudget)} unprobed` : null
+  ].filter(Boolean);
+
+  rpcChainlistSummary.classList.remove("hidden");
+  rpcChainlistSummary.innerHTML = chips
+    .map((chip) => `<span class="queue-chip">${escapeHtml(chip)}</span>`)
+    .join("");
+}
+
+function renderRpcChainlistCandidates() {
+  if (!rpcChainlistCandidateList) {
+    return;
+  }
+
+  const chainKey = rpcChainlistScan.chainKey || rpcChainInput.value;
+  const chainLabelCopy = chainLabel(chainKey);
+
+  if (rpcChainlistScan.loading) {
+    rpcChainlistCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>Scanning ${escapeHtml(chainLabelCopy)}</h3>
+        <p>Checking Chainlist endpoints for healthy responses and low latency.</p>
+      </div>
+    `;
+    rpcChainlistApplyButton.disabled = true;
+    return;
+  }
+
+  if (rpcChainlistScan.candidates.length === 0) {
+    rpcChainlistCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>No candidates ready</h3>
+        <p>Run a Chainlist scan to compare live RPC endpoints for this chain.</p>
+      </div>
+    `;
+    rpcChainlistApplyButton.disabled = true;
+    return;
+  }
+
+  rpcChainlistCandidateList.innerHTML = rpcChainlistScan.candidates
+    .map((candidate) => {
+      const isHealthy = candidate.lastHealth?.status === "healthy";
+      const isSelected = candidate.url === rpcChainlistScan.selectedUrl;
+      const rankingChip = candidate.recommended ? "Fastest healthy" : `Rank #${candidate.rank || "?"}`;
+
+      return `
+        <button
+          class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""}"
+          type="button"
+          data-rpc-chainlist-select="${escapeHtml(candidate.url)}"
+          ${isHealthy ? "" : "disabled"}
+        >
+          <div class="rpc-candidate-head">
+            <div class="rpc-candidate-copy">
+              <div class="rpc-node-title-row">
+                <strong>${escapeHtml(candidate.name || "Chainlist RPC")}</strong>
+                ${rpcHealthMarkup(candidate)}
+              </div>
+              <div class="chip-row">
+                <span class="queue-chip">${escapeHtml(candidate.chainLabel || chainLabelCopy)}</span>
+                <span class="queue-chip">${escapeHtml(rankingChip)}</span>
+                <span class="queue-chip">${escapeHtml("Chainlist")}</span>
+              </div>
+              <p class="rpc-node-url">${escapeHtml(candidate.url)}</p>
+              <p class="muted-copy rpc-candidate-detail">${escapeHtml(rpcHealthDetail(candidate))}</p>
+            </div>
+          </div>
+        </button>
+      `;
+    })
+    .join("");
+
+  rpcChainlistCandidateList.querySelectorAll("[data-rpc-chainlist-select]").forEach((button) => {
+    button.addEventListener("click", () => {
+      rpcChainlistScan.selectedUrl = button.dataset.rpcChainlistSelect;
+      renderRpcChainlistCandidates();
+    });
+  });
+
+  const candidate = selectedChainlistCandidate();
+  rpcChainlistApplyButton.disabled = !candidate || candidate.lastHealth?.status !== "healthy";
+}
+
+function closeRpcChainlistModal() {
+  if (!rpcChainlistModal) {
+    return;
+  }
+
+  rpcChainlistModal.classList.add("hidden");
+}
+
+async function loadChainlistRpcCandidates(options = {}) {
+  const { forceRefresh = false } = options;
+  const chainKey = rpcChainInput.value;
+  if (!chainKey) {
+    showToast("Choose a chain before scanning Chainlist RPCs.", "info", "Chain Required");
+    return;
+  }
+
+  const chainLabelCopy = chainLabel(chainKey);
+  rpcChainlistScan = {
+    chainKey,
+    candidates: [],
+    selectedUrl: "",
+    loading: true,
+    summary: null
+  };
+  rpcChainlistModalTitle.textContent = `${chainLabelCopy} Chainlist RPC Scan`;
+  rpcChainlistModalSubtitle.textContent =
+    "Probe published endpoints, rank them by live latency, and choose which RPC to stage.";
+  rpcChainlistRefreshButton.disabled = true;
+  rpcChainlistApplyButton.disabled = true;
+  setRpcChainlistStatus(`Scanning Chainlist RPCs for ${chainLabelCopy}...`);
+  renderRpcChainlistSummary();
+  renderRpcChainlistCandidates();
+
+  try {
+    const payload = await request("/api/rpc-nodes/chainlist-candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chainKey,
+        limit: 8,
+        probeBudget: 20,
+        forceRefresh
+      })
+    });
+
+    rpcChainlistScan = {
+      chainKey,
+      candidates: Array.isArray(payload.candidates) ? payload.candidates : [],
+      selectedUrl: "",
+      loading: false,
+      summary: payload
+    };
+
+    const firstHealthyCandidate = rpcChainlistScan.candidates.find(
+      (candidate) => candidate.lastHealth?.status === "healthy"
+    );
+    if (firstHealthyCandidate) {
+      rpcChainlistScan.selectedUrl = firstHealthyCandidate.url;
+    }
+
+    renderRpcChainlistSummary();
+    renderRpcChainlistCandidates();
+
+    const healthyCount = Number(payload.healthy || 0);
+    setRpcChainlistStatus(
+      healthyCount > 0
+        ? `Found ${healthyCount} healthy Chainlist RPC ${healthyCount === 1 ? "endpoint" : "endpoints"} for ${chainLabelCopy}. Select one to stage in the form.`
+        : `Chainlist scan finished for ${chainLabelCopy}, but no healthy RPC endpoints passed the live probe.`
+    );
+  } catch {
+    rpcChainlistScan = {
+      chainKey,
+      candidates: [],
+      selectedUrl: "",
+      loading: false,
+      summary: null
+    };
+    renderRpcChainlistSummary();
+    renderRpcChainlistCandidates();
+    setRpcChainlistStatus(`Chainlist scan failed for ${chainLabelCopy}. You can still add an RPC manually.`);
+  } finally {
+    rpcChainlistRefreshButton.disabled = false;
+  }
+}
+
+async function openRpcChainlistModal() {
+  const chainKey = rpcChainInput.value;
+  if (!chainKey) {
+    showToast("Choose a chain before scanning Chainlist RPCs.", "info", "Chain Required");
+    return;
+  }
+
+  rpcChainlistModal.classList.remove("hidden");
+  initializeMotionSurfaces(rpcChainlistModal);
+  await loadChainlistRpcCandidates();
+}
+
+function applySelectedChainlistRpc() {
+  const candidate = selectedChainlistCandidate();
+  if (!candidate || candidate.lastHealth?.status !== "healthy") {
+    showToast("Select a healthy Chainlist RPC before staging it.", "info", "RPC Selection");
+    return;
+  }
+
+  ensureChainOption({
+    key: candidate.chainKey,
+    label: candidate.chainLabel,
+    chainId: candidate.chainId
+  });
+  rpcFormGroup = "Chainlist";
+  rpcSelectedChainlistCandidate = candidate;
+  rpcChainInput.value = candidate.chainKey;
+  rpcUrlInput.value = candidate.url;
+  rpcNameInput.value = candidate.name || "";
+  rpcAutoSuggestedName = candidate.name || "";
+  setRpcDetectMessage(
+    `Staged ${candidate.name || "Chainlist RPC"} from Chainlist with observed latency ${formatLatencyLabel(candidate.lastHealth?.latencyMs)}. Confirm the save when you're ready.`
+  );
+  closeRpcChainlistModal();
+  rpcForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  rpcNameInput.focus();
+  showToast(
+    `${candidate.name || "Chainlist RPC"} is staged in the form. Save it to add this endpoint.`,
+    "success",
+    "RPC Staged"
+  );
+}
+
+function buildRpcSavePayload() {
+  return {
+    id: activeRpcEditId || undefined,
+    name: rpcNameInput.value,
+    chainKey: rpcChainInput.value,
+    url: rpcUrlInput.value,
+    group: rpcFormGroup || "Custom"
+  };
+}
+
+function closeRpcConfirmModal() {
+  if (!rpcConfirmModal) {
+    return;
+  }
+
+  rpcPendingSavePayload = null;
+  rpcConfirmModal.classList.add("hidden");
+}
+
+function openRpcConfirmModal(payload) {
+  const pendingPayload = payload || buildRpcSavePayload();
+  const selectedCandidate =
+    rpcSelectedChainlistCandidate &&
+    String(rpcSelectedChainlistCandidate.url || "").trim() === String(pendingPayload.url || "").trim()
+      ? rpcSelectedChainlistCandidate
+      : null;
+  const sourceLabelCopy =
+    pendingPayload.group === "Chainlist"
+      ? "Chainlist scan"
+      : activeRpcEditId
+        ? "Manual update"
+        : "Custom entry";
+
+  rpcPendingSavePayload = pendingPayload;
+  rpcConfirmTitle.textContent = activeRpcEditId ? "Confirm RPC Update" : "Confirm RPC Save";
+  rpcConfirmSubtitle.textContent = activeRpcEditId
+    ? "Review the updated endpoint before saving it back into the failover mesh."
+    : "Review the selected endpoint before it is added to the failover mesh.";
+  rpcConfirmName.textContent = pendingPayload.name?.trim() || "Auto-name from RPC inspection";
+  rpcConfirmChain.textContent = chainLabel(pendingPayload.chainKey) || "Auto-detect on save";
+  rpcConfirmSource.textContent = sourceLabelCopy;
+  rpcConfirmLatency.textContent = selectedCandidate
+    ? formatLatencyLabel(selectedCandidate.lastHealth?.latencyMs)
+    : "Fresh check on save";
+  rpcConfirmUrl.textContent = pendingPayload.url?.trim() || "-";
+  rpcConfirmNote.textContent = selectedCandidate
+    ? "A fresh inspection will run again on save so the stored node keeps an up-to-date latency snapshot."
+    : "We will validate the RPC, auto-detect its chain, and save the latest latency snapshot.";
+  rpcConfirmSubmitButton.textContent = activeRpcEditId ? "Confirm and Update" : "Confirm and Save";
+  rpcConfirmModal.classList.remove("hidden");
+  initializeMotionSurfaces(rpcConfirmModal);
+}
+
+async function submitConfirmedRpcSave() {
+  if (!rpcPendingSavePayload) {
+    return;
+  }
+
+  const payload = rpcPendingSavePayload;
+  const wasEditing = Boolean(activeRpcEditId);
+  const buttonLabel = rpcConfirmSubmitButton.textContent;
+  rpcConfirmSubmitButton.disabled = true;
+  rpcConfirmSubmitButton.textContent = wasEditing ? "Updating..." : "Saving...";
+
+  try {
+    await request("/api/rpc-nodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    closeRpcConfirmModal();
+    resetRpcForm();
+    showToast(
+      wasEditing ? "RPC node updated successfully." : "RPC node saved to the mesh.",
+      "success",
+      wasEditing ? "RPC Updated" : "RPC Added"
+    );
+  } catch {
+    rpcConfirmSubmitButton.disabled = false;
+    rpcConfirmSubmitButton.textContent = buttonLabel;
+    return;
+  }
+
+  rpcConfirmSubmitButton.disabled = false;
+  rpcConfirmSubmitButton.textContent = buttonLabel;
 }
 
 async function inspectRpcUrl(url, options = {}) {
@@ -1606,57 +2000,6 @@ async function inspectRpcUrl(url, options = {}) {
     rpcInspectTimer = null;
     void runInspection();
   }, 350);
-}
-
-async function importChainlistRpcNodes() {
-  const chainKey = rpcChainInput.value;
-  if (!chainKey) {
-    showToast("Choose a chain before importing Chainlist RPCs.", "info", "Chain Required");
-    return;
-  }
-
-  const originalLabel = rpcImportChainlistButton.textContent;
-  rpcImportChainlistButton.disabled = true;
-  rpcImportChainlistButton.textContent = "Importing...";
-  setRpcDetectMessage("Fetching Chainlist RPCs and probing latency...");
-
-  try {
-    const payload = await request("/api/rpc-nodes/import-chainlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chainKey,
-        limit: 5
-      })
-    });
-
-    const chainLabelCopy = payload.chain?.label || chainLabel(chainKey);
-    const importedCount = Number(payload.imported || 0);
-    const importedNames = Array.isArray(payload.rpcNodes)
-      ? payload.rpcNodes
-          .map((node) => node?.name)
-          .filter(Boolean)
-          .slice(0, 3)
-          .join(", ")
-      : "";
-    setRpcDetectMessage(
-      importedCount > 0
-        ? `Imported ${importedCount} Chainlist RPC ${importedCount === 1 ? "node" : "nodes"} for ${chainLabelCopy}.`
-        : "Chainlist import completed."
-    );
-    showToast(
-      importedNames
-        ? `${importedCount} imported for ${chainLabelCopy}: ${importedNames}`
-        : `${importedCount} Chainlist RPC ${importedCount === 1 ? "node" : "nodes"} imported for ${chainLabelCopy}.`,
-      "success",
-      "Chainlist Import"
-    );
-  } catch {
-    setRpcDetectMessage("Chainlist import failed. You can still add RPCs manually.");
-  } finally {
-    rpcImportChainlistButton.disabled = false;
-    rpcImportChainlistButton.textContent = originalLabel;
-  }
 }
 
 function renderRpcNodes() {
@@ -3088,25 +3431,13 @@ walletImportForm.addEventListener("submit", async (event) => {
 
 rpcForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  try {
-    await request("/api/rpc-nodes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: activeRpcEditId || undefined,
-        name: rpcNameInput.value,
-        chainKey: rpcChainInput.value,
-        url: rpcUrlInput.value
-      })
-    });
-    const wasEditing = Boolean(activeRpcEditId);
-    resetRpcForm();
-    showToast(
-      wasEditing ? "RPC node updated successfully." : "RPC node saved to the mesh.",
-      "success",
-      wasEditing ? "RPC Updated" : "RPC Added"
-    );
-  } catch {}
+  const payload = buildRpcSavePayload();
+  if (!String(payload.url || "").trim()) {
+    showToast("Enter an RPC URL before saving this node.", "info", "RPC URL Required");
+    return;
+  }
+
+  openRpcConfirmModal(payload);
 });
 
 rpcCancelButton.addEventListener("click", () => {
@@ -3114,15 +3445,48 @@ rpcCancelButton.addEventListener("click", () => {
 });
 
 rpcImportChainlistButton.addEventListener("click", async () => {
-  await importChainlistRpcNodes();
+  await openRpcChainlistModal();
+});
+
+rpcChainlistCloseButton.addEventListener("click", closeRpcChainlistModal);
+rpcChainlistCancelButton.addEventListener("click", closeRpcChainlistModal);
+rpcChainlistRefreshButton.addEventListener("click", async () => {
+  await loadChainlistRpcCandidates({ forceRefresh: true });
+});
+rpcChainlistApplyButton.addEventListener("click", applySelectedChainlistRpc);
+
+rpcChainlistModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeRpcChainlistModal === "true") {
+    closeRpcChainlistModal();
+  }
+});
+
+rpcConfirmCloseButton.addEventListener("click", closeRpcConfirmModal);
+rpcConfirmCancelButton.addEventListener("click", closeRpcConfirmModal);
+rpcConfirmSubmitButton.addEventListener("click", async () => {
+  await submitConfirmedRpcSave();
+});
+
+rpcConfirmModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeRpcConfirmModal === "true") {
+    closeRpcConfirmModal();
+  }
 });
 
 rpcUrlInput.addEventListener("input", () => {
+  syncSelectedChainlistCandidateWithForm();
   void inspectRpcUrl(rpcUrlInput.value);
 });
 
 rpcUrlInput.addEventListener("blur", () => {
+  syncSelectedChainlistCandidateWithForm();
   void inspectRpcUrl(rpcUrlInput.value, { immediate: true });
+});
+
+rpcChainInput.addEventListener("change", () => {
+  if (rpcSelectedChainlistCandidate && rpcSelectedChainlistCandidate.chainKey !== rpcChainInput.value) {
+    clearSelectedChainlistCandidate();
+  }
 });
 
 rpcNameInput.addEventListener("input", () => {
