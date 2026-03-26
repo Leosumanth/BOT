@@ -14,6 +14,7 @@ const state = {
 };
 
 const body = document.body;
+body.dataset.currentView = state.currentView;
 const authOverlay = document.getElementById("auth-overlay");
 const loginForm = document.getElementById("login-form");
 const loginUsernameInput = document.getElementById("login-username-input");
@@ -273,6 +274,38 @@ let assistantState = {
 let assistantRequestController = null;
 let assistantRequestToken = 0;
 const assistantPositionStorageKey = "mintbot.assistant.position.v1";
+const assistantViewCommands = [
+  {
+    view: "dashboard",
+    label: "Dashboard",
+    aliases: ["dashboard", "home", "main dashboard", "control surface"]
+  },
+  {
+    view: "tasks",
+    label: "Tasks",
+    aliases: ["tasks", "task list", "task board"]
+  },
+  {
+    view: "wallets",
+    label: "Wallets",
+    aliases: ["wallets", "wallet", "saved wallets"]
+  },
+  {
+    view: "transfer",
+    label: "Transfer",
+    aliases: ["transfer", "transfers"]
+  },
+  {
+    view: "rpc",
+    label: "RPC Nodes",
+    aliases: ["rpc", "rpc node", "rpc nodes", "rpc mesh", "mesh"]
+  },
+  {
+    view: "settings",
+    label: "Settings",
+    aliases: ["settings", "setting", "config", "configuration"]
+  }
+];
 let assistantDragState = {
   active: false,
   moved: false,
@@ -1087,6 +1120,82 @@ function assistantAvailability() {
   };
 }
 
+function normalizeAssistantLocalCommand(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[!?.,]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanAssistantNavigationTarget(value) {
+  return normalizeAssistantLocalCommand(value)
+    .replace(/^(?:the|my)\s+/, "")
+    .replace(/\b(?:page|screen|panel|tab|view|section)\b/g, " ")
+    .replace(/\b(?:please|now)\b/g, " ")
+    .replace(/\bfor me\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveAssistantViewCommand(message) {
+  let normalized = normalizeAssistantLocalCommand(message);
+  if (!normalized) {
+    return null;
+  }
+
+  normalized = normalized
+    .replace(/^(?:hey\s+)?(?:operator ai|assistant)[,:]?\s*/, "")
+    .replace(/^(?:please\s+)?(?:can|could|would|will)\s+you\s+/, "")
+    .trim();
+
+  const resolveTarget = (target) => {
+    const cleanedTarget = cleanAssistantNavigationTarget(target);
+    if (!cleanedTarget) {
+      return null;
+    }
+
+    return (
+      assistantViewCommands.find((entry) =>
+        entry.aliases.some((alias) => cleanAssistantNavigationTarget(alias) === cleanedTarget)
+      ) || null
+    );
+  };
+
+  const directMatch = resolveTarget(normalized);
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const actionMatch = normalized.match(
+    /^(?:open|show|go to|switch to|take me to|navigate to|move to|bring up|display)\s+(.+)$/
+  );
+  if (!actionMatch) {
+    return null;
+  }
+
+  return resolveTarget(actionMatch[1]);
+}
+
+function handleAssistantLocalCommand(message) {
+  const viewCommand = resolveAssistantViewCommand(message);
+  if (!viewCommand) {
+    return null;
+  }
+
+  const alreadyOpen = state.currentView === viewCommand.view;
+  if (!alreadyOpen) {
+    setView(viewCommand.view);
+  }
+
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  return {
+    reply: alreadyOpen ? `${viewCommand.label} is already open.` : `${viewCommand.label} opened.`,
+    actions: [alreadyOpen ? `Stayed on ${viewCommand.label}` : `Opened ${viewCommand.label}`]
+  };
+}
+
 function isCompactAssistantLayout() {
   return window.matchMedia("(max-width: 820px)").matches;
 }
@@ -1286,6 +1395,28 @@ function scrollAssistantMessagesToBottom() {
   });
 }
 
+function renderAssistantWelcomeState() {
+  const examples = [
+    "Show dashboard",
+    "Create a mint task for 0x...",
+    "Run task MyMintTask",
+    "Delete task MyMintTask"
+  ];
+
+  return `
+    <div class="assistant-empty-state welcome">
+      <h4>Hello. I'm MintBot Operator.</h4>
+      <p>I can check your dashboard and help create, update, schedule, run, stop, or delete tasks.</p>
+      <p>Try one of these:</p>
+      <div class="assistant-empty-state-examples">
+        ${examples
+          .map((example) => `<span class="assistant-empty-state-example">${escapeHtml(example)}</span>`)
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderAssistant() {
   const availability = assistantAvailability();
   const panelOpen = assistantState.open && !assistantRoot.classList.contains("hidden");
@@ -1315,7 +1446,7 @@ function renderAssistant() {
   }
 
   if (!assistantState.messages.length && !assistantState.loading) {
-    assistantMessages.innerHTML = "";
+    assistantMessages.innerHTML = renderAssistantWelcomeState();
     return;
   }
 
@@ -1436,9 +1567,7 @@ async function sendAssistantMessage() {
     return;
   }
 
-  const shouldResetConversation = assistantState.messages.length === 0;
   assistantState.open = true;
-  assistantState.loading = true;
   assistantState.messages = [
     ...assistantState.messages,
     {
@@ -1448,6 +1577,25 @@ async function sendAssistantMessage() {
     }
   ];
   assistantInput.value = "";
+
+  const localCommandResult = handleAssistantLocalCommand(message);
+  if (localCommandResult) {
+    assistantState.loading = false;
+    assistantState.messages = [
+      ...assistantState.messages,
+      {
+        role: "assistant",
+        text: localCommandResult.reply,
+        actions: localCommandResult.actions || [],
+        timestamp: new Date().toISOString()
+      }
+    ];
+    renderAssistant();
+    return;
+  }
+
+  const shouldResetConversation = assistantState.messages.length === 1;
+  assistantState.loading = true;
   renderAssistant();
 
   const requestToken = ++assistantRequestToken;
@@ -4078,6 +4226,7 @@ function ensureChainOption(chain) {
 
 function setView(viewName) {
   state.currentView = viewName;
+  body.dataset.currentView = viewName;
   navButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.view === viewName);
   });
