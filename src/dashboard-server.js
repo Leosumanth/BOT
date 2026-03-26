@@ -42,7 +42,7 @@ const chainlistRpcCacheTtlMs = Math.max(
   60_000,
   Number(process.env.CHAINLIST_RPC_CACHE_TTL_MS || 15 * 60 * 1000)
 );
-const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2";
+const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const explorerKeyTestChainId = 1;
 const operatorAssistantModel = String(
   process.env.OPENAI_OPERATOR_ASSISTANT_MODEL ||

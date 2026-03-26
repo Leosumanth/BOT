@@ -138,6 +138,7 @@ body[data-auth-state="locked"] .scanline-layer {
   position: fixed;
   inset: 0;
   pointer-events: none;
+  display: none;
 }
 
 .noise-layer {
@@ -152,10 +153,6 @@ body[data-auth-state="locked"] .scanline-layer {
 
 .scanline-layer {
   z-index: 2;
-  opacity: 0.08;
-  background: linear-gradient(180deg, transparent 0%, rgba(113, 224, 255, 0.26) 50%, transparent 100%);
-  background-size: 100% 180px;
-  animation: scanlineSweep 11s linear infinite;
 }
 
 .app-shell {
@@ -645,9 +642,7 @@ body[data-auth-state="locked"] .scanline-layer {
 .orbital-stage {
   position: relative;
   min-height: 232px;
-  display: grid;
-  place-items: center;
-  perspective: 1400px;
+  display: none;
 }
 
 .orbital-core {

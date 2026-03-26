@@ -4868,7 +4868,12 @@ loginForm.addEventListener("submit", async (event) => {
     setLoginStatus("Authenticated. Secure state sync is active.");
     initializeMotionSurfaces(document);
     await loadState();
+    populateChainSelectors();
+    resetRpcForm();
+    renderWalletSelector([]);
+    renderRpcSelector([]);
     connectEvents();
+    setView("dashboard");
     showToast("Authenticated successfully.", "success", "Access Granted");
   } catch {}
 });
