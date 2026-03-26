@@ -1970,9 +1970,12 @@ select:focus {
   display: grid;
   justify-items: end;
   gap: 14px;
+  pointer-events: none;
 }
 
 .assistant-fab {
+  position: relative;
+  overflow: hidden;
   min-height: 72px;
   min-width: 248px;
   padding: 14px 18px;
@@ -1986,6 +1989,11 @@ select:focus {
   align-items: center;
   gap: 14px;
   text-align: left;
+  pointer-events: auto;
+}
+
+.assistant-fab::before {
+  content: none;
 }
 
 .assistant-fab:hover,
@@ -2022,6 +2030,9 @@ select:focus {
 }
 
 .assistant-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 14px);
   width: min(430px, calc(100vw - 32px));
   max-height: min(78vh, 760px);
   border-radius: 30px;
@@ -2036,6 +2047,7 @@ select:focus {
   overflow: hidden;
   transform: translateY(16px) scale(0.98);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
   transition: opacity 180ms ease, transform 180ms ease;
 }
@@ -2043,6 +2055,7 @@ select:focus {
 .assistant-panel.open {
   transform: translateY(0) scale(1);
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
 }
 
