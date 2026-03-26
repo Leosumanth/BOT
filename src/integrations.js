@@ -3,7 +3,8 @@ const { ethers } = require("ethers");
 const EXPLORER_BASE_URL = "https://api.etherscan.io/v2/api";
 
 const secretEnvNames = {
-  explorerApiKey: "ETHERSCAN_API_KEY"
+  explorerApiKey: "ETHERSCAN_API_KEY",
+  openaiApiKey: "OPENAI_API_KEY"
 };
 
 const secretStorageKeys = {
@@ -73,11 +74,17 @@ function buildClientSettings(settings, storedSecrets = {}) {
   const storedExplorerApiKey = trimValue(storedSecrets.explorerApiKey, "");
   const envExplorerApiKey = trimValue(process.env[secretEnvNames.explorerApiKey], "");
   const explorerApiKeySource = storedExplorerApiKey ? "saved" : envExplorerApiKey ? "env" : "";
+  const storedOpenAiApiKey = trimValue(storedSecrets.openaiApiKey, "");
+  const envOpenAiApiKey = trimValue(process.env[secretEnvNames.openaiApiKey], "");
+  const openaiApiKeySource = storedOpenAiApiKey ? "saved" : envOpenAiApiKey ? "env" : "";
 
   return {
     ...normalized,
     explorerApiKeyConfigured: Boolean(resolved.explorerApiKey),
-    explorerApiKeySource
+    explorerApiKeySource,
+    openaiApiKeyConfigured: Boolean(resolved.openaiApiKey),
+    openaiApiKeySource,
+    openaiRpcAdvisorModel: trimValue(process.env.OPENAI_RPC_ADVISOR_MODEL, "gpt-5-mini-2025-08-07")
   };
 }
 

@@ -651,6 +651,222 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
   };
 }
 
+function rpcTaskDemandForChain(chainKey) {
+  const tasks = (appState?.tasks || []).filter((task) => task.chainKey === chainKey);
+  return {
+    total: tasks.length,
+    live: tasks.filter((task) => ["running", "queued"].includes(task.status)).length,
+    multiRpcBroadcast: tasks.filter((task) => task.multiRpcBroadcast).length,
+    mempool: tasks.filter((task) => task.executionTriggerMode === "mempool").length,
+    relay: tasks.filter((task) => task.privateRelayEnabled).length
+  };
+}
+
+function buildRpcAdvisorContext(focusChainKey = "") {
+  const normalizedFocusChainKey = String(focusChainKey || "").trim();
+  const focusChain = normalizedFocusChainKey ? findAvailableChainByKey(normalizedFocusChainKey) : null;
+  const relevantNodes = (appState?.rpcNodes || []).filter(
+    (node) => !focusChain || node.chainKey === focusChain.key
+  );
+  const relevantTasks = (appState?.tasks || []).filter(
+    (task) => !focusChain || task.chainKey === focusChain.key
+  );
+  const chainKeys = new Set([
+    ...relevantNodes.map((node) => node.chainKey),
+    ...relevantTasks.map((task) => task.chainKey)
+  ]);
+
+  const chains = [...chainKeys]
+    .filter(Boolean)
+    .map((chainKey) => {
+      const nodes = rankRpcNodesByLatency(relevantNodes.filter((node) => node.chainKey === chainKey));
+      const healthyNodes = nodes.filter((node) => node.lastHealth?.status === "healthy");
+      const healthySocketNodes = healthyNodes.filter((node) => /^wss?:\/\//i.test(String(node.url || "")));
+      const taskDemand = rpcTaskDemandForChain(chainKey);
+      const avgLatencyMs = healthyNodes.length
+        ? Math.round(
+            healthyNodes.reduce(
+              (sum, node) => sum + Number(node.lastHealth?.latencyMs || 0),
+              0
+            ) / healthyNodes.length
+          )
+        : null;
+
+      return {
+        chainKey,
+        chainLabel: chainLabel(chainKey),
+        rpcNodeCount: nodes.length,
+        healthyRpcCount: healthyNodes.length,
+        healthySocketCount: healthySocketNodes.length,
+        averageHealthyLatencyMs: avgLatencyMs,
+        primaryRpc: healthyNodes[0]
+          ? {
+              name: healthyNodes[0].name,
+              latencyMs: healthyNodes[0].lastHealth?.latencyMs,
+              transport: /^wss?:\/\//i.test(String(healthyNodes[0].url || "")) ? "websocket" : "http"
+            }
+          : null,
+        fallbackRpcs: healthyNodes.slice(1, 4).map((node) => ({
+          name: node.name,
+          latencyMs: node.lastHealth?.latencyMs,
+          transport: /^wss?:\/\//i.test(String(node.url || "")) ? "websocket" : "http"
+        })),
+        taskDemand,
+        nodes: nodes.slice(0, 8).map((node) => ({
+          name: node.name,
+          url: node.url,
+          source: node.source,
+          transport: /^wss?:\/\//i.test(String(node.url || "")) ? "websocket" : "http",
+          status: node.lastHealth?.status || "untested",
+          latencyMs: Number.isFinite(Number(node.lastHealth?.latencyMs))
+            ? Number(node.lastHealth.latencyMs)
+            : null,
+          checkedAt: node.lastHealth?.checkedAt || null
+        }))
+      };
+    });
+
+  const healthyNodes = relevantNodes.filter((node) => node.lastHealth?.status === "healthy");
+  const averageHealthyLatencyMs = healthyNodes.length
+    ? Math.round(
+        healthyNodes.reduce(
+          (sum, node) => sum + Number(node.lastHealth?.latencyMs || 0),
+          0
+        ) / healthyNodes.length
+      )
+    : null;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    focusChain: focusChain
+      ? {
+          key: focusChain.key,
+          label: focusChain.label,
+          chainId: focusChain.chainId
+        }
+      : null,
+    mesh: {
+      totalRpcNodes: relevantNodes.length,
+      healthyRpcNodes: healthyNodes.length,
+      healthySocketRpcNodes: healthyNodes.filter((node) => /^wss?:\/\//i.test(String(node.url || ""))).length,
+      averageHealthyLatencyMs
+    },
+    tasks: relevantTasks.slice(0, 18).map((task) => ({
+      id: task.id,
+      name: task.name,
+      chainKey: task.chainKey,
+      status: task.status,
+      multiRpcBroadcast: Boolean(task.multiRpcBroadcast),
+      triggerMode: task.executionTriggerMode,
+      privateRelayEnabled: Boolean(task.privateRelayEnabled),
+      privateRelayOnly: Boolean(task.privateRelayOnly),
+      warmupRpc: Boolean(task.warmupRpc)
+    })),
+    chains
+  };
+}
+
+function extractOpenAiResponseText(payload = {}) {
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const fragments = [];
+  (payload.output || []).forEach((item) => {
+    (item?.content || []).forEach((content) => {
+      if (content?.type === "output_text" && typeof content.text === "string" && content.text.trim()) {
+        fragments.push(content.text.trim());
+      }
+    });
+  });
+
+  return fragments.join("\n\n").trim();
+}
+
+async function requestRpcAdvisorBrief({ focusChainKey = "", operatorPrompt = "" } = {}) {
+  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+  const apiKey = String(resolvedSecrets.openaiApiKey || "").trim();
+  if (!apiKey) {
+    throw new Error("Set OPENAI_API_KEY to enable the AI RPC advisor.");
+  }
+
+  const model = String(process.env.OPENAI_RPC_ADVISOR_MODEL || "gpt-5-mini-2025-08-07").trim();
+  const context = buildRpcAdvisorContext(focusChainKey);
+  const systemPrompt = [
+    "You are an elite NFT minting RPC strategist.",
+    "Your job is to audit an RPC mesh for low-latency NFT minting and recommend concrete improvements.",
+    "Prioritize multi-RPC broadcast depth, websocket coverage for event/mempool arming, private relay fallback posture, and weak chains that need more healthy endpoints.",
+    "Use only the provided mesh snapshot.",
+    "Reply in concise markdown with these sections: Overall Posture, Priority Actions, Chain Notes, and Risk Warnings."
+  ].join(" ");
+
+  const userPrompt = [
+    `Operator request: ${String(operatorPrompt || "").trim() || "Review the mesh and recommend the best RPC posture for fast NFT minting."}`,
+    "",
+    "Mesh snapshot:",
+    JSON.stringify(context, null, 2)
+  ].join("\n");
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: systemPrompt }]
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: userPrompt }]
+          }
+        ],
+        text: {
+          format: {
+            type: "text"
+          }
+        },
+        max_output_tokens: 900
+      }),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(
+        payload?.error?.message || payload?.error || `OpenAI request failed with status ${response.status}`
+      );
+    }
+
+    const advice = extractOpenAiResponseText(payload);
+    if (!advice) {
+      throw new Error("OpenAI returned an empty advisor response.");
+    }
+
+    return {
+      model: payload.model || model,
+      generatedAt: new Date().toISOString(),
+      advice
+    };
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("OpenAI advisor timed out.");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
   const normalizedUrl = String(rpcUrl || "").trim();
   if (!normalizedUrl) {
@@ -5045,6 +5261,23 @@ async function handleRpcInspect(request, response) {
   }
 }
 
+async function handleRpcAiAdvice(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const result = await requestRpcAdvisorBrief({
+      focusChainKey: payload.chainKey,
+      operatorPrompt: payload.prompt
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleRpcTest(rpcId, response) {
   const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
   if (!rpcNode) {
@@ -5609,6 +5842,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/rpc-nodes/inspect") {
       await handleRpcInspect(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/ai-advice") {
+      await handleRpcAiAdvice(request, response);
       return;
     }
 

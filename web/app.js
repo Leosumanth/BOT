@@ -63,10 +63,27 @@ const rpcFormBadge = document.getElementById("rpc-form-badge");
 const rpcCancelButton = document.getElementById("rpc-cancel-button");
 const rpcSubmitButton = document.getElementById("rpc-submit-button");
 const rpcImportChainlistButton = document.getElementById("rpc-import-chainlist-button");
+const rpcChainSearchField = document.getElementById("rpc-chain-search-field");
+const rpcChainSearchInput = document.getElementById("rpc-chain-search-input");
+const rpcSearchMatch = document.getElementById("rpc-search-match");
+const rpcManualFields = document.getElementById("rpc-manual-fields");
 const rpcNameInput = document.getElementById("rpc-name-input");
 const rpcChainInput = document.getElementById("rpc-chain-input");
 const rpcUrlInput = document.getElementById("rpc-url-input");
 const rpcDetectStatus = document.getElementById("rpc-detect-status");
+const rpcInlineSummary = document.getElementById("rpc-inline-summary");
+const rpcInlineSelectionStatus = document.getElementById("rpc-inline-selection-status");
+const rpcInlineCandidateList = document.getElementById("rpc-inline-candidate-list");
+const rpcPagePulseButton = document.getElementById("rpc-page-pulse-button");
+const rpcOpsOverview = document.getElementById("rpc-ops-overview");
+const rpcBroadcastAdvisor = document.getElementById("rpc-broadcast-advisor");
+const rpcChainCommandCaption = document.getElementById("rpc-chain-command-caption");
+const rpcChainCommandGrid = document.getElementById("rpc-chain-command-grid");
+const rpcAiGenerateButton = document.getElementById("rpc-ai-generate-button");
+const rpcAiStatus = document.getElementById("rpc-ai-status");
+const rpcAiPromptInput = document.getElementById("rpc-ai-prompt-input");
+const rpcAiOutput = document.getElementById("rpc-ai-output");
+const rpcDoctrineGrid = document.getElementById("rpc-doctrine-grid");
 const rpcList = document.getElementById("rpc-list");
 const rpcChainlistModal = document.getElementById("rpc-chainlist-modal");
 const rpcChainlistModalTitle = document.getElementById("rpc-chainlist-modal-title");
@@ -200,11 +217,27 @@ let abiExplorerFetchTimer = null;
 let abiExplorerFetchRequestId = 0;
 let rpcInspectTimer = null;
 let rpcInspectRequestId = 0;
+let rpcChainSearchTimer = null;
+let rpcDiscoveryRequestId = 0;
 let rpcAutoSuggestedName = "";
 let activeRpcEditId = null;
 let rpcFormGroup = "Custom";
 let rpcSelectedChainlistCandidate = null;
 let rpcPendingSavePayload = null;
+let rpcDiscoveryState = {
+  query: "",
+  chain: null,
+  candidates: [],
+  selectedUrls: [],
+  loading: false,
+  summary: null
+};
+let rpcAiState = {
+  loading: false,
+  content: "",
+  model: "",
+  generatedAt: null
+};
 let rpcChainlistScan = {
   chainKey: "",
   candidates: [],
@@ -562,6 +595,118 @@ function walletGroups() {
 
 function chainLabel(chainKey) {
   return state.chains.find((chain) => chain.key === chainKey)?.label || chainKey || "Unknown";
+}
+
+const rpcChainAliases = {
+  ethereum: ["ethereum", "eth", "mainnet", "mainnet eth", "eth mainnet"],
+  sepolia: ["sepolia", "eth sepolia", "ethereum sepolia"],
+  base: ["base", "base mainnet"],
+  base_sepolia: ["base sepolia", "base testnet"],
+  arbitrum: ["arbitrum", "arb", "arbitrum one"],
+  blast: ["blast"],
+  shape: ["shape"],
+  plasma: ["plasma"]
+};
+
+function normalizeChainSearchValue(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function levenshteinDistance(left, right) {
+  const source = String(left || "");
+  const target = String(right || "");
+  if (!source) {
+    return target.length;
+  }
+  if (!target) {
+    return source.length;
+  }
+
+  const rows = Array.from({ length: source.length + 1 }, (_, index) => [index]);
+  for (let column = 0; column <= target.length; column += 1) {
+    rows[0][column] = column;
+  }
+
+  for (let row = 1; row <= source.length; row += 1) {
+    for (let column = 1; column <= target.length; column += 1) {
+      const substitutionCost = source[row - 1] === target[column - 1] ? 0 : 1;
+      rows[row][column] = Math.min(
+        rows[row - 1][column] + 1,
+        rows[row][column - 1] + 1,
+        rows[row - 1][column - 1] + substitutionCost
+      );
+    }
+  }
+
+  return rows[source.length][target.length];
+}
+
+function chainSearchTerms(chain) {
+  const aliases = rpcChainAliases[chain.key] || [];
+  return [
+    chain.key,
+    chain.label,
+    chain.label.replace(/\bmainnet\b/gi, ""),
+    chain.label.replace(/\bone\b/gi, ""),
+    ...aliases
+  ]
+    .map((term) => normalizeChainSearchValue(term))
+    .filter(Boolean);
+}
+
+function resolveRpcChainQuery(query) {
+  const normalizedQuery = normalizeChainSearchValue(query);
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  const availableChains = state.chains.length ? state.chains : [];
+  let bestMatch = null;
+
+  availableChains.forEach((chain) => {
+    const terms = [...new Set(chainSearchTerms(chain))];
+    terms.forEach((term) => {
+      let score = Infinity;
+      let mode = "none";
+
+      if (term === normalizedQuery) {
+        score = 0;
+        mode = "exact";
+      } else if (term.startsWith(normalizedQuery) || normalizedQuery.startsWith(term)) {
+        score = 1 + Math.abs(term.length - normalizedQuery.length) / 100;
+        mode = "prefix";
+      } else if (term.includes(normalizedQuery) || normalizedQuery.includes(term)) {
+        score = 2 + Math.abs(term.length - normalizedQuery.length) / 100;
+        mode = "contains";
+      } else {
+        const compactTerm = term.replace(/\s+/g, "");
+        const compactQuery = normalizedQuery.replace(/\s+/g, "");
+        const distance = levenshteinDistance(compactTerm, compactQuery);
+        const threshold = Math.max(1, Math.ceil(Math.max(compactTerm.length, compactQuery.length) * 0.22));
+        if (distance > threshold) {
+          return;
+        }
+
+        score = 3 + distance / 10;
+        mode = "fuzzy";
+      }
+
+      if (
+        !bestMatch ||
+        score < bestMatch.score ||
+        (score === bestMatch.score && term.length < bestMatch.term.length)
+      ) {
+        bestMatch = { chain, term, score, mode };
+      }
+    });
+  });
+
+  return bestMatch;
 }
 
 function selectedWalletIds() {
@@ -1502,52 +1647,14 @@ function rpcHealthDetail(node) {
     : "The most recent health probe did not return a successful result.";
 }
 
-function resetRpcForm(options = {}) {
-  activeRpcEditId = null;
-  rpcAutoSuggestedName = "";
-  rpcFormGroup = "Custom";
-  rpcSelectedChainlistCandidate = null;
-  rpcFormTitle.textContent = "Add RPC Node";
-  rpcFormSubtitle.textContent = "Create a stronger mesh with multiple fallback nodes.";
-  rpcFormBadge.classList.add("hidden");
-  rpcSubmitButton.textContent = "Save RPC Node";
-  rpcCancelButton.classList.add("hidden");
-
-  if (!options.preserveName) {
-    rpcNameInput.value = "";
-  }
-
-  if (!options.preserveUrl) {
-    rpcUrlInput.value = "";
-  }
-
-  if (rpcDetectStatus) {
-    rpcDetectStatus.textContent = "Paste an RPC URL to auto-detect the chain and suggest a name.";
-  }
+function isRpcEditMode() {
+  return Boolean(activeRpcEditId);
 }
 
-function startRpcEdit(node) {
-  if (!node || node.source === "env") {
-    return;
-  }
-
-  activeRpcEditId = node.id;
-  rpcFormGroup = node.group || "Custom";
-  rpcSelectedChainlistCandidate = null;
-  rpcFormTitle.textContent = "Edit RPC Node";
-  rpcFormSubtitle.textContent = "Correct the chain, label, or endpoint URL for this stored node.";
-  rpcFormBadge.classList.remove("hidden");
-  rpcSubmitButton.textContent = "Update RPC Node";
-  rpcCancelButton.classList.remove("hidden");
-  rpcNameInput.value = node.name || "";
-  rpcChainInput.value = node.chainKey || rpcChainInput.value;
-  rpcUrlInput.value = node.url || "";
-  rpcAutoSuggestedName = "";
-  if (rpcDetectStatus) {
-    rpcDetectStatus.textContent = "Editing stored node. Update the URL to re-detect its chain.";
-  }
-  rpcNameInput.focus();
-  rpcForm.scrollIntoView({ behavior: "smooth", block: "start" });
+function defaultRpcDetectMessage() {
+  return isRpcEditMode()
+    ? "Editing stored node. Update the URL to re-detect its chain."
+    : "Type an EVM chain name and the dashboard will scan fast Chainlist RPCs you can keep or uncheck.";
 }
 
 function setRpcDetectMessage(message) {
@@ -1555,8 +1662,7 @@ function setRpcDetectMessage(message) {
     return;
   }
 
-  rpcDetectStatus.textContent =
-    message || "Paste an RPC URL to auto-detect the chain and suggest a name.";
+  rpcDetectStatus.textContent = message || defaultRpcDetectMessage();
 }
 
 function maybeApplySuggestedRpcName(nameSuggestion) {
@@ -1578,6 +1684,483 @@ function maybeApplySuggestedRpcName(nameSuggestion) {
 function formatLatencyLabel(latencyMs) {
   const normalized = Number(latencyMs);
   return Number.isFinite(normalized) ? `${Math.round(normalized)}ms` : "Untested";
+}
+
+function healthyRpcDiscoveryCandidates() {
+  return (rpcDiscoveryState.candidates || []).filter((candidate) => candidate.lastHealth?.status === "healthy");
+}
+
+function selectedRpcDiscoveryCandidates() {
+  const selectedUrls = new Set(rpcDiscoveryState.selectedUrls || []);
+  return healthyRpcDiscoveryCandidates().filter((candidate) => selectedUrls.has(candidate.url));
+}
+
+function updateRpcSubmitButton() {
+  if (isRpcEditMode()) {
+    rpcSubmitButton.textContent = "Update RPC Node";
+    rpcSubmitButton.disabled = false;
+    rpcImportChainlistButton.disabled = false;
+    return;
+  }
+
+  const selectedCount = selectedRpcDiscoveryCandidates().length;
+  rpcSubmitButton.textContent = selectedCount > 0 ? `Add ${pluralize(selectedCount, "RPC Node")}` : "Add Selected RPCs";
+  rpcSubmitButton.disabled = selectedCount === 0 || rpcDiscoveryState.loading;
+  rpcImportChainlistButton.disabled = rpcDiscoveryState.loading || !rpcChainSearchInput.value.trim();
+}
+
+function renderRpcDiscoveryMatch(match = rpcDiscoveryState.chain ? resolveRpcChainQuery(rpcChainSearchInput.value) : null) {
+  if (!rpcSearchMatch) {
+    return;
+  }
+
+  if (isRpcEditMode()) {
+    rpcSearchMatch.classList.add("hidden");
+    rpcSearchMatch.innerHTML = "";
+    return;
+  }
+
+  if (!match?.chain) {
+    rpcSearchMatch.classList.add("hidden");
+    rpcSearchMatch.innerHTML = "";
+    return;
+  }
+
+  const normalizedInput = normalizeChainSearchValue(rpcChainSearchInput.value);
+  const chips = [`Matched ${match.chain.label}`];
+  if (match.term && match.term !== normalizedInput) {
+    chips.push(`Alias: ${match.term}`);
+  }
+  if (match.mode === "fuzzy") {
+    chips.push("Fuzzy match");
+  }
+
+  rpcSearchMatch.classList.remove("hidden");
+  rpcSearchMatch.innerHTML = chips.map((chip) => `<span class="queue-chip">${escapeHtml(chip)}</span>`).join("");
+}
+
+function renderRpcDiscoverySummary() {
+  if (isRpcEditMode()) {
+    rpcInlineSummary.classList.add("hidden");
+    rpcInlineSummary.innerHTML = "";
+    rpcInlineSelectionStatus.classList.add("hidden");
+    rpcInlineSelectionStatus.textContent = "";
+    return;
+  }
+
+  const summary = rpcDiscoveryState.summary;
+  if (!summary) {
+    rpcInlineSummary.classList.add("hidden");
+    rpcInlineSummary.innerHTML = "";
+  } else {
+    const chips = [
+      `${Number(summary.published || 0)} published`,
+      `${Number(summary.probed || 0)} probed`,
+      `${Number(summary.healthy || 0)} healthy`,
+      Number(summary.skippedExisting || 0) > 0 ? `${Number(summary.skippedExisting)} already saved` : null,
+      Number(summary.skippedProbeBudget || 0) > 0 ? `${Number(summary.skippedProbeBudget)} unprobed` : null
+    ].filter(Boolean);
+
+    rpcInlineSummary.classList.toggle("hidden", chips.length === 0);
+    rpcInlineSummary.innerHTML = chips.map((chip) => `<span class="queue-chip">${escapeHtml(chip)}</span>`).join("");
+  }
+
+  const visibleCount = healthyRpcDiscoveryCandidates().length;
+  const selectedCount = selectedRpcDiscoveryCandidates().length;
+  if (visibleCount === 0) {
+    rpcInlineSelectionStatus.classList.add("hidden");
+    rpcInlineSelectionStatus.textContent = "";
+  } else {
+    rpcInlineSelectionStatus.classList.remove("hidden");
+    rpcInlineSelectionStatus.textContent = `${pluralize(selectedCount, "RPC node")} selected from ${pluralize(visibleCount, "healthy result")}.`;
+  }
+}
+
+function renderRpcDiscoveryCandidates() {
+  if (isRpcEditMode()) {
+    rpcInlineCandidateList.innerHTML = "";
+    updateRpcSubmitButton();
+    return;
+  }
+
+  if (rpcDiscoveryState.loading) {
+    const chainLabelCopy = rpcDiscoveryState.chain?.label || "this chain";
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>Scanning ${escapeHtml(chainLabelCopy)}</h3>
+        <p>Checking Chainlist endpoints for healthy responses and low latency.</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const query = String(rpcDiscoveryState.query || "").trim();
+  if (!query) {
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>Search a chain</h3>
+        <p>Type Ethereum, Base, Sepolia, Arbitrum, Blast, Shape, or Plasma to scan healthy RPCs.</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  if (!rpcDiscoveryState.chain) {
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>No supported chain match</h3>
+        <p>Try Ethereum, ETH, Base, Base Sepolia, Sepolia, Arbitrum, Blast, Shape, or Plasma.</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const candidates = healthyRpcDiscoveryCandidates();
+  if (candidates.length === 0) {
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>No healthy RPCs ready</h3>
+        <p>The live probe did not find a healthy low-latency endpoint for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const selectedUrls = new Set(rpcDiscoveryState.selectedUrls || []);
+  rpcInlineCandidateList.innerHTML = candidates
+    .map((candidate) => {
+      const isSelected = selectedUrls.has(candidate.url);
+      const rankingChip = candidate.recommended ? "Recommended" : `Rank #${candidate.rank || "?"}`;
+
+      return `
+        <label class="rpc-candidate-card ${isSelected ? "selected" : ""}">
+          <div class="rpc-candidate-head">
+            <div class="rpc-candidate-select">
+              <input
+                type="checkbox"
+                data-rpc-discovery-toggle="${escapeHtml(candidate.url)}"
+                ${isSelected ? "checked" : ""}
+              />
+            </div>
+            <div class="rpc-candidate-copy">
+              <div class="rpc-node-title-row">
+                <strong>${escapeHtml(candidate.name || "Chainlist RPC")}</strong>
+                ${rpcHealthMarkup(candidate)}
+              </div>
+              <div class="chip-row">
+                <span class="queue-chip">${escapeHtml(candidate.chainLabel || rpcDiscoveryState.chain.label)}</span>
+                <span class="queue-chip">${escapeHtml(rankingChip)}</span>
+                <span class="queue-chip">${escapeHtml(formatLatencyLabel(candidate.lastHealth?.latencyMs))}</span>
+              </div>
+              <p class="rpc-node-url">${escapeHtml(candidate.url)}</p>
+              <p class="muted-copy rpc-candidate-detail">${escapeHtml(rpcHealthDetail(candidate))}</p>
+            </div>
+          </div>
+        </label>
+      `;
+    })
+    .join("");
+
+  rpcInlineCandidateList.querySelectorAll("[data-rpc-discovery-toggle]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const selected = new Set(rpcDiscoveryState.selectedUrls || []);
+      if (input.checked) {
+        selected.add(input.dataset.rpcDiscoveryToggle);
+      } else {
+        selected.delete(input.dataset.rpcDiscoveryToggle);
+      }
+
+      rpcDiscoveryState.selectedUrls = [...selected];
+      renderRpcDiscoveryCandidates();
+    });
+  });
+
+  renderRpcDiscoverySummary();
+  updateRpcSubmitButton();
+}
+
+function clearRpcDiscoveryState(options = {}) {
+  const { preserveQuery = false } = options;
+  if (rpcChainSearchTimer) {
+    clearTimeout(rpcChainSearchTimer);
+    rpcChainSearchTimer = null;
+  }
+
+  rpcDiscoveryRequestId += 1;
+  rpcDiscoveryState = {
+    query: preserveQuery ? String(rpcChainSearchInput.value || "").trim() : "",
+    chain: null,
+    candidates: [],
+    selectedUrls: [],
+    loading: false,
+    summary: null
+  };
+
+  if (!preserveQuery) {
+    rpcChainSearchInput.value = "";
+  }
+
+  renderRpcDiscoveryMatch(null);
+  renderRpcDiscoveryCandidates();
+}
+
+async function runRpcDiscoveryScan(options = {}) {
+  const { forceRefresh = false } = options;
+  if (isRpcEditMode()) {
+    return;
+  }
+
+  const query = String(rpcChainSearchInput.value || "").trim();
+  const normalizedQuery = normalizeChainSearchValue(query);
+  rpcDiscoveryState.query = query;
+
+  if (!normalizedQuery) {
+    clearRpcDiscoveryState();
+    setRpcDetectMessage();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  if (normalizedQuery.length < 2) {
+    clearRpcDiscoveryState({ preserveQuery: true });
+    setRpcDetectMessage("Keep typing the chain name to start the RPC scan.");
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const match = resolveRpcChainQuery(query);
+  renderRpcDiscoveryMatch(match);
+  if (!match?.chain) {
+    clearRpcDiscoveryState({ preserveQuery: true });
+    setRpcDetectMessage(`No supported EVM chain matched "${query}". Try Ethereum, ETH, Base, or Arbitrum.`);
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const requestId = ++rpcDiscoveryRequestId;
+  const priorSelection = match.chain.key === rpcDiscoveryState.chain?.key ? new Set(rpcDiscoveryState.selectedUrls || []) : new Set();
+  rpcDiscoveryState = {
+    query,
+    chain: match.chain,
+    candidates: [],
+    selectedUrls: [],
+    loading: true,
+    summary: null
+  };
+  rpcChainInput.value = match.chain.key;
+  rpcFormGroup = "Chainlist";
+  setRpcDetectMessage(`Scanning fast Chainlist RPCs for ${match.chain.label}...`);
+  renderRpcDiscoveryCandidates();
+
+  try {
+    const payload = await request("/api/rpc-nodes/chainlist-candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chainKey: match.chain.key,
+        limit: 8,
+        probeBudget: 20,
+        forceRefresh
+      }),
+      quiet: true
+    });
+
+    if (requestId !== rpcDiscoveryRequestId) {
+      return;
+    }
+
+    const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+    const healthyUrls = candidates
+      .filter((candidate) => candidate.lastHealth?.status === "healthy")
+      .map((candidate) => candidate.url);
+    const selectedUrls = healthyUrls.filter((url) => priorSelection.has(url));
+
+    rpcDiscoveryState = {
+      query,
+      chain: match.chain,
+      candidates,
+      selectedUrls: selectedUrls.length > 0 ? selectedUrls : healthyUrls,
+      loading: false,
+      summary: payload
+    };
+
+    const healthyCount = Number(payload.healthy || 0);
+    setRpcDetectMessage(
+      healthyCount > 0
+        ? `${match.chain.label} matched. The recommended RPC is highlighted, and all healthy results are preselected so you can uncheck any you do not want.`
+        : `${match.chain.label} matched, but no healthy RPC endpoints passed the live probe.`
+    );
+  } catch {
+    if (requestId !== rpcDiscoveryRequestId) {
+      return;
+    }
+
+    rpcDiscoveryState = {
+      query,
+      chain: match.chain,
+      candidates: [],
+      selectedUrls: [],
+      loading: false,
+      summary: null
+    };
+    setRpcDetectMessage(`RPC scan failed for ${match.chain.label}. Try Refresh Scan in a moment.`);
+  }
+
+  renderRpcDiscoveryCandidates();
+}
+
+function scheduleRpcDiscoveryScan(options = {}) {
+  const { immediate = false, forceRefresh = false } = options;
+  if (rpcChainSearchTimer) {
+    clearTimeout(rpcChainSearchTimer);
+    rpcChainSearchTimer = null;
+  }
+
+  if (immediate) {
+    void runRpcDiscoveryScan({ forceRefresh });
+    return;
+  }
+
+  rpcChainSearchTimer = window.setTimeout(() => {
+    rpcChainSearchTimer = null;
+    void runRpcDiscoveryScan({ forceRefresh });
+  }, 450);
+}
+
+async function submitRpcDiscoverySelection() {
+  const selectedCandidates = selectedRpcDiscoveryCandidates();
+  if (selectedCandidates.length === 0) {
+    showToast("Choose at least one healthy RPC before saving.", "info", "RPC Selection");
+    return;
+  }
+
+  const buttonLabel = rpcSubmitButton.textContent;
+  rpcSubmitButton.disabled = true;
+  rpcSubmitButton.textContent = "Adding RPCs...";
+
+  let savedCount = 0;
+  const failures = [];
+
+  for (const candidate of selectedCandidates) {
+    try {
+      await request("/api/rpc-nodes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: candidate.name,
+          chainKey: candidate.chainKey,
+          url: candidate.url,
+          group: "Chainlist"
+        }),
+        quiet: true
+      });
+      savedCount += 1;
+    } catch (error) {
+      failures.push({ candidate, error });
+    }
+  }
+
+  try {
+    await loadState();
+    populateChainSelectors();
+  } catch {}
+
+  if (rpcChainSearchInput.value.trim()) {
+    await runRpcDiscoveryScan();
+  } else {
+    renderRpcDiscoveryCandidates();
+  }
+
+  rpcSubmitButton.disabled = false;
+  rpcSubmitButton.textContent = buttonLabel;
+  updateRpcSubmitButton();
+
+  if (savedCount > 0 && failures.length === 0) {
+    showToast(`${savedCount} RPC node${savedCount === 1 ? "" : "s"} added from the live scan.`, "success", "RPC Added");
+    return;
+  }
+
+  if (savedCount > 0) {
+    showToast(
+      `${savedCount} saved, ${failures.length} failed. The remaining healthy RPCs are still listed below.`,
+      "info",
+      "Partial RPC Import"
+    );
+    return;
+  }
+
+  showToast("No RPC nodes were added from the current selection.", "error", "RPC Save Failed");
+}
+
+function resetRpcForm(options = {}) {
+  const { preserveSearch = false } = options;
+  activeRpcEditId = null;
+  rpcAutoSuggestedName = "";
+  rpcFormGroup = "Custom";
+  rpcSelectedChainlistCandidate = null;
+  rpcFormTitle.textContent = "Discovery Lab";
+  rpcFormSubtitle.textContent = "Scan low-latency RPCs, stack healthy fallbacks, and deepen the mint mesh chain by chain.";
+  rpcFormBadge.classList.add("hidden");
+  rpcCancelButton.classList.add("hidden");
+  rpcImportChainlistButton.classList.remove("hidden");
+  rpcImportChainlistButton.textContent = "Deep Scan Chainlist";
+  rpcChainSearchField.classList.remove("hidden");
+  rpcManualFields.classList.add("hidden");
+  rpcInlineSummary.classList.remove("hidden");
+  rpcInlineCandidateList.classList.remove("hidden");
+
+  rpcNameInput.value = "";
+  rpcUrlInput.value = "";
+  rpcAutoSuggestedName = "";
+
+  if (!preserveSearch) {
+    clearRpcDiscoveryState();
+  } else {
+    clearRpcDiscoveryState({ preserveQuery: true });
+    if (rpcChainSearchInput.value.trim()) {
+      void runRpcDiscoveryScan();
+    }
+  }
+
+  setRpcDetectMessage();
+  updateRpcSubmitButton();
+}
+
+function startRpcEdit(node) {
+  if (!node || node.source === "env") {
+    return;
+  }
+
+  activeRpcEditId = node.id;
+  rpcFormGroup = node.group || "Custom";
+  rpcSelectedChainlistCandidate = null;
+  rpcFormTitle.textContent = "Edit RPC Node";
+  rpcFormSubtitle.textContent = "Correct the chain, label, or endpoint URL for this stored node.";
+  rpcFormBadge.classList.remove("hidden");
+  rpcCancelButton.classList.remove("hidden");
+  rpcImportChainlistButton.classList.add("hidden");
+  rpcChainSearchField.classList.add("hidden");
+  rpcSearchMatch.classList.add("hidden");
+  rpcManualFields.classList.remove("hidden");
+  rpcInlineSummary.classList.add("hidden");
+  rpcInlineSelectionStatus.classList.add("hidden");
+  rpcInlineCandidateList.classList.add("hidden");
+  rpcNameInput.value = node.name || "";
+  rpcChainInput.value = node.chainKey || rpcChainInput.value;
+  rpcUrlInput.value = node.url || "";
+  rpcAutoSuggestedName = "";
+  setRpcDetectMessage();
+  updateRpcSubmitButton();
+  rpcNameInput.focus();
+  rpcForm.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function clearSelectedChainlistCandidate(options = {}) {
@@ -2002,49 +2585,669 @@ async function inspectRpcUrl(url, options = {}) {
   }, 350);
 }
 
+function isSocketRpcUrl(url) {
+  return /^wss?:\/\//i.test(String(url || "").trim());
+}
+
+function rpcLatencyValue(node) {
+  const latency = Number(node?.lastHealth?.latencyMs);
+  return Number.isFinite(latency) ? latency : Infinity;
+}
+
+function rpcStatusRank(node) {
+  if (node?.lastHealth?.status === "healthy") {
+    return 0;
+  }
+
+  if (!node?.lastHealth) {
+    return 1;
+  }
+
+  if (node.lastHealth.status === "untested" || node.lastHealth.status === "unknown") {
+    return 2;
+  }
+
+  return 3;
+}
+
+function sortRpcNodesForMinting(nodes = []) {
+  return [...nodes].sort((left, right) => {
+    const statusDelta = rpcStatusRank(left) - rpcStatusRank(right);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    const latencyDelta = rpcLatencyValue(left) - rpcLatencyValue(right);
+    if (latencyDelta !== 0) {
+      return latencyDelta;
+    }
+
+    const socketDelta = Number(isSocketRpcUrl(right?.url)) - Number(isSocketRpcUrl(left?.url));
+    if (socketDelta !== 0) {
+      return socketDelta;
+    }
+
+    const freshnessDelta =
+      new Date(right?.lastHealth?.checkedAt || 0).getTime() -
+      new Date(left?.lastHealth?.checkedAt || 0).getTime();
+    if (freshnessDelta !== 0) {
+      return freshnessDelta;
+    }
+
+    return String(left?.name || "").localeCompare(String(right?.name || ""));
+  });
+}
+
+function rpcHostname(url) {
+  try {
+    return new URL(String(url || "")).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+function rpcProviderLabel(node) {
+  const hostname = rpcHostname(node?.url);
+  const firstLabel = (hostname.split(".")[0] || "")
+    .replace(/[-_]/g, " ")
+    .replace(/\brpc\b/gi, "")
+    .trim();
+  if (!firstLabel) {
+    return hostname || "Unknown provider";
+  }
+
+  return firstLabel
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((segment) => segment[0].toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function chainTaskDemand(chainKey) {
+  const tasks = state.tasks.filter((task) => task.chainKey === chainKey);
+  return {
+    total: tasks.length,
+    live: tasks.filter((task) => ["running", "queued"].includes(task.status)).length,
+    multiRpcBroadcast: tasks.filter((task) => task.multiRpcBroadcast).length,
+    mempool: tasks.filter((task) => task.executionTriggerMode === "mempool").length,
+    relay: tasks.filter((task) => task.privateRelayEnabled).length
+  };
+}
+
+function activeRpcChainKeys() {
+  const chainKeys = new Set([
+    ...state.rpcNodes.map((node) => node.chainKey),
+    ...state.tasks.map((task) => task.chainKey),
+    rpcDiscoveryState.chain?.key || ""
+  ]);
+
+  return [...chainKeys].filter(Boolean);
+}
+
+function buildRpcChainGroups() {
+  return activeRpcChainKeys()
+    .map((chainKey) => {
+      const nodes = sortRpcNodesForMinting(state.rpcNodes.filter((node) => node.chainKey === chainKey));
+      const healthyNodes = nodes.filter((node) => node.lastHealth?.status === "healthy");
+      const socketNodes = nodes.filter((node) => isSocketRpcUrl(node.url));
+      const healthySocketNodes = healthyNodes.filter((node) => isSocketRpcUrl(node.url));
+      const demand = chainTaskDemand(chainKey);
+      const freshHealthyCount = healthyNodes.filter((node) => {
+        const checkedAt = new Date(node.lastHealth?.checkedAt || 0).getTime();
+        return checkedAt > 0 && Date.now() - checkedAt <= 15 * 60 * 1000;
+      }).length;
+      const maxLatency = Math.max(
+        1,
+        ...healthyNodes
+          .map((node) => rpcLatencyValue(node))
+          .filter((latency) => Number.isFinite(latency))
+      );
+
+      let readinessTone = "error";
+      let readinessLabel = "No healthy mesh";
+
+      if (healthyNodes.length >= 3) {
+        readinessTone = "healthy";
+        readinessLabel = demand.mempool > 0 && healthySocketNodes.length > 0 ? "Sniper-ready mesh" : "Broadcast mesh ready";
+      } else if (healthyNodes.length >= 2) {
+        readinessTone = "warming";
+        readinessLabel = healthySocketNodes.length > 0 ? "Broadcast ready" : "Mesh ready, no socket edge";
+      } else if (healthyNodes.length === 1) {
+        readinessTone = "warming";
+        readinessLabel = "Single-node risk";
+      }
+
+      return {
+        chainKey,
+        chainLabel: chainLabel(chainKey),
+        demand,
+        nodes,
+        healthyNodes,
+        socketNodes,
+        healthySocketNodes,
+        primaryNode: healthyNodes[0] || nodes[0] || null,
+        fallbackNode: healthyNodes[1] || null,
+        readinessTone,
+        readinessLabel,
+        freshHealthyCount,
+        maxLatency
+      };
+    })
+    .sort((left, right) => {
+      const leftDemandScore =
+        left.demand.live * 4 + left.demand.total * 2 + left.demand.mempool * 2 + left.demand.relay;
+      const rightDemandScore =
+        right.demand.live * 4 + right.demand.total * 2 + right.demand.mempool * 2 + right.demand.relay;
+      if (leftDemandScore !== rightDemandScore) {
+        return rightDemandScore - leftDemandScore;
+      }
+
+      const readinessRank = { healthy: 0, warming: 1, error: 2 };
+      const readinessDelta = readinessRank[left.readinessTone] - readinessRank[right.readinessTone];
+      if (readinessDelta !== 0) {
+        return readinessDelta;
+      }
+
+      return left.chainLabel.localeCompare(right.chainLabel);
+    });
+}
+
+function chainReadinessChipClass(group) {
+  if (group.readinessTone === "healthy") {
+    return "armed";
+  }
+
+  if (group.readinessTone === "error") {
+    return "blocked";
+  }
+
+  return "warming";
+}
+
+function mintRoleLabel(node, group, index) {
+  if (!node) {
+    return "Unassigned";
+  }
+
+  const healthy = node.lastHealth?.status === "healthy";
+  if (!healthy) {
+    return "Recovery Candidate";
+  }
+
+  if (index === 0 && isSocketRpcUrl(node.url) && group.demand.mempool > 0) {
+    return "Primary + Mempool";
+  }
+
+  if (index === 0) {
+    return "Primary Broadcast";
+  }
+
+  if (index === 1) {
+    return "Hot Failover";
+  }
+
+  if (isSocketRpcUrl(node.url)) {
+    return "Mempool Watch";
+  }
+
+  return "Deep Fallback";
+}
+
+function latencyFillWidth(node, group) {
+  const latency = rpcLatencyValue(node);
+  if (!Number.isFinite(latency)) {
+    return 14;
+  }
+
+  const maxLatency = Math.max(group?.maxLatency || latency, latency, 1);
+  return Math.max(14, Math.round((1 - latency / (maxLatency * 1.15)) * 100));
+}
+
+function buildRpcMeshSnapshot(groups = buildRpcChainGroups()) {
+  const healthyNodes = state.rpcNodes.filter((node) => node.lastHealth?.status === "healthy");
+  const fastestNode = sortRpcNodesForMinting(healthyNodes)[0] || null;
+  const averageLatency = healthyNodes.length
+    ? Math.round(
+        healthyNodes.reduce((sum, node) => sum + rpcLatencyValue(node), 0) / healthyNodes.length
+      )
+    : null;
+
+  return {
+    totalNodes: state.rpcNodes.length,
+    healthyNodes: healthyNodes.length,
+    healthySocketNodes: healthyNodes.filter((node) => isSocketRpcUrl(node.url)).length,
+    averageLatency,
+    fastestNode,
+    broadcastReadyChains: groups.filter((group) => group.healthyNodes.length >= 2).length,
+    sniperReadyChains: groups.filter(
+      (group) => group.healthyNodes.length >= 2 && group.healthySocketNodes.length > 0
+    ).length,
+    deepRecoveryChains: groups.filter((group) => group.healthyNodes.length >= 3).length,
+    activeTasks: state.tasks.filter((task) => ["running", "queued"].includes(task.status)).length,
+    multiRpcTasks: state.tasks.filter((task) => task.multiRpcBroadcast).length,
+    mempoolTasks: state.tasks.filter((task) => task.executionTriggerMode === "mempool").length,
+    relayTasks: state.tasks.filter((task) => task.privateRelayEnabled).length
+  };
+}
+
+function renderRpcOperationsOverview(groups = buildRpcChainGroups()) {
+  const snapshot = buildRpcMeshSnapshot(groups);
+  const cards = [
+    {
+      label: "Healthy Mesh",
+      value: `${snapshot.healthyNodes}/${snapshot.totalNodes || 0}`,
+      detail: `${snapshot.broadcastReadyChains} chain${snapshot.broadcastReadyChains === 1 ? "" : "s"} ready for multi-RPC broadcast`
+    },
+    {
+      label: "Fastest Endpoint",
+      value: snapshot.fastestNode ? formatLatencyLabel(snapshot.fastestNode.lastHealth?.latencyMs) : "--",
+      detail: snapshot.fastestNode
+        ? `${snapshot.fastestNode.name} · ${chainLabel(snapshot.fastestNode.chainKey)}`
+        : "Run a mesh pulse to populate live latency"
+    },
+    {
+      label: "WebSocket Hooks",
+      value: String(snapshot.healthySocketNodes),
+      detail: `${snapshot.sniperReadyChains} chain${snapshot.sniperReadyChains === 1 ? "" : "s"} ready for mempool or event arming`
+    },
+    {
+      label: "Recovery Depth",
+      value: String(snapshot.deepRecoveryChains),
+      detail: "Chains with three or more healthy endpoints for hot-failover depth"
+    },
+    {
+      label: "Mint Pressure",
+      value: String(snapshot.multiRpcTasks || snapshot.activeTasks || 0),
+      detail: `${snapshot.multiRpcTasks} multi-RPC · ${snapshot.mempoolTasks} mempool · ${snapshot.relayTasks} relay task${snapshot.relayTasks === 1 ? "" : "s"}`
+    }
+  ];
+
+  rpcOpsOverview.innerHTML = cards
+    .map(
+      (card) => `
+        <article class="rpc-stat-card">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(card.value)}</strong>
+          <p>${escapeHtml(card.detail)}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function buildRpcAdvisoryCards(groups = buildRpcChainGroups()) {
+  const snapshot = buildRpcMeshSnapshot(groups);
+  const mempoolDemandChains = groups.filter((group) => group.demand.mempool > 0);
+  const relayDemandChains = groups.filter((group) => group.demand.relay > 0);
+  const freshHealthyNodes = state.rpcNodes.filter((node) => {
+    const checkedAt = new Date(node.lastHealth?.checkedAt || 0).getTime();
+    return node.lastHealth?.status === "healthy" && checkedAt > 0 && Date.now() - checkedAt <= 15 * 60 * 1000;
+  }).length;
+
+  return [
+    {
+      tone:
+        snapshot.broadcastReadyChains >= Math.max(1, groups.filter((group) => group.demand.total > 0).length)
+          ? "healthy"
+          : snapshot.broadcastReadyChains > 0
+            ? "warning"
+            : "error",
+      title: "Public Swarm",
+      detail:
+        snapshot.broadcastReadyChains > 0
+          ? `${snapshot.broadcastReadyChains} chain${snapshot.broadcastReadyChains === 1 ? "" : "s"} have at least two healthy endpoints for parallel broadcast.`
+          : "No chain currently has enough healthy endpoints for a real broadcast swarm."
+    },
+    {
+      tone:
+        mempoolDemandChains.length === 0
+          ? "healthy"
+          : mempoolDemandChains.every((group) => group.healthySocketNodes.length > 0)
+            ? "healthy"
+            : "warning",
+      title: "WebSocket Trigger Net",
+      detail:
+        mempoolDemandChains.length === 0
+          ? "No mempool-triggered tasks are active, but socket listeners are still valuable for launch windows."
+          : `${mempoolDemandChains.filter((group) => group.healthySocketNodes.length > 0).length}/${mempoolDemandChains.length} mempool chain${mempoolDemandChains.length === 1 ? "" : "s"} have a healthy websocket listener.`
+    },
+    {
+      tone:
+        relayDemandChains.length === 0
+          ? "healthy"
+          : relayDemandChains.every((group) => group.healthyNodes.length > 0)
+            ? "healthy"
+            : "warning",
+      title: "Relay Hybrid",
+      detail:
+        relayDemandChains.length === 0
+          ? "No private relay tasks are currently active."
+          : `${relayDemandChains.filter((group) => group.healthyNodes.length > 0).length}/${relayDemandChains.length} relay chain${relayDemandChains.length === 1 ? "" : "s"} still have public fallback coverage if the relay stalls.`
+    },
+    {
+      tone: freshHealthyNodes >= Math.max(1, snapshot.healthyNodes * 0.7) ? "healthy" : "warning",
+      title: "Latency Hygiene",
+      detail:
+        snapshot.healthyNodes === 0
+          ? "Healthy latency data is missing. Pulse the mesh before a hot mint."
+          : `${freshHealthyNodes}/${snapshot.healthyNodes} healthy endpoint${snapshot.healthyNodes === 1 ? "" : "s"} were checked in the last 15 minutes.`
+    }
+  ];
+}
+
+function renderRpcBroadcastAdvisor(groups = buildRpcChainGroups()) {
+  rpcBroadcastAdvisor.innerHTML = buildRpcAdvisoryCards(groups)
+    .map(
+      (card) => `
+        <article class="rpc-advisory-card ${escapeHtml(card.tone)}">
+          <div class="chip-row">
+            <span class="queue-chip ${card.tone === "healthy" ? "armed" : card.tone === "error" ? "blocked" : "warming"}">${escapeHtml(card.title)}</span>
+          </div>
+          <strong>${escapeHtml(card.title)}</strong>
+          <p>${escapeHtml(card.detail)}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderRpcDoctrineGrid(groups = buildRpcChainGroups()) {
+  const snapshot = buildRpcMeshSnapshot(groups);
+  const doctrineCards = [
+    {
+      tone: snapshot.broadcastReadyChains > 0 ? "healthy" : "warning",
+      title: "Public Mint Swarm",
+      detail: "Use one fastest primary plus at least one healthy fallback on the same chain so multi-RPC broadcast wins on first acceptance and still propagates wide."
+    },
+    {
+      tone: snapshot.healthySocketNodes > 0 ? "healthy" : "warning",
+      title: "WebSocket Sentinel",
+      detail: "Keep at least one healthy websocket endpoint on chains where you run event or mempool triggers, so the bot can arm before public traffic catches up."
+    },
+    {
+      tone: snapshot.relayTasks === 0 || snapshot.broadcastReadyChains > 0 ? "healthy" : "warning",
+      title: "Relay + Public Hybrid",
+      detail: "Private relay protects against mempool copy-trading, but a healthy public fallback mesh still matters when relay submission fails or rate limits."
+    },
+    {
+      tone: snapshot.averageLatency != null && snapshot.averageLatency <= 400 ? "healthy" : "warning",
+      title: "Latency Hygiene",
+      detail: "Re-test the mesh before hot launches. Endpoints drifting above roughly 400ms should become deep fallback, not primary broadcast targets."
+    }
+  ];
+
+  rpcDoctrineGrid.innerHTML = doctrineCards
+    .map(
+      (card) => `
+        <article class="rpc-advisory-card ${escapeHtml(card.tone)}">
+          <strong>${escapeHtml(card.title)}</strong>
+          <p>${escapeHtml(card.detail)}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderRpcChainCommandGrid(groups = buildRpcChainGroups()) {
+  rpcChainCommandCaption.textContent = groups.length
+    ? `${pluralize(groups.length, "chain")} tracked`
+    : "No chain mesh yet";
+
+  if (groups.length === 0) {
+    rpcChainCommandGrid.innerHTML = `
+      <div class="empty-state">
+        <h3>No chain intelligence yet</h3>
+        <p>Add or scan RPC endpoints to build a ranked chain command matrix for your mint mesh.</p>
+      </div>
+    `;
+    return;
+  }
+
+  rpcChainCommandGrid.innerHTML = groups
+    .map(
+      (group) => `
+        <article class="rpc-chain-command-card ${escapeHtml(group.readinessTone)}">
+          <div class="rpc-chain-command-top">
+            <div class="rpc-chain-command-copy">
+              <strong>${escapeHtml(group.chainLabel)}</strong>
+              <p>${escapeHtml(group.readinessLabel)}</p>
+            </div>
+            <span class="queue-chip ${chainReadinessChipClass(group)}">${escapeHtml(group.readinessLabel)}</span>
+          </div>
+          <div class="chip-row">
+            <span class="queue-chip">${pluralize(group.nodes.length, "node")}</span>
+            <span class="queue-chip">${pluralize(group.healthyNodes.length, "healthy endpoint", "healthy endpoints")}</span>
+            <span class="queue-chip">${pluralize(group.healthySocketNodes.length, "socket hook")}</span>
+          </div>
+          <p>
+            ${
+              group.primaryNode
+                ? `Primary: ${group.primaryNode.name} • ${formatLatencyLabel(group.primaryNode.lastHealth?.latencyMs)}`
+                : "Primary: none yet"
+            }
+          </p>
+          <p>
+            ${
+              group.fallbackNode
+                ? `Hot failover: ${group.fallbackNode.name} • ${formatLatencyLabel(group.fallbackNode.lastHealth?.latencyMs)}`
+                : "Hot failover: add at least one more healthy endpoint"
+            }
+          </p>
+          <p>
+            ${
+              group.healthySocketNodes[0]
+                ? `WebSocket listener: ${group.healthySocketNodes[0].name}`
+                : "WebSocket listener: add one for event or mempool arming"
+            }
+          </p>
+          <p>
+            ${
+              group.demand.total > 0
+                ? `${group.demand.total} task${group.demand.total === 1 ? "" : "s"} • ${group.demand.multiRpcBroadcast} multi-RPC • ${group.demand.mempool} mempool • ${group.demand.relay} relay`
+                : "No tasks are currently bound to this chain."
+            }
+          </p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderRpcAiPanel() {
+  const aiReady = Boolean(state.settings.openaiApiKeyConfigured);
+  const source = state.settings.openaiApiKeySource === "env" ? ".env" : "dashboard";
+  rpcAiGenerateButton.disabled = !aiReady || rpcAiState.loading;
+
+  if (!aiReady) {
+    rpcAiStatus.textContent = "Set OPENAI_API_KEY to enable";
+    rpcAiOutput.textContent = "Add OPENAI_API_KEY in .env to enable the AI RPC advisor for mint mesh analysis.";
+    return;
+  }
+
+  if (rpcAiState.loading) {
+    rpcAiStatus.textContent = `Generating brief via ${source}...`;
+    rpcAiOutput.textContent = "OpenAI is reviewing the current mesh, tasks, websocket coverage, and broadcast depth...";
+    return;
+  }
+
+  rpcAiStatus.textContent = `Ready via ${source} · ${state.settings.openaiRpcAdvisorModel || "OpenAI"}`;
+
+  if (!rpcAiState.content) {
+    rpcAiOutput.textContent = "Ask for a mint-focused RPC brief. Example: Which chain is weakest right now, and what should I add before a public mint?";
+    return;
+  }
+
+  const generatedLabel = rpcAiState.generatedAt ? `Generated ${relativeTime(rpcAiState.generatedAt)}` : "Generated just now";
+  rpcAiOutput.textContent = [
+    `Model: ${rpcAiState.model || state.settings.openaiRpcAdvisorModel || "OpenAI"}`,
+    generatedLabel,
+    "",
+    rpcAiState.content
+  ].join("\n");
+}
+
+async function generateRpcAiAdvice() {
+  if (!state.settings.openaiApiKeyConfigured) {
+    showToast("Set OPENAI_API_KEY in .env first to enable the AI advisor.", "info", "AI Advisor");
+    return;
+  }
+
+  rpcAiState.loading = true;
+  renderRpcAiPanel();
+
+  try {
+    const payload = await request("/api/rpc-nodes/ai-advice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chainKey: rpcDiscoveryState.chain?.key || "",
+        prompt: rpcAiPromptInput.value
+      }),
+      quiet: true
+    });
+
+    rpcAiState = {
+      loading: false,
+      content: String(payload.advice || "").trim(),
+      model: payload.model || state.settings.openaiRpcAdvisorModel || "",
+      generatedAt: payload.generatedAt || new Date().toISOString()
+    };
+    renderRpcAiPanel();
+    showToast("AI RPC brief generated.", "success", "AI Advisor");
+  } catch (error) {
+    rpcAiState.loading = false;
+    renderRpcAiPanel();
+    showToast(error.message || "AI advisor failed.", "error", "AI Advisor");
+  }
+}
+
+async function pulseRpcMesh() {
+  const payload = await request("/api/control/test-rpc-pool", { method: "POST" });
+  const summary = payload.summary || {};
+  showToast(
+    `${summary.healthy || 0} healthy · ${summary.error || 0} error · ${summary.total || 0} total`,
+    "success",
+    "RPC Mesh Pulse"
+  );
+}
+
 function renderRpcNodes() {
   if (activeRpcEditId && !state.rpcNodes.some((node) => node.id === activeRpcEditId)) {
     resetRpcForm();
   }
 
-  rpcList.innerHTML = state.rpcNodes.length
-    ? state.rpcNodes
-        .map(
-          (node) => `
-            <article class="rpc-node-card ${escapeHtml(node.lastHealth?.status || "untested")}">
-              <div class="rpc-node-top">
-                <div class="rpc-node-copy">
-                  <div class="rpc-node-title-row">
-                    <strong>${escapeHtml(node.name)}</strong>
-                    ${rpcHealthMarkup(node)}
-                  </div>
-                  <div class="chip-row rpc-node-chips">
-                    <span class="queue-chip">${escapeHtml(chainLabel(node.chainKey))}</span>
-                    <span class="queue-chip">${escapeHtml(node.source === "env" ? "Env Managed" : "Stored")}</span>
+  const chainGroups = buildRpcChainGroups();
+  renderRpcOperationsOverview(chainGroups);
+  renderRpcBroadcastAdvisor(chainGroups);
+  renderRpcDoctrineGrid(chainGroups);
+  renderRpcChainCommandGrid(chainGroups);
+  renderRpcAiPanel();
+
+  rpcList.innerHTML = chainGroups.length
+    ? chainGroups
+        .map((group) => {
+          const groupChips = [
+            `<span class="queue-chip ${chainReadinessChipClass(group)}">${escapeHtml(group.readinessLabel)}</span>`,
+            `<span class="queue-chip">${escapeHtml(pluralize(group.healthyNodes.length, "healthy endpoint", "healthy endpoints"))}</span>`,
+            `<span class="queue-chip">${escapeHtml(pluralize(group.healthySocketNodes.length, "socket hook"))}</span>`,
+            group.freshHealthyCount > 0
+              ? `<span class="queue-chip">${escapeHtml(`${group.freshHealthyCount} fresh probe${group.freshHealthyCount === 1 ? "" : "s"}`)}</span>`
+              : "",
+            group.demand.total > 0
+              ? `<span class="queue-chip">${escapeHtml(`${group.demand.total} task${group.demand.total === 1 ? "" : "s"}`)}</span>`
+              : ""
+          ]
+            .filter(Boolean)
+            .join("");
+
+          const nodeMarkup = group.nodes.length
+            ? group.nodes
+                .map((node, index) => {
+                  const roleLabel = mintRoleLabel(node, group, index);
+                  const latency = formatLatencyLabel(node.lastHealth?.latencyMs);
+                  const provider = rpcProviderLabel(node);
+                  const transportLabel = isSocketRpcUrl(node.url) ? "WebSocket" : "HTTPS";
+
+                  return `
+                    <article class="rpc-node-card ${escapeHtml(node.lastHealth?.status || "untested")}">
+                      <div class="rpc-node-top">
+                        <div class="rpc-node-copy">
+                          <div class="rpc-node-title-row">
+                            <strong>${escapeHtml(node.name)}</strong>
+                            ${rpcHealthMarkup(node)}
+                          </div>
+                          <div class="chip-row rpc-node-chips">
+                            <span class="queue-chip">${escapeHtml(group.chainLabel)}</span>
+                            <span class="queue-chip">${escapeHtml(roleLabel)}</span>
+                            <span class="queue-chip">${escapeHtml(transportLabel)}</span>
+                            <span class="queue-chip">${escapeHtml(provider)}</span>
+                            <span class="queue-chip">${escapeHtml(node.source === "env" ? "Env Managed" : "Stored")}</span>
+                            ${
+                              node.lastHealth?.checkedAt
+                                ? `<span class="queue-chip">${escapeHtml(relativeTime(node.lastHealth.checkedAt))}</span>`
+                                : ""
+                            }
+                          </div>
+                          <div class="rpc-node-score">
+                            <div class="rpc-node-stat-row">
+                              <span class="muted-copy">Observed latency</span>
+                              <strong>${escapeHtml(latency)}</strong>
+                            </div>
+                            <div class="rpc-latency-bar">
+                              <span style="width:${latencyFillWidth(node, group)}%"></span>
+                            </div>
+                          </div>
+                          <p class="rpc-node-url">${escapeHtml(node.url)}</p>
+                          <p class="muted-copy rpc-node-detail">${escapeHtml(rpcHealthDetail(node))}</p>
+                        </div>
+                        <div class="rpc-node-actions">
+                          <button class="mini-button fx-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
+                          ${
+                            node.source === "env"
+                              ? '<span class="rpc-chip">Env Managed</span>'
+                              : `<button class="mini-button fx-button" data-rpc-edit="${escapeHtml(node.id)}">Edit</button>
+                                 <button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>`
+                          }
+                        </div>
+                      </div>
+                    </article>
+                  `;
+                })
+                .join("")
+            : `
+              <article class="rpc-node-card empty-chain">
+                <strong>${escapeHtml(group.chainLabel)} has no endpoints yet</strong>
+                <p class="muted-copy">
+                  Add at least two healthy RPCs for multi-RPC broadcast${group.demand.mempool > 0 ? ", plus one websocket listener for mempool/event arming" : ""}.
+                </p>
+              </article>
+            `;
+
+          return `
+            <section class="rpc-chain-group">
+              <div class="rpc-chain-group-header">
+                <div class="rpc-chain-group-copy">
+                  <h4>${escapeHtml(group.chainLabel)}</h4>
+                  <p class="muted-copy">
                     ${
-                      node.lastHealth?.checkedAt
-                        ? `<span class="queue-chip">${escapeHtml(relativeTime(node.lastHealth.checkedAt))}</span>`
-                        : ""
+                      group.demand.total > 0
+                        ? `${group.demand.total} task${group.demand.total === 1 ? "" : "s"} on this chain · ${group.demand.multiRpcBroadcast} multi-RPC · ${group.demand.mempool} mempool · ${group.demand.relay} relay`
+                        : "No tasks are currently bound to this chain, but it is ready to be staged for future mints."
                     }
-                  </div>
-                  <p class="rpc-node-url">${escapeHtml(node.url)}</p>
-                  <p class="muted-copy rpc-node-detail">${escapeHtml(rpcHealthDetail(node))}</p>
+                  </p>
                 </div>
-                <div class="rpc-node-actions">
-                  <button class="mini-button fx-button" data-rpc-test="${escapeHtml(node.id)}">Test</button>
-                  ${
-                    node.source === "env"
-                      ? '<span class="rpc-chip">Env Managed</span>'
-                      : `<button class="mini-button fx-button" data-rpc-edit="${escapeHtml(node.id)}">Edit</button>
-                         <button class="mini-button danger fx-button" data-rpc-delete="${escapeHtml(node.id)}">Delete</button>`
-                  }
+                <div class="chip-row">
+                  ${groupChips}
                 </div>
               </div>
-            </article>
-          `
-        )
+              <div class="rpc-chain-node-grid">
+                ${nodeMarkup}
+              </div>
+            </section>
+          `;
+        })
         .join("")
-    : `<div class="empty-state"><h3>No RPC nodes saved</h3><p>Add chain endpoints to build a failover mesh.</p></div>`;
+    : `<div class="empty-state"><h3>No RPC mesh yet</h3><p>Add chain endpoints to build a mint-ready broadcast mesh.</p></div>`;
 
   rpcList.querySelectorAll("[data-rpc-edit]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3352,13 +4555,13 @@ runPriorityButton.addEventListener("click", async () => {
 
 rpcPulseButton.addEventListener("click", async () => {
   try {
-    const payload = await request("/api/control/test-rpc-pool", { method: "POST" });
-    const summary = payload.summary || {};
-    showToast(
-      `${summary.healthy || 0} healthy · ${summary.error || 0} error · ${summary.total || 0} total`,
-      "success",
-      "RPC Mesh Pulse"
-    );
+    await pulseRpcMesh();
+  } catch {}
+});
+
+rpcPagePulseButton.addEventListener("click", async () => {
+  try {
+    await pulseRpcMesh();
   } catch {}
 });
 
@@ -3431,6 +4634,11 @@ walletImportForm.addEventListener("submit", async (event) => {
 
 rpcForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!isRpcEditMode()) {
+    await submitRpcDiscoverySelection();
+    return;
+  }
+
   const payload = buildRpcSavePayload();
   if (!String(payload.url || "").trim()) {
     showToast("Enter an RPC URL before saving this node.", "info", "RPC URL Required");
@@ -3445,7 +4653,11 @@ rpcCancelButton.addEventListener("click", () => {
 });
 
 rpcImportChainlistButton.addEventListener("click", async () => {
-  await openRpcChainlistModal();
+  if (isRpcEditMode()) {
+    return;
+  }
+
+  await runRpcDiscoveryScan({ forceRefresh: true });
 });
 
 rpcChainlistCloseButton.addEventListener("click", closeRpcChainlistModal);
@@ -3493,6 +4705,34 @@ rpcNameInput.addEventListener("input", () => {
   if (rpcNameInput.value.trim() !== rpcAutoSuggestedName) {
     rpcAutoSuggestedName = "";
   }
+});
+
+rpcChainSearchInput.addEventListener("input", () => {
+  if (isRpcEditMode()) {
+    return;
+  }
+
+  const query = rpcChainSearchInput.value.trim();
+  if (!query) {
+    clearRpcDiscoveryState();
+    setRpcDetectMessage();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  scheduleRpcDiscoveryScan();
+});
+
+rpcChainSearchInput.addEventListener("blur", () => {
+  if (isRpcEditMode() || !rpcChainSearchInput.value.trim()) {
+    return;
+  }
+
+  scheduleRpcDiscoveryScan({ immediate: true });
+});
+
+rpcAiGenerateButton.addEventListener("click", async () => {
+  await generateRpcAiAdvice();
 });
 
 settingsForm.addEventListener("submit", async (event) => {
@@ -3850,6 +5090,7 @@ loadSession()
     initializeMotionSurfaces(document);
     await loadState();
     populateChainSelectors();
+    resetRpcForm();
     renderWalletSelector([]);
     renderRpcSelector([]);
     connectEvents();

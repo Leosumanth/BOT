@@ -309,55 +309,155 @@
           <div class="view-header">
             <div>
               <h2>RPC Nodes</h2>
-              <p class="view-subtitle">Build chain-specific failover pools for every task.</p>
+              <p class="view-subtitle">
+                Operate a mint-focused broadcast mesh with chain scoring, websocket coverage, relay posture, and AI-assisted tuning.
+              </p>
             </div>
           </div>
 
-          <div class="content-grid rpc-layout">
+          <div class="stack-list rpc-ops-shell">
             <section class="surface" data-tilt>
-              <div class="surface-header rpc-builder-header">
+              <div class="surface-header">
                 <div>
-                  <h3 id="rpc-form-title">Add RPC Node</h3>
-                  <p id="rpc-form-subtitle" class="helper-copy">Create a stronger mesh with multiple fallback nodes.</p>
+                  <h3>Mint Broadcast Command</h3>
+                  <p class="helper-copy">
+                    Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
+                  </p>
                 </div>
-                <span id="rpc-form-badge" class="queue-chip hidden">Editing</span>
+                <div class="queue-actions">
+                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Pulse Mesh</button>
+                  <button id="rpc-ai-generate-button" class="primary-button fx-button" type="button">Generate AI Brief</button>
+                </div>
               </div>
-              <form id="rpc-form" class="stack-form">
-                <label>
-                  <span>Name</span>
-                  <input id="rpc-name-input" type="text" placeholder="Base Sepolia Primary" />
-                </label>
-                <label>
-                  <span>Chain</span>
-                  <select id="rpc-chain-input"></select>
-                </label>
-                <label>
-                  <span>URL</span>
-                  <input id="rpc-url-input" type="text" placeholder="https://..." />
-                </label>
-                <p id="rpc-detect-status" class="helper-copy">Paste an RPC URL to auto-detect the chain and suggest a name.</p>
-                <div class="form-action-row">
-                  <button
-                    id="rpc-import-chainlist-button"
-                    class="ghost-button fx-button"
-                    type="button"
-                  >
-                    Find Fast Chainlist RPCs
-                  </button>
-                  <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
-                  <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Save RPC Node</button>
-                </div>
-              </form>
+              <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
+              <div id="rpc-broadcast-advisor" class="rpc-advisory-grid"></div>
             </section>
+
+            <div class="content-grid rpc-advanced-grid">
+              <section class="surface" data-tilt>
+                <div class="surface-header rpc-builder-header">
+                  <div>
+                    <h3 id="rpc-form-title">Discovery Lab</h3>
+                    <p id="rpc-form-subtitle" class="helper-copy">
+                      Scan fast Chainlist endpoints, stack healthy fallbacks, and stage a deeper minting mesh.
+                    </p>
+                  </div>
+                  <span id="rpc-form-badge" class="queue-chip hidden">Editing</span>
+                </div>
+                <form id="rpc-form" class="stack-form">
+                  <label id="rpc-chain-search-field">
+                    <span>Chain Name</span>
+                    <input
+                      id="rpc-chain-search-input"
+                      type="text"
+                      placeholder="Type ethereum, eth, base, sepolia..."
+                      autocomplete="off"
+                    />
+                  </label>
+                  <div id="rpc-search-match" class="chip-row rpc-search-match hidden"></div>
+                  <div id="rpc-manual-fields" class="stack-form hidden">
+                    <label>
+                      <span>Name</span>
+                      <input id="rpc-name-input" type="text" placeholder="Base Sepolia Primary" />
+                    </label>
+                    <label>
+                      <span>Chain</span>
+                      <select id="rpc-chain-input"></select>
+                    </label>
+                    <label>
+                      <span>URL</span>
+                      <input id="rpc-url-input" type="text" placeholder="https://..." />
+                    </label>
+                  </div>
+                  <p id="rpc-detect-status" class="helper-copy">
+                    Type an EVM chain name and the dashboard will scan fast Chainlist RPCs you can keep or uncheck.
+                  </p>
+                  <div id="rpc-inline-summary" class="rpc-chainlist-summary hidden"></div>
+                  <p id="rpc-inline-selection-status" class="helper-copy rpc-inline-selection-status hidden"></p>
+                  <div id="rpc-inline-candidate-list" class="rpc-chainlist-candidate-list">
+                    <div class="empty-state">
+                      <h3>Search a chain</h3>
+                      <p>Type Ethereum, Base, Sepolia, Arbitrum, Blast, Shape, or Plasma to scan healthy RPCs.</p>
+                    </div>
+                  </div>
+                  <div class="form-action-row">
+                    <button
+                      id="rpc-import-chainlist-button"
+                      class="ghost-button fx-button"
+                      type="button"
+                    >
+                      Deep Scan Chainlist
+                    </button>
+                    <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
+                    <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Add Selected RPCs</button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3>Chain Command Matrix</h3>
+                    <p class="helper-copy">
+                      Rank primaries, hot failovers, websocket listeners, and chain-by-chain broadcast depth.
+                    </p>
+                  </div>
+                  <span id="rpc-chain-command-caption" class="muted-copy">No chain mesh yet</span>
+                </div>
+                <div id="rpc-chain-command-grid" class="rpc-chain-command-grid"></div>
+              </section>
+            </div>
+
+            <div class="content-grid rpc-advanced-grid">
+              <section class="surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3>AI RPC Advisor</h3>
+                    <p class="helper-copy">
+                      Generate an operator brief from live latency, websocket coverage, task modes, and broadcast depth.
+                    </p>
+                  </div>
+                  <span id="rpc-ai-status" class="muted-copy">Set OPENAI_API_KEY to enable</span>
+                </div>
+                <label>
+                  <span>Ask The Advisor</span>
+                  <textarea
+                    id="rpc-ai-prompt-input"
+                    rows="4"
+                    placeholder="Example: Which chain is weakest for a public mint and what should I add first?"
+                  ></textarea>
+                </label>
+                <p class="helper-copy">
+                  The advisor reads the current mesh, active task posture, multi-RPC usage, websocket coverage, and relay readiness.
+                </p>
+                <div id="rpc-ai-output" class="terminal-panel rpc-ai-output">
+                  AI guidance will appear here when the advisor is enabled.
+                </div>
+              </section>
+
+              <section class="surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3>Mint Mesh Doctrine</h3>
+                    <p class="helper-copy">
+                      Practical NFT mint rules for public swarm, websocket arming, relay fallback, and latency hygiene.
+                    </p>
+                  </div>
+                </div>
+                <div id="rpc-doctrine-grid" class="rpc-advisory-grid"></div>
+              </section>
+            </div>
 
             <section class="surface" data-tilt>
               <div class="surface-header">
                 <div>
-                  <h3>Configured Nodes</h3>
-                  <p class="helper-copy">Live-tested RPC endpoints with latency visibility.</p>
+                  <h3>Configured Mesh</h3>
+                  <p class="helper-copy">
+                    Grouped by chain and ranked by minting role, transport, live latency, and failover depth.
+                  </p>
                 </div>
               </div>
-              <div id="rpc-list" class="stack-list"></div>
+              <div id="rpc-list" class="stack-list rpc-node-groups"></div>
             </section>
           </div>
         </section>
