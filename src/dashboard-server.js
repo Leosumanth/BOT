@@ -787,7 +787,7 @@ async function requestRpcAdvisorBrief({ focusChainKey = "", operatorPrompt = "" 
   const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
   const apiKey = String(resolvedSecrets.openaiApiKey || "").trim();
   if (!apiKey) {
-    throw new Error("Set OPENAI_API_KEY to enable the AI RPC advisor.");
+    throw new Error("Set an OpenAI API key in Settings or OPENAI_API_KEY in .env to enable the AI RPC advisor.");
   }
 
   const model = String(process.env.OPENAI_RPC_ADVISOR_MODEL || "gpt-5-mini-2025-08-07").trim();
@@ -5432,6 +5432,51 @@ async function verifyExplorerApiKey(apiKey) {
   };
 }
 
+async function verifyOpenAiApiKey(apiKey) {
+  if (/^https?:\/\//i.test(apiKey) || /authorization:/i.test(apiKey) || /^curl\b/i.test(apiKey)) {
+    throw new Error("Paste the raw OpenAI API key only, not a link, command, or header.");
+  }
+
+  if (/\s/.test(apiKey)) {
+    throw new Error("OpenAI API key must be a single token with no spaces.");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/models", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json"
+      },
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(
+        payload?.error?.message || payload?.error?.type || payload?.error || `OpenAI request failed with status ${response.status}`
+      );
+    }
+
+    const models = Array.isArray(payload?.data) ? payload.data : [];
+    return {
+      modelCount: models.length,
+      sampleModel: models[0]?.id || null
+    };
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("OpenAI key test timed out.");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function handleExplorerKeyTest(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -5456,6 +5501,30 @@ async function handleExplorerKeyTest(request, response) {
   }
 }
 
+async function handleOpenAiKeyTest(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const inputKey = String(payload.openaiApiKey || "").trim();
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const savedKey = String(integrationSecrets.openaiApiKey || "").trim();
+    const apiKey = inputKey || resolvedSecrets.openaiApiKey;
+
+    if (!apiKey) {
+      throw new Error("Add an OpenAI API key first.");
+    }
+
+    const result = await verifyOpenAiApiKey(apiKey);
+
+    sendJson(response, 200, {
+      ok: true,
+      source: inputKey ? "input" : savedKey ? "saved" : "env",
+      ...result
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleExplorerKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.explorerApiKey);
@@ -5467,30 +5536,44 @@ async function handleExplorerKeyDelete(response) {
   }
 }
 
+async function handleOpenAiKeyDelete(response) {
+  try {
+    await database.deleteSecret(secretStorageKeys.openaiApiKey);
+    delete integrationSecrets.openaiApiKey;
+    emitState();
+    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleSettingsSave(request, response) {
   try {
     const payload = await readJsonBody(request);
+    const settingsOverrides = {};
+    if (Object.prototype.hasOwnProperty.call(payload, "profileName")) {
+      settingsOverrides.profileName = payload.profileName;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "theme")) {
+      settingsOverrides.theme = payload.theme;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "resultsPath")) {
+      settingsOverrides.resultsPath = payload.resultsPath;
+    }
     const nextSettings = normalizeDashboardSettings({
       ...appState.settings,
-      profileName: payload.profileName,
-      theme: payload.theme,
-      resultsPath: payload.resultsPath
+      ...settingsOverrides
     });
-    const nextSecrets = resolveIntegrationSecrets(integrationSecrets);
     const secretInputs = {
-      explorerApiKey: String(payload.explorerApiKey || "").trim()
+      explorerApiKey: String(payload.explorerApiKey || "").trim(),
+      openaiApiKey: String(payload.openaiApiKey || "").trim()
     };
-
-    Object.entries(secretInputs).forEach(([secretName, value]) => {
-      if (!value) {
-        return;
-      }
-
-      nextSecrets[secretName] = value;
-    });
 
     if (secretInputs.explorerApiKey) {
       await verifyExplorerApiKey(secretInputs.explorerApiKey);
+    }
+    if (secretInputs.openaiApiKey) {
+      await verifyOpenAiApiKey(secretInputs.openaiApiKey);
     }
 
     appState.settings = nextSettings;
@@ -5830,6 +5913,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/control/test-openai-key") {
+      await handleOpenAiKeyTest(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/control/snapshot") {
       handleSnapshot(response);
       return;
@@ -5892,6 +5980,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "DELETE" && url.pathname === "/api/settings/explorer-key") {
       await handleExplorerKeyDelete(response);
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/settings/openai-key") {
+      await handleOpenAiKeyDelete(response);
       return;
     }
 

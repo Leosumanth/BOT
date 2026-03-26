@@ -417,7 +417,7 @@
                       Generate an operator brief from live latency, websocket coverage, task modes, and broadcast depth.
                     </p>
                   </div>
-                  <span id="rpc-ai-status" class="muted-copy">Set OPENAI_API_KEY to enable</span>
+                  <span id="rpc-ai-status" class="muted-copy">Set an OpenAI API key to enable</span>
                 </div>
                 <label>
                   <span>Ask The Advisor</span>
@@ -466,27 +466,12 @@
           <div class="view-header">
             <div>
               <h2>Settings</h2>
-              <p class="view-subtitle">Local profile details and explorer-backed ABI tools.</p>
+              <p class="view-subtitle">Update the API keys used by explorer ABI fetches and OpenAI-powered tools.</p>
             </div>
           </div>
 
           <section class="surface" data-tilt>
             <form id="settings-form" class="settings-panel">
-              <div class="form-grid three">
-                <div class="settings-item">
-                  <label>Profile</label>
-                  <input id="profile-name-input" type="text" />
-                </div>
-                <div class="settings-item">
-                  <label>Theme</label>
-                  <input id="theme-input" type="text" />
-                </div>
-                <div class="settings-item">
-                  <label>Results Path</label>
-                  <input id="results-path-input" type="text" />
-                </div>
-              </div>
-
               <section class="surface inset-surface">
                 <div class="surface-header compact">
                   <div>
@@ -501,11 +486,33 @@
                 </label>
                 <p class="helper-copy">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
                 <p class="helper-copy">Leave blank to keep the current key. Enter a new key and save settings to replace it.</p>
+                <div class="settings-actions">
+                  <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                  <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                </div>
+              </section>
+
+              <section class="surface inset-surface">
+                <div class="surface-header compact">
+                  <div>
+                    <h4>OpenAI Tools</h4>
+                    <p class="helper-copy">Save an OpenAI API key to enable the RPC advisor and other AI-assisted features.</p>
+                  </div>
+                  <span id="openai-config-status" class="muted-copy">Not configured</span>
+                </div>
+                <label>
+                  <span>OpenAI API Key</span>
+                  <input id="openai-api-key-input" type="password" placeholder="OpenAI API key" />
+                </label>
+                <p class="helper-copy">Paste the raw OpenAI API key only. Do not paste a link, curl command, or URL.</p>
+                <p class="helper-copy">Leave blank to keep the current key. Enter a new key and save settings to replace it.</p>
+                <div class="settings-actions">
+                  <button id="delete-openai-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                  <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                </div>
               </section>
 
               <div class="settings-actions">
-                <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
-                <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                 <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
               </div>
             </form>

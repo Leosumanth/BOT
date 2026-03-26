@@ -108,13 +108,14 @@ const rpcConfirmLatency = document.getElementById("rpc-confirm-latency");
 const rpcConfirmUrl = document.getElementById("rpc-confirm-url");
 const rpcConfirmNote = document.getElementById("rpc-confirm-note");
 const settingsForm = document.getElementById("settings-form");
-const profileNameInput = document.getElementById("profile-name-input");
-const themeInput = document.getElementById("theme-input");
-const resultsPathInput = document.getElementById("results-path-input");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
 const deleteExplorerKeyButton = document.getElementById("delete-explorer-key-button");
 const testExplorerKeyButton = document.getElementById("test-explorer-key-button");
+const openaiApiKeyInput = document.getElementById("openai-api-key-input");
+const openaiConfigStatus = document.getElementById("openai-config-status");
+const deleteOpenaiKeyButton = document.getElementById("delete-openai-key-button");
+const testOpenaiKeyButton = document.getElementById("test-openai-key-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const batchToggle = document.getElementById("batch-toggle");
@@ -3059,8 +3060,8 @@ function renderRpcAiPanel() {
   rpcAiGenerateButton.disabled = !aiReady || rpcAiState.loading;
 
   if (!aiReady) {
-    rpcAiStatus.textContent = "Set OPENAI_API_KEY to enable";
-    rpcAiOutput.textContent = "Add OPENAI_API_KEY in .env to enable the AI RPC advisor for mint mesh analysis.";
+    rpcAiStatus.textContent = "Set an OpenAI API key to enable";
+    rpcAiOutput.textContent = "Add an OpenAI API key in Settings or set OPENAI_API_KEY in .env to enable the AI RPC advisor.";
     return;
   }
 
@@ -3088,7 +3089,7 @@ function renderRpcAiPanel() {
 
 async function generateRpcAiAdvice() {
   if (!state.settings.openaiApiKeyConfigured) {
-    showToast("Set OPENAI_API_KEY in .env first to enable the AI advisor.", "info", "AI Advisor");
+    showToast("Add an OpenAI API key in Settings or .env first to enable the AI advisor.", "info", "AI Advisor");
     return;
   }
 
@@ -3283,54 +3284,97 @@ function renderRpcNodes() {
   });
 }
 
-function setExplorerKeyStatus(message = null) {
+function setApiKeyStatus({ input, statusNode, source, message = null }) {
   if (message) {
-    explorerConfigStatus.textContent = message;
+    statusNode.textContent = message;
     return;
   }
 
-  if (explorerApiKeyInput.value.trim()) {
-    explorerConfigStatus.textContent = "New key ready to test or save";
+  if (input.value.trim()) {
+    statusNode.textContent = "New key ready to test or save";
     return;
   }
 
-  if (state.settings.explorerApiKeySource === "saved") {
-    explorerConfigStatus.textContent = "Saved key available";
+  if (source === "saved") {
+    statusNode.textContent = "Saved key available";
     return;
   }
 
-  if (state.settings.explorerApiKeySource === "env") {
-    explorerConfigStatus.textContent = "Environment key available";
+  if (source === "env") {
+    statusNode.textContent = "Environment key available";
     return;
   }
 
-  explorerConfigStatus.textContent = "Not configured";
+  statusNode.textContent = "Not configured";
+}
+
+function syncApiKeyControls({ input, deleteButton, source, placeholders, deleteLabel }) {
+  if (source === "saved") {
+    input.placeholder = placeholders.saved;
+  } else if (source === "env") {
+    input.placeholder = placeholders.env;
+  } else {
+    input.placeholder = placeholders.empty;
+  }
+
+  deleteButton.disabled = source !== "saved";
+  deleteButton.title = source === "saved" ? deleteLabel : "Only saved dashboard keys can be deleted here";
+}
+
+function setExplorerKeyStatus(message = null) {
+  setApiKeyStatus({
+    input: explorerApiKeyInput,
+    statusNode: explorerConfigStatus,
+    source: state.settings.explorerApiKeySource,
+    message
+  });
 }
 
 function syncExplorerKeyControls() {
-  if (state.settings.explorerApiKeySource === "saved") {
-    explorerApiKeyInput.placeholder = "Saved on server. Enter a new key to replace it.";
-  } else if (state.settings.explorerApiKeySource === "env") {
-    explorerApiKeyInput.placeholder = "Loaded from .env. Enter a new key to override it.";
-  } else {
-    explorerApiKeyInput.placeholder = "Etherscan V2 API key";
-  }
+  syncApiKeyControls({
+    input: explorerApiKeyInput,
+    deleteButton: deleteExplorerKeyButton,
+    source: state.settings.explorerApiKeySource,
+    placeholders: {
+      saved: "Saved on server. Enter a new key to replace it.",
+      env: "Loaded from .env. Enter a new key to override it.",
+      empty: "Etherscan V2 API key"
+    },
+    deleteLabel: "Delete the saved explorer API key"
+  });
+}
 
-  deleteExplorerKeyButton.disabled = state.settings.explorerApiKeySource !== "saved";
-  deleteExplorerKeyButton.title =
-    state.settings.explorerApiKeySource === "saved"
-      ? "Delete the saved explorer API key"
-      : "Only saved dashboard keys can be deleted here";
+function setOpenaiKeyStatus(message = null) {
+  setApiKeyStatus({
+    input: openaiApiKeyInput,
+    statusNode: openaiConfigStatus,
+    source: state.settings.openaiApiKeySource,
+    message
+  });
+}
+
+function syncOpenaiKeyControls() {
+  syncApiKeyControls({
+    input: openaiApiKeyInput,
+    deleteButton: deleteOpenaiKeyButton,
+    source: state.settings.openaiApiKeySource,
+    placeholders: {
+      saved: "Saved on server. Enter a new key to replace it.",
+      env: "Loaded from .env. Enter a new key to override it.",
+      empty: "OpenAI API key"
+    },
+    deleteLabel: "Delete the saved OpenAI API key"
+  });
 }
 
 function renderSettings() {
-  profileNameInput.value = state.settings.profileName || "local";
-  themeInput.value = state.settings.theme || "quantum-operator";
-  resultsPathInput.value = state.settings.resultsPath || "./dist/mint-results.json";
   explorerApiKeyInput.value = "";
+  openaiApiKeyInput.value = "";
 
   syncExplorerKeyControls();
   setExplorerKeyStatus();
+  syncOpenaiKeyControls();
+  setOpenaiKeyStatus();
 }
 
 function renderRuntime() {
@@ -4738,35 +4782,49 @@ rpcAiGenerateButton.addEventListener("click", async () => {
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const explorerApiKeyValue = explorerApiKeyInput.value.trim();
+  const openaiApiKeyValue = openaiApiKeyInput.value.trim();
+  const updatedKeys = [];
+  if (explorerApiKeyValue) {
+    updatedKeys.push("Explorer");
+  }
+  if (openaiApiKeyValue) {
+    updatedKeys.push("OpenAI");
+  }
+
   try {
     const payload = await request("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        profileName: profileNameInput.value,
-        theme: themeInput.value,
-        resultsPath: resultsPathInput.value,
-        explorerApiKey: explorerApiKeyValue
+        explorerApiKey: explorerApiKeyValue,
+        openaiApiKey: openaiApiKeyValue
       })
     });
     if (payload.settings) {
       state.settings = payload.settings;
     }
     explorerApiKeyInput.value = "";
+    openaiApiKeyInput.value = "";
     showToast(
-      explorerApiKeyValue
-        ? "Settings saved. Explorer API key updated."
-        : "Local operator settings saved.",
+      updatedKeys.length
+        ? `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`
+        : "API settings saved.",
       "success",
-      explorerApiKeyValue ? "Explorer Key Updated" : "Settings Updated"
+      updatedKeys.length ? "API Keys Updated" : "Settings Saved"
     );
     syncExplorerKeyControls();
     setExplorerKeyStatus();
+    syncOpenaiKeyControls();
+    setOpenaiKeyStatus();
   } catch {}
 });
 
 explorerApiKeyInput.addEventListener("input", () => {
   setExplorerKeyStatus();
+});
+
+openaiApiKeyInput.addEventListener("input", () => {
+  setOpenaiKeyStatus();
 });
 
 deleteExplorerKeyButton.addEventListener("click", async () => {
@@ -4802,6 +4860,42 @@ deleteExplorerKeyButton.addEventListener("click", async () => {
   } finally {
     deleteExplorerKeyButton.textContent = buttonLabel;
     syncExplorerKeyControls();
+  }
+});
+
+deleteOpenaiKeyButton.addEventListener("click", async () => {
+  if (state.settings.openaiApiKeySource !== "saved") {
+    showToast("There is no saved OpenAI dashboard key to delete.", "info", "No Saved Key");
+    return;
+  }
+
+  if (!window.confirm("Delete the saved OpenAI API key?")) {
+    return;
+  }
+
+  const buttonLabel = deleteOpenaiKeyButton.textContent;
+  deleteOpenaiKeyButton.disabled = true;
+  deleteOpenaiKeyButton.textContent = "Deleting...";
+
+  try {
+    const payload = await request("/api/settings/openai-key", {
+      method: "DELETE"
+    });
+
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
+
+    openaiApiKeyInput.value = "";
+    syncOpenaiKeyControls();
+    setOpenaiKeyStatus();
+    showToast("Saved OpenAI API key deleted.", "success", "OpenAI Key Deleted");
+  } catch {
+    syncOpenaiKeyControls();
+    setOpenaiKeyStatus();
+  } finally {
+    deleteOpenaiKeyButton.textContent = buttonLabel;
+    syncOpenaiKeyControls();
   }
 });
 
@@ -4842,6 +4936,46 @@ testExplorerKeyButton.addEventListener("click", async () => {
   } finally {
     testExplorerKeyButton.disabled = false;
     testExplorerKeyButton.textContent = buttonLabel;
+  }
+});
+
+testOpenaiKeyButton.addEventListener("click", async () => {
+  const buttonLabel = testOpenaiKeyButton.textContent;
+  const openaiApiKeyValue = openaiApiKeyInput.value.trim();
+
+  testOpenaiKeyButton.disabled = true;
+  testOpenaiKeyButton.textContent = "Testing...";
+
+  try {
+    const payload = await request("/api/control/test-openai-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        openaiApiKey: openaiApiKeyValue
+      })
+    });
+
+    const statusMessage =
+      payload.source === "input"
+        ? "Typed key verified"
+        : payload.source === "env"
+          ? "Environment key verified"
+          : "Saved key verified";
+    setOpenaiKeyStatus(statusMessage);
+    showToast(
+      payload.source === "input"
+        ? "OpenAI API key is valid. Save settings to replace the current key."
+        : payload.source === "env"
+          ? "Environment OpenAI API key is valid. Save a new key if you want to override it in the dashboard."
+          : "Saved OpenAI API key is valid.",
+      "success",
+      "OpenAI Key Valid"
+    );
+  } catch {
+    setOpenaiKeyStatus("Key test failed");
+  } finally {
+    testOpenaiKeyButton.disabled = false;
+    testOpenaiKeyButton.textContent = buttonLabel;
   }
 });
 

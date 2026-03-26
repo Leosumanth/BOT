@@ -8,7 +8,8 @@ const secretEnvNames = {
 };
 
 const secretStorageKeys = {
-  explorerApiKey: "explorer_api_key"
+  explorerApiKey: "explorer_api_key",
+  openaiApiKey: "openai_api_key"
 };
 
 function createDefaultDashboardSettings() {
