@@ -49,17 +49,7 @@ body {
 }
 
 body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-  background-size: 72px 72px;
-  mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
-  opacity: 0.22;
-  pointer-events: none;
-  z-index: 0;
+  display: none;
 }
 
 body[data-run-state="running"] {
@@ -205,9 +195,7 @@ body[data-auth-state="locked"] .scanline-layer {
 .batch-bar {
   position: relative;
   border: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, rgba(15, 26, 40, 0.8), rgba(9, 17, 29, 0.88)),
-    linear-gradient(135deg, rgba(113, 224, 255, 0.04), transparent 45%);
+  background: linear-gradient(180deg, rgba(15, 26, 40, 0.88), rgba(9, 17, 29, 0.94));
   box-shadow: var(--shadow-panel), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(22px);
 }
@@ -583,9 +571,7 @@ body[data-auth-state="locked"] .scanline-layer {
 .surface.inset-surface {
   padding: 16px;
   border-radius: var(--radius-lg);
-  background:
-    linear-gradient(180deg, rgba(13, 24, 38, 0.8), rgba(10, 18, 29, 0.84)),
-    linear-gradient(135deg, rgba(113, 224, 255, 0.04), transparent 45%);
+  background: linear-gradient(180deg, rgba(13, 24, 38, 0.88), rgba(10, 18, 29, 0.92));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 

@@ -108,6 +108,7 @@ const rpcConfirmLatency = document.getElementById("rpc-confirm-latency");
 const rpcConfirmUrl = document.getElementById("rpc-confirm-url");
 const rpcConfirmNote = document.getElementById("rpc-confirm-note");
 const settingsForm = document.getElementById("settings-form");
+const saveSettingsButton = document.getElementById("save-settings-button");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
 const deleteExplorerKeyButton = document.getElementById("delete-explorer-key-button");
@@ -3663,6 +3664,23 @@ function syncOpenaiKeyControls() {
   });
 }
 
+function withButtonBusyState(button, busyLabel, work) {
+  if (!button) {
+    return Promise.resolve().then(work);
+  }
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = busyLabel;
+
+  return Promise.resolve()
+    .then(work)
+    .finally(() => {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    });
+}
+
 function renderSettings() {
   explorerApiKeyInput.value = "";
   openaiApiKeyInput.value = "";
@@ -5127,6 +5145,12 @@ settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const explorerApiKeyValue = explorerApiKeyInput.value.trim();
   const openaiApiKeyValue = openaiApiKeyInput.value.trim();
+
+  if (!explorerApiKeyValue && !openaiApiKeyValue) {
+    showToast("Enter a new API key before saving settings.", "info", "No Changes");
+    return;
+  }
+
   const updatedKeys = [];
   if (explorerApiKeyValue) {
     updatedKeys.push("Explorer");
@@ -5135,32 +5159,37 @@ settingsForm.addEventListener("submit", async (event) => {
     updatedKeys.push("OpenAI");
   }
 
+  const saveButton = saveSettingsButton || settingsForm.querySelector('button[type="submit"]');
+
   try {
-    const payload = await request("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        explorerApiKey: explorerApiKeyValue,
-        openaiApiKey: openaiApiKeyValue
-      })
+    await withButtonBusyState(saveButton, "Saving...", async () => {
+      const payload = await request("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          explorerApiKey: explorerApiKeyValue,
+          openaiApiKey: openaiApiKeyValue
+        })
+      });
+      if (payload.settings) {
+        state.settings = payload.settings;
+      }
+      explorerApiKeyInput.value = "";
+      openaiApiKeyInput.value = "";
+      showToast(
+        `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`,
+        "success",
+        "Settings Saved"
+      );
+      syncExplorerKeyControls();
+      setExplorerKeyStatus();
+      syncOpenaiKeyControls();
+      setOpenaiKeyStatus();
     });
-    if (payload.settings) {
-      state.settings = payload.settings;
-    }
-    explorerApiKeyInput.value = "";
-    openaiApiKeyInput.value = "";
-    showToast(
-      updatedKeys.length
-        ? `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`
-        : "API settings saved.",
-      "success",
-      updatedKeys.length ? "API Keys Updated" : "Settings Saved"
-    );
+  } catch {} finally {
     syncExplorerKeyControls();
-    setExplorerKeyStatus();
     syncOpenaiKeyControls();
-    setOpenaiKeyStatus();
-  } catch {}
+  }
 });
 
 explorerApiKeyInput.addEventListener("input", () => {
@@ -5247,6 +5276,12 @@ testExplorerKeyButton.addEventListener("click", async () => {
   const buttonLabel = testExplorerKeyButton.textContent;
   const explorerApiKeyValue = explorerApiKeyInput.value.trim();
 
+  if (!explorerApiKeyValue && !state.settings.explorerApiKeyConfigured) {
+    setExplorerKeyStatus("No key to test");
+    showToast("Paste an explorer key first, or save one before testing.", "info", "Explorer Key Required");
+    return;
+  }
+
   testExplorerKeyButton.disabled = true;
   testExplorerKeyButton.textContent = "Testing...";
 
@@ -5286,6 +5321,12 @@ testExplorerKeyButton.addEventListener("click", async () => {
 testOpenaiKeyButton.addEventListener("click", async () => {
   const buttonLabel = testOpenaiKeyButton.textContent;
   const openaiApiKeyValue = openaiApiKeyInput.value.trim();
+
+  if (!openaiApiKeyValue && !state.settings.openaiApiKeyConfigured) {
+    setOpenaiKeyStatus("No key to test");
+    showToast("Paste an OpenAI key first, or save one before testing.", "info", "OpenAI Key Required");
+    return;
+  }
 
   testOpenaiKeyButton.disabled = true;
   testOpenaiKeyButton.textContent = "Testing...";
