@@ -337,6 +337,20 @@ function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function formatUsdBalance(value, fallback = "$--") {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return fallback;
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: normalized >= 1000 ? 0 : 2
+  }).format(normalized);
+}
+
 function normalizeGasStrategyValue(value) {
   const normalized = String(value || "normal").trim().toLowerCase();
 
@@ -527,6 +541,37 @@ function priorityRank(priority) {
 
 function humanizePriority(priority) {
   return priority ? `${priority[0].toUpperCase()}${priority.slice(1)}` : "Standard";
+}
+
+function walletDisplayBalance(wallet, options = {}) {
+  if (wallet?.balanceLoading) {
+    return options.loadingLabel || "Loading...";
+  }
+
+  return formatUsdBalance(wallet?.balanceUsd, options.fallback || "$--");
+}
+
+function mergeWalletBalanceState(wallets = []) {
+  const existingBalances = new Map(
+    state.wallets.map((wallet) => [
+      wallet.id,
+      {
+        balanceUsd: wallet.balanceUsd,
+        balanceLoading: wallet.balanceLoading,
+        balanceError: wallet.balanceError,
+        balanceUpdatedAt: wallet.balanceUpdatedAt
+      }
+    ])
+  );
+
+  return wallets.map((wallet) => ({
+    ...wallet,
+    ...(existingBalances.get(wallet.id) || {})
+  }));
+}
+
+function patchWalletBalance(walletId, patch) {
+  state.wallets = state.wallets.map((wallet) => (wallet.id === walletId ? { ...wallet, ...patch } : wallet));
 }
 
 function setLoginStatus(message) {
@@ -2267,12 +2312,14 @@ function renderWallets() {
               aria-pressed="${selectedWalletId === wallet.id ? "true" : "false"}"
             >
               <div>
-                <strong>${escapeHtml(wallet.label)}</strong>
-                <p class="muted-copy">${escapeHtml(wallet.addressShort)} | ${escapeHtml(wallet.group || "Imported")} | ${escapeHtml(wallet.source || "stored")}</p>
+                <strong title="${escapeHtml(wallet.address || wallet.addressShort)}">${escapeHtml(
+                  wallet.addressShort
+                )} | ${escapeHtml(wallet.label)} | ${escapeHtml(walletDisplayBalance(wallet))}</strong>
               </div>
               <div class="task-actions">
-                <span class="wallet-chip">${escapeHtml(wallet.status)}</span>
-                <span class="queue-chip">Inspect Assets</span>
+                <button class="mini-button fx-button" type="button" data-wallet-view="${escapeHtml(wallet.id)}">
+                  View Assets
+                </button>
                 ${
                   wallet.source === "env"
                     ? '<span class="rpc-chip">env-managed</span>'
@@ -2291,7 +2338,7 @@ function renderWallets() {
     };
 
     row.addEventListener("click", async (event) => {
-      if (event.target.closest("[data-wallet-delete]")) {
+      if (event.target.closest("[data-wallet-delete]") || event.target.closest("[data-wallet-view]")) {
         return;
       }
 
@@ -2305,6 +2352,12 @@ function renderWallets() {
 
       event.preventDefault();
       await openAssets();
+    });
+  });
+
+  walletList.querySelectorAll("[data-wallet-view]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await loadWalletAssets(button.dataset.walletView);
     });
   });
 
@@ -2339,7 +2392,7 @@ function renderWalletAssets() {
       summary: null
     };
     walletAssetsTitle.textContent = "Assets & Coins";
-    walletAssetsSubtitle.textContent = "Click a wallet to inspect native balances across available EVM chains.";
+    walletAssetsSubtitle.textContent = "Click a wallet to view native balances across available EVM chains.";
     walletAssetsStatus.classList.add("hidden");
     walletAssetsStatus.textContent = "";
     walletAssetsRefreshButton.disabled = true;
@@ -2353,7 +2406,10 @@ function renderWalletAssets() {
   }
 
   walletAssetsTitle.textContent = `${wallet.label} Assets`;
-  walletAssetsSubtitle.textContent = `${wallet.addressShort} · ${wallet.group || "Imported"} · ${wallet.source || "stored"}`;
+  walletAssetsSubtitle.textContent = `${wallet.addressShort} | ${wallet.label} | ${walletDisplayBalance(wallet, {
+    fallback: "$--",
+    loadingLabel: "Loading..."
+  })}`;
   walletAssetsRefreshButton.disabled = walletAssetInspector.loading;
 
   if (walletAssetInspector.loading) {
@@ -2380,25 +2436,29 @@ function renderWalletAssets() {
     return;
   }
 
-  const assets = Array.isArray(walletAssetInspector.assets) ? walletAssetInspector.assets : [];
+  const allAssets = Array.isArray(walletAssetInspector.assets) ? walletAssetInspector.assets : [];
+  const assets = allAssets.filter((asset) => Number(asset.balanceFloat || 0) > 0);
   const warnings = Array.isArray(walletAssetInspector.warnings) ? walletAssetInspector.warnings : [];
-  const nonZeroCount = assets.filter((asset) => Number(asset.balanceFloat || 0) > 0).length;
+  const nonZeroCount = assets.length;
   const statusParts = [];
-  if (assets.length > 0) {
-    statusParts.push(`${pluralize(assets.length, "chain")} checked`);
-    statusParts.push(`${pluralize(nonZeroCount, "balance")} above zero`);
+  if (allAssets.length > 0) {
+    statusParts.push(`${pluralize(allAssets.length, "chain")} checked`);
+    statusParts.push(nonZeroCount > 0 ? `${pluralize(nonZeroCount, "balance")} above zero` : "No balances above zero");
   }
   if (walletAssetInspector.generatedAt) {
     statusParts.push(`updated ${relativeTime(walletAssetInspector.generatedAt)}`);
   }
+  if (Number.isFinite(Number(walletAssetInspector.summary?.totalUsd))) {
+    statusParts.unshift(`Total ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
+  }
   walletAssetsStatus.classList.toggle("hidden", statusParts.length === 0);
-  walletAssetsStatus.textContent = statusParts.join(" · ");
+  walletAssetsStatus.textContent = statusParts.join(" | ");
 
   if (!assets.length && !warnings.length) {
     walletAssetsList.innerHTML = `
       <div class="empty-state">
-        <h3>No assets found</h3>
-        <p>No reachable chain balances were returned for this wallet yet.</p>
+        <h3>No balances above zero</h3>
+        <p>This wallet was checked successfully, but every detected native balance is currently zero.</p>
       </div>
     `;
     return;
@@ -2410,11 +2470,16 @@ function renderWalletAssets() {
         <div class="list-row">
           <div>
             <strong>${escapeHtml(asset.chainLabel || asset.chainKey || "Unknown chain")}</strong>
-            <p class="muted-copy">${escapeHtml(asset.assetName || asset.assetSymbol || "Native coin")} · via ${escapeHtml(asset.rpcLabel || "RPC")}</p>
+            <p class="muted-copy">${escapeHtml(asset.assetName || asset.assetSymbol || "Native coin")} | via ${escapeHtml(asset.rpcLabel || "RPC")}</p>
           </div>
           <div class="wallet-assets-value">
             <strong class="wallet-assets-balance">${escapeHtml(asset.balanceFormatted || "0")} ${escapeHtml(asset.assetSymbol || "")}</strong>
             <div class="wallet-assets-meta">
+              ${
+                Number.isFinite(Number(asset.usdValue))
+                  ? `<span class="wallet-chip">${escapeHtml(formatUsdBalance(asset.usdValue))}</span>`
+                  : ""
+              }
               <span class="wallet-chip">${escapeHtml(asset.transportLabel || "RPC")}</span>
               ${
                 asset.latencyMs !== null && asset.latencyMs !== undefined
@@ -2453,6 +2518,10 @@ async function loadWalletAssets(walletId) {
     return;
   }
 
+  patchWalletBalance(walletId, {
+    balanceLoading: true,
+    balanceError: ""
+  });
   walletAssetInspector = {
     walletId,
     loading: true,
@@ -2467,6 +2536,12 @@ async function loadWalletAssets(walletId) {
 
   try {
     const payload = await request(`/api/wallets/${walletId}/assets`);
+    patchWalletBalance(walletId, {
+      balanceUsd: Number.isFinite(Number(payload.summary?.totalUsd)) ? Number(payload.summary.totalUsd) : wallet.balanceUsd,
+      balanceLoading: false,
+      balanceError: "",
+      balanceUpdatedAt: payload.generatedAt || new Date().toISOString()
+    });
     walletAssetInspector = {
       walletId,
       loading: false,
@@ -2477,6 +2552,10 @@ async function loadWalletAssets(walletId) {
       summary: payload.summary || null
     };
   } catch (error) {
+    patchWalletBalance(walletId, {
+      balanceLoading: false,
+      balanceError: error.message || "Asset lookup failed"
+    });
     walletAssetInspector = {
       walletId,
       loading: false,
@@ -4385,7 +4464,7 @@ function renderAll() {
 
 function applyAppState(payload) {
   state.tasks = payload.tasks || [];
-  state.wallets = payload.wallets || [];
+  state.wallets = mergeWalletBalanceState(payload.wallets || []);
   state.rpcNodes = payload.rpcNodes || [];
   state.settings = payload.settings || {};
   state.chains = payload.chains || [];

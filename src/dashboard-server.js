@@ -179,6 +179,10 @@ const nativeUsdPriceCacheTtlMs = Math.max(
   60_000,
   Number(process.env.NATIVE_USD_PRICE_CACHE_TTL_MS || 5 * 60 * 1000)
 );
+const nativeUsdPriceFetchTimeoutMs = Math.max(
+  3_000,
+  Number(process.env.NATIVE_USD_PRICE_FETCH_TIMEOUT_MS || 10_000)
+);
 const nativeUsdPriceUrl =
   process.env.NATIVE_USD_PRICE_URL ||
   "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin&vs_currencies=usd";
@@ -2964,10 +2968,24 @@ function formatEthString(value) {
   return trimmed || "0";
 }
 
+function formatUsdString(value) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return null;
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: normalized >= 1000 ? 0 : 2
+  }).format(normalized);
+}
+
 function nativeAssetMetaForChain(chainKey) {
   switch (String(chainKey || "").trim()) {
     case "bsc":
-      return { symbol: "BNB", name: "BNB" };
+      return { symbol: "BNB", name: "BNB", priceKey: "bnb" };
     case "ethereum":
     case "sepolia":
     case "base":
@@ -2976,10 +2994,98 @@ function nativeAssetMetaForChain(chainKey) {
     case "blast":
     case "shape":
     case "plasma":
-      return { symbol: "ETH", name: "Ether" };
+      return { symbol: "ETH", name: "Ether", priceKey: "eth" };
     default:
-      return { symbol: "COIN", name: "Native Coin" };
+      return { symbol: "COIN", name: "Native Coin", priceKey: null };
   }
+}
+
+function extractUsdNumber(value) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : null;
+}
+
+function normalizeNativeUsdPrices(payload = {}) {
+  const prices = {};
+  const ethUsd = extractUsdNumber(
+    payload.ethereum?.usd ?? payload.eth?.usd ?? payload.ethereum ?? payload.eth
+  );
+  const bnbUsd = extractUsdNumber(
+    payload.binancecoin?.usd ?? payload.bnb?.usd ?? payload.binancecoin ?? payload.bnb
+  );
+
+  if (ethUsd !== null) {
+    prices.eth = ethUsd;
+  }
+
+  if (bnbUsd !== null) {
+    prices.bnb = bnbUsd;
+  }
+
+  return prices;
+}
+
+async function fetchNativeUsdPrices(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && nativeUsdPriceCache.value && nativeUsdPriceCache.expiresAt > now) {
+    return nativeUsdPriceCache.value;
+  }
+
+  if (!forceRefresh && nativeUsdPriceCache.pending) {
+    return nativeUsdPriceCache.pending;
+  }
+
+  const pending = (async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), nativeUsdPriceFetchTimeoutMs);
+
+    try {
+      const response = await fetch(nativeUsdPriceUrl, {
+        headers: {
+          accept: "application/json"
+        },
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`USD price lookup failed with ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const prices = normalizeNativeUsdPrices(payload);
+      if (Object.keys(prices).length === 0) {
+        throw new Error("USD price lookup returned no supported native prices");
+      }
+
+      nativeUsdPriceCache = {
+        expiresAt: Date.now() + nativeUsdPriceCacheTtlMs,
+        value: prices,
+        pending: null
+      };
+      return prices;
+    } catch (error) {
+      nativeUsdPriceCache = {
+        expiresAt: nativeUsdPriceCache.value ? Date.now() + nativeUsdPriceCacheTtlMs : 0,
+        value: nativeUsdPriceCache.value,
+        pending: null
+      };
+
+      if (nativeUsdPriceCache.value) {
+        return nativeUsdPriceCache.value;
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  })();
+
+  nativeUsdPriceCache = {
+    ...nativeUsdPriceCache,
+    pending
+  };
+
+  return pending;
 }
 
 function getChainRpcNodes(chainKey) {
@@ -3103,8 +3209,24 @@ async function readWalletAssetSnapshot(wallet) {
       wallet,
       generatedAt: new Date().toISOString(),
       assets: [],
-      warnings: [{ chainLabel: "RPC", message: "No supported chains are available for balance inspection yet." }]
+      warnings: [{ chainLabel: "RPC", message: "No supported chains are available for balance inspection yet." }],
+      summary: {
+        chainCount: 0,
+        warningCount: 1,
+        nonZeroAssetCount: 0,
+        totalUsd: null,
+        totalUsdFormatted: null,
+        pricedAssetCount: 0,
+        usdAvailable: false
+      }
     };
+  }
+
+  let nativeUsdPrices = {};
+  try {
+    nativeUsdPrices = await fetchNativeUsdPrices();
+  } catch {
+    nativeUsdPrices = {};
   }
 
   const results = await Promise.all(
@@ -3124,6 +3246,13 @@ async function readWalletAssetSnapshot(wallet) {
       try {
         const balance = await providerResult.provider.getBalance(wallet.address);
         const assetMeta = nativeAssetMetaForChain(chain.key);
+        const balanceFormatted = formatEthString(balance) || "0";
+        const balanceFloat = Number(balanceFormatted || 0);
+        const usdPrice =
+          assetMeta.priceKey && Number.isFinite(Number(nativeUsdPrices[assetMeta.priceKey]))
+            ? Number(nativeUsdPrices[assetMeta.priceKey])
+            : null;
+        const usdValue = Number.isFinite(balanceFloat) && Number.isFinite(usdPrice) ? balanceFloat * usdPrice : null;
         return {
           asset: {
             chainKey: chain.key,
@@ -3131,8 +3260,11 @@ async function readWalletAssetSnapshot(wallet) {
             assetSymbol: assetMeta.symbol,
             assetName: assetMeta.name,
             balanceWei: balance.toString(),
-            balanceFormatted: formatEthString(balance) || "0",
-            balanceFloat: Number(formatEthString(balance) || 0),
+            balanceFormatted,
+            balanceFloat,
+            usdPrice,
+            usdValue,
+            usdValueFormatted: formatUsdString(usdValue),
             rpcLabel: providerResult.sourceLabel || providerResult.rpcNode?.name || "RPC",
             transportLabel: isSocketRpcUrl(providerResult.rpcNode?.url) ? "WebSocket" : "HTTPS",
             latencyMs: providerResult.rpcNode?.lastHealth?.latencyMs ?? null,
@@ -3168,11 +3300,23 @@ async function readWalletAssetSnapshot(wallet) {
     });
 
   const warnings = results.map((entry) => entry.warning).filter(Boolean);
+  const nonZeroAssetCount = assets.filter((asset) => Number(asset.balanceFloat || 0) > 0).length;
+  const pricedAssets = assets.filter((asset) => Number.isFinite(Number(asset.usdValue)));
+  const totalUsd = pricedAssets.reduce((sum, asset) => sum + Number(asset.usdValue || 0), 0);
   return {
     wallet,
     generatedAt: new Date().toISOString(),
     assets,
-    warnings
+    warnings,
+    summary: {
+      chainCount: assets.length,
+      warningCount: warnings.length,
+      nonZeroAssetCount,
+      totalUsd: pricedAssets.length > 0 ? totalUsd : null,
+      totalUsdFormatted: pricedAssets.length > 0 ? formatUsdString(totalUsd) : null,
+      pricedAssetCount: pricedAssets.length,
+      usdAvailable: pricedAssets.length > 0
+    }
   };
 }
 
@@ -6576,10 +6720,16 @@ async function handleWalletAssets(walletId, response) {
       generatedAt: snapshot.generatedAt,
       assets: snapshot.assets,
       warnings: snapshot.warnings,
-      summary: {
-        chainCount: snapshot.assets.length,
-        warningCount: snapshot.warnings.length
-      }
+      summary:
+        snapshot.summary || {
+          chainCount: snapshot.assets.length,
+          warningCount: snapshot.warnings.length,
+          nonZeroAssetCount: snapshot.assets.filter((asset) => Number(asset.balanceFloat || 0) > 0).length,
+          totalUsd: null,
+          totalUsdFormatted: null,
+          pricedAssetCount: 0,
+          usdAvailable: false
+        }
     });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
