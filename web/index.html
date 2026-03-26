@@ -301,29 +301,12 @@
             <div>
               <h2>RPC Nodes</h2>
               <p class="view-subtitle">
-                Operate a mint-focused broadcast mesh with chain scoring, websocket coverage, relay posture, and AI-assisted tuning.
+                Operate a mint-focused broadcast mesh with chain scoring, websocket coverage, relay posture, and recovery depth.
               </p>
             </div>
           </div>
 
           <div class="stack-list rpc-ops-shell">
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Mint Broadcast Command</h3>
-                  <p class="helper-copy">
-                    Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
-                  </p>
-                </div>
-                <div class="queue-actions">
-                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Pulse Mesh</button>
-                  <button id="rpc-ai-generate-button" class="primary-button fx-button" type="button">Generate AI Brief</button>
-                </div>
-              </div>
-              <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
-              <div id="rpc-broadcast-advisor" class="rpc-advisory-grid"></div>
-            </section>
-
             <div class="content-grid rpc-advanced-grid">
               <section class="surface" data-tilt>
                 <div class="surface-header rpc-builder-header">
@@ -399,45 +382,21 @@
               </section>
             </div>
 
-            <div class="content-grid rpc-advanced-grid">
-              <section class="surface" data-tilt>
-                <div class="surface-header">
-                  <div>
-                    <h3>AI RPC Advisor</h3>
-                    <p class="helper-copy">
-                      Generate an operator brief from live latency, websocket coverage, task modes, and broadcast depth.
-                    </p>
-                  </div>
-                  <span id="rpc-ai-status" class="muted-copy">Set an OpenAI API key to enable</span>
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Mint Broadcast Command</h3>
+                  <p class="helper-copy">
+                    Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
+                  </p>
                 </div>
-                <label>
-                  <span>Ask The Advisor</span>
-                  <textarea
-                    id="rpc-ai-prompt-input"
-                    rows="4"
-                    placeholder="Example: Which chain is weakest for a public mint and what should I add first?"
-                  ></textarea>
-                </label>
-                <p class="helper-copy">
-                  The advisor reads the current mesh, active task posture, multi-RPC usage, websocket coverage, and relay readiness.
-                </p>
-                <div id="rpc-ai-output" class="terminal-panel rpc-ai-output">
-                  AI guidance will appear here when the advisor is enabled.
+                <div class="queue-actions">
+                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Pulse Mesh</button>
                 </div>
-              </section>
-
-              <section class="surface" data-tilt>
-                <div class="surface-header">
-                  <div>
-                    <h3>Mint Mesh Doctrine</h3>
-                    <p class="helper-copy">
-                      Practical NFT mint rules for public swarm, websocket arming, relay fallback, and latency hygiene.
-                    </p>
-                  </div>
-                </div>
-                <div id="rpc-doctrine-grid" class="rpc-advisory-grid"></div>
-              </section>
-            </div>
+              </div>
+              <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
+              <div id="rpc-broadcast-advisor" class="rpc-advisory-grid"></div>
+            </section>
 
             <section class="surface" data-tilt>
               <div class="surface-header">
@@ -461,50 +420,104 @@
             </div>
           </div>
 
-          <section class="surface" data-tilt>
-            <form id="settings-form" class="settings-panel">
-              <section class="surface inset-surface">
-                <div class="surface-header compact">
-                  <div>
-                    <h4>Explorer ABI Fetch</h4>
-                    <p class="helper-copy">Save an Etherscan V2 API key to pull verified ABI JSON from the task builder.</p>
-                  </div>
-                  <span id="explorer-config-status" class="muted-copy">Not configured</span>
-                </div>
-                <label>
-                  <span>Explorer API Key</span>
-                  <input id="explorer-api-key-input" type="password" placeholder="Etherscan V2 API key" />
-                </label>
-                <p class="helper-copy">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
-                <div class="settings-actions">
-                  <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
-                  <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
-                </div>
-              </section>
-
-              <section class="surface inset-surface">
-                <div class="surface-header compact">
-                  <div>
-                    <h4>OpenAI Tools</h4>
-                    <p class="helper-copy">Save an OpenAI API key to enable the RPC advisor and other AI-assisted features.</p>
-                  </div>
-                  <span id="openai-config-status" class="muted-copy">Not configured</span>
-                </div>
-                <label>
-                  <span>OpenAI API Key</span>
-                  <input id="openai-api-key-input" type="password" placeholder="OpenAI API key" />
-                </label>
-                <p class="helper-copy">Paste the raw OpenAI API key only. Do not paste a link, curl command, or URL.</p>
-                <div class="settings-actions">
-                  <button id="delete-openai-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
-                  <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
-                </div>
-              </section>
-
-              <div class="settings-actions">
-                <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
+          <section class="surface settings-shell" data-tilt>
+            <section class="settings-hero">
+              <div class="settings-hero-copy">
+                <span class="eyebrow">Operator Configuration</span>
+                <h3>Control external integrations from one place</h3>
+                <p class="helper-copy">
+                  Configure the keys that power ABI discovery, OpenAI-assisted tooling, and live
+                  operator workflows across the dashboard.
+                </p>
               </div>
-            </form>
+              <div class="settings-summary-grid">
+                <article class="settings-summary-card">
+                  <span class="micro-label">Explorer Access</span>
+                  <strong>Verified ABI Fetch</strong>
+                  <p>Let the task builder pull verified contract ABI JSON instead of pasting interfaces by hand.</p>
+                </article>
+                <article class="settings-summary-card">
+                  <span class="micro-label">AI Tooling</span>
+                  <strong>Operator Assistance</strong>
+                  <p>Enable the operator assistant and other OpenAI-powered actions directly inside the control surface.</p>
+                </article>
+              </div>
+            </section>
+
+            <div class="settings-layout">
+              <form id="settings-form" class="settings-panel">
+                <section class="surface inset-surface settings-card">
+                  <div class="surface-header compact settings-card-header">
+                    <div>
+                      <span class="eyebrow settings-card-step">01 Explorer</span>
+                      <h4>Explorer ABI Fetch</h4>
+                      <p class="helper-copy">Save an Etherscan V2 API key to pull verified ABI JSON from the task builder.</p>
+                    </div>
+                    <span id="explorer-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <span>Explorer API Key</span>
+                    <input id="explorer-api-key-input" type="password" placeholder="Etherscan V2 API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
+                  <div class="settings-actions">
+                    <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card">
+                  <div class="surface-header compact settings-card-header">
+                    <div>
+                      <span class="eyebrow settings-card-step">02 OpenAI</span>
+                      <h4>OpenAI Tools</h4>
+                      <p class="helper-copy">Save an OpenAI API key to enable the operator assistant and other AI-assisted features.</p>
+                    </div>
+                    <span id="openai-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <span>OpenAI API Key</span>
+                    <input id="openai-api-key-input" type="password" placeholder="OpenAI API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw OpenAI API key only. Do not paste a link, curl command, or URL.</p>
+                  <div class="settings-actions">
+                    <button id="delete-openai-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                </section>
+
+                <div class="settings-footer">
+                  <p class="helper-copy">
+                    Only raw keys are accepted here. Saved dashboard keys can be deleted from this page;
+                    environment keys remain managed outside the dashboard.
+                  </p>
+                  <div class="settings-actions">
+                    <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
+                  </div>
+                </div>
+              </form>
+
+              <aside class="settings-sidecar">
+                <section class="settings-note-card">
+                  <span class="micro-label">Security</span>
+                  <h4>Key handling</h4>
+                  <p>
+                    Dashboard-saved keys stay tied to this operator surface. Use delete to remove saved
+                    dashboard keys only. Environment-provided keys are still controlled on the server.
+                  </p>
+                </section>
+
+                <section class="settings-note-card">
+                  <span class="micro-label">Checklist</span>
+                  <h4>Before saving</h4>
+                  <ul class="settings-checklist">
+                    <li>Paste only the raw API key, never a URL or curl command.</li>
+                    <li>Use the test action before replacing a working key.</li>
+                    <li>Save only after the status shows the new key is ready.</li>
+                  </ul>
+                </section>
+              </aside>
+            </div>
           </section>
         </section>
 

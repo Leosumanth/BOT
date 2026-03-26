@@ -516,6 +516,22 @@ body[data-current-view="settings"] .topbar {
   display: none;
 }
 
+body[data-current-view="rpc"] .topbar {
+  display: none;
+}
+
+body[data-current-view="settings"] .view-header h2 {
+  font-size: clamp(38px, 4vw, 54px);
+  line-height: 1.02;
+}
+
+body[data-current-view="settings"] .view-subtitle {
+  max-width: 940px;
+  font-size: 18px;
+  line-height: 1.65;
+  color: #9db2ca;
+}
+
 .time-card {
   min-width: 162px;
   padding: 13px 16px;
@@ -577,6 +593,278 @@ body[data-current-view="settings"] .topbar {
   border-radius: var(--radius-lg);
   background: linear-gradient(180deg, rgba(13, 24, 38, 0.88), rgba(10, 18, 29, 0.92));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.settings-shell {
+  display: grid;
+  gap: 22px;
+}
+
+.settings-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 24px 26px;
+  border-radius: calc(var(--radius-xl) + 2px);
+  border: 1px solid rgba(124, 223, 255, 0.16);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(76, 255, 210, 0.08), transparent 24%),
+    radial-gradient(circle at 8% 12%, rgba(113, 224, 255, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(14, 24, 37, 0.9), rgba(9, 17, 29, 0.94));
+}
+
+.settings-hero::after,
+.settings-note-card::after,
+.settings-summary-card::after {
+  content: "";
+  position: absolute;
+  inset: auto -8% -52px auto;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(113, 224, 255, 0.16), transparent 72%);
+  pointer-events: none;
+}
+
+.settings-hero-copy {
+  display: grid;
+  gap: 12px;
+  max-width: 860px;
+}
+
+.settings-hero h3 {
+  margin: 0;
+  font-size: clamp(28px, 3vw, 40px);
+  line-height: 1.04;
+}
+
+.settings-hero .helper-copy {
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.settings-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.settings-summary-card {
+  position: relative;
+  overflow: hidden;
+  padding: 18px;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(124, 223, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+    linear-gradient(135deg, rgba(113, 224, 255, 0.05), transparent 48%),
+    rgba(7, 14, 24, 0.68);
+}
+
+.settings-summary-card strong {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.settings-summary-card p {
+  margin: 0;
+  color: #bfd2e7;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  align-items: start;
+}
+
+.settings-panel {
+  gap: 18px;
+}
+
+.settings-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.settings-card-header {
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.settings-card-header > div {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-card-step {
+  margin-bottom: 2px;
+}
+
+.settings-card h4 {
+  font-size: 28px;
+  line-height: 1.08;
+  letter-spacing: 0.01em;
+}
+
+.settings-card .helper-copy {
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.settings-field {
+  gap: 10px;
+}
+
+.settings-field > span {
+  color: #dbeeff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.settings-field input {
+  min-height: 60px;
+  padding: 15px 18px;
+  font-size: 17px;
+  border-color: rgba(124, 223, 255, 0.18);
+}
+
+.settings-field input::placeholder {
+  color: rgba(237, 247, 255, 0.42);
+}
+
+.settings-field-note {
+  font-size: 15px;
+}
+
+.settings-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 223, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c4d8eb;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.settings-status-badge[data-status="saved"] {
+  color: #cfffe2;
+  border-color: rgba(98, 247, 167, 0.28);
+  background: rgba(98, 247, 167, 0.14);
+}
+
+.settings-status-badge[data-status="env"] {
+  color: #fff0c9;
+  border-color: rgba(255, 203, 112, 0.28);
+  background: rgba(255, 203, 112, 0.14);
+}
+
+.settings-status-badge[data-status="draft"] {
+  color: #dffbff;
+  border-color: rgba(113, 224, 255, 0.3);
+  background: rgba(113, 224, 255, 0.16);
+}
+
+.settings-status-badge[data-status="error"] {
+  color: #ffd8de;
+  border-color: rgba(255, 102, 120, 0.28);
+  background: rgba(255, 102, 120, 0.14);
+}
+
+.settings-status-badge[data-status="empty"] {
+  color: #b2c4d8;
+  border-color: rgba(124, 223, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.settings-card .settings-actions {
+  padding-top: 2px;
+}
+
+.settings-actions .ghost-button,
+.settings-actions .primary-button {
+  min-height: 54px;
+  padding: 0 20px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(124, 223, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
+    rgba(8, 15, 25, 0.72);
+}
+
+.settings-footer .helper-copy {
+  max-width: 720px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.settings-sidecar {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.settings-note-card {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(124, 223, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+    linear-gradient(135deg, rgba(113, 224, 255, 0.05), transparent 48%),
+    rgba(7, 14, 24, 0.68);
+}
+
+.settings-note-card h4 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.settings-note-card p {
+  margin: 0;
+  color: #bfd2e7;
+  line-height: 1.65;
+}
+
+.settings-checklist {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+  color: #bfd2e7;
+}
+
+.settings-checklist li {
+  line-height: 1.6;
 }
 
 .hero-surface {
@@ -2478,6 +2766,14 @@ body[data-auth-state="locked"] .assistant-root {
   .topbar-actions {
     justify-content: flex-start;
   }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-sidecar {
+    position: static;
+  }
 }
 
 @media (max-width: 820px) {
@@ -2548,6 +2844,31 @@ body[data-auth-state="locked"] .assistant-root {
 
   .topbar-title {
     font-size: 30px;
+  }
+
+  body[data-current-view="settings"] .view-subtitle {
+    font-size: 16px;
+  }
+
+  .settings-hero {
+    padding: 20px;
+  }
+
+  .settings-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-card h4 {
+    font-size: 24px;
+  }
+
+  .settings-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-status-badge {
+    align-self: flex-start;
   }
 
   .assistant-root {

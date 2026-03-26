@@ -80,11 +80,6 @@ const rpcOpsOverview = document.getElementById("rpc-ops-overview");
 const rpcBroadcastAdvisor = document.getElementById("rpc-broadcast-advisor");
 const rpcChainCommandCaption = document.getElementById("rpc-chain-command-caption");
 const rpcChainCommandGrid = document.getElementById("rpc-chain-command-grid");
-const rpcAiGenerateButton = document.getElementById("rpc-ai-generate-button");
-const rpcAiStatus = document.getElementById("rpc-ai-status");
-const rpcAiPromptInput = document.getElementById("rpc-ai-prompt-input");
-const rpcAiOutput = document.getElementById("rpc-ai-output");
-const rpcDoctrineGrid = document.getElementById("rpc-doctrine-grid");
 const rpcList = document.getElementById("rpc-list");
 const rpcChainlistModal = document.getElementById("rpc-chainlist-modal");
 const rpcChainlistModalTitle = document.getElementById("rpc-chainlist-modal-title");
@@ -248,12 +243,6 @@ let rpcDiscoveryState = {
   selectedUrls: [],
   loading: false,
   summary: null
-};
-let rpcAiState = {
-  loading: false,
-  content: "",
-  model: "",
-  generatedAt: null
 };
 let rpcChainlistScan = {
   chainKey: "",
@@ -3649,43 +3638,6 @@ function renderRpcBroadcastAdvisor(groups = buildRpcChainGroups()) {
     .join("");
 }
 
-function renderRpcDoctrineGrid(groups = buildRpcChainGroups()) {
-  const snapshot = buildRpcMeshSnapshot(groups);
-  const doctrineCards = [
-    {
-      tone: snapshot.broadcastReadyChains > 0 ? "healthy" : "warning",
-      title: "Public Mint Swarm",
-      detail: "Use one fastest primary plus at least one healthy fallback on the same chain so multi-RPC broadcast wins on first acceptance and still propagates wide."
-    },
-    {
-      tone: snapshot.healthySocketNodes > 0 ? "healthy" : "warning",
-      title: "WebSocket Sentinel",
-      detail: "Keep at least one healthy websocket endpoint on chains where you run event or mempool triggers, so the bot can arm before public traffic catches up."
-    },
-    {
-      tone: snapshot.relayTasks === 0 || snapshot.broadcastReadyChains > 0 ? "healthy" : "warning",
-      title: "Relay + Public Hybrid",
-      detail: "Private relay protects against mempool copy-trading, but a healthy public fallback mesh still matters when relay submission fails or rate limits."
-    },
-    {
-      tone: snapshot.averageLatency != null && snapshot.averageLatency <= 400 ? "healthy" : "warning",
-      title: "Latency Hygiene",
-      detail: "Re-test the mesh before hot launches. Endpoints drifting above roughly 400ms should become deep fallback, not primary broadcast targets."
-    }
-  ];
-
-  rpcDoctrineGrid.innerHTML = doctrineCards
-    .map(
-      (card) => `
-        <article class="rpc-advisory-card ${escapeHtml(card.tone)}">
-          <strong>${escapeHtml(card.title)}</strong>
-          <p>${escapeHtml(card.detail)}</p>
-        </article>
-      `
-    )
-    .join("");
-}
-
 function renderRpcChainCommandGrid(groups = buildRpcChainGroups()) {
   rpcChainCommandCaption.textContent = groups.length
     ? `${pluralize(groups.length, "chain")} tracked`
@@ -3751,74 +3703,6 @@ function renderRpcChainCommandGrid(groups = buildRpcChainGroups()) {
     .join("");
 }
 
-function renderRpcAiPanel() {
-  const aiReady = Boolean(state.settings.openaiApiKeyConfigured);
-  const source = state.settings.openaiApiKeySource === "env" ? ".env" : "dashboard";
-  rpcAiGenerateButton.disabled = !aiReady || rpcAiState.loading;
-
-  if (!aiReady) {
-    rpcAiStatus.textContent = "Set an OpenAI API key to enable";
-    rpcAiOutput.textContent = "Add an OpenAI API key in Settings or set OPENAI_API_KEY in .env to enable the AI RPC advisor.";
-    return;
-  }
-
-  if (rpcAiState.loading) {
-    rpcAiStatus.textContent = `Generating brief via ${source}...`;
-    rpcAiOutput.textContent = "OpenAI is reviewing the current mesh, tasks, websocket coverage, and broadcast depth...";
-    return;
-  }
-
-  rpcAiStatus.textContent = `Ready via ${source} · ${state.settings.openaiRpcAdvisorModel || "OpenAI"}`;
-
-  if (!rpcAiState.content) {
-    rpcAiOutput.textContent = "Ask for a mint-focused RPC brief. Example: Which chain is weakest right now, and what should I add before a public mint?";
-    return;
-  }
-
-  const generatedLabel = rpcAiState.generatedAt ? `Generated ${relativeTime(rpcAiState.generatedAt)}` : "Generated just now";
-  rpcAiOutput.textContent = [
-    `Model: ${rpcAiState.model || state.settings.openaiRpcAdvisorModel || "OpenAI"}`,
-    generatedLabel,
-    "",
-    rpcAiState.content
-  ].join("\n");
-}
-
-async function generateRpcAiAdvice() {
-  if (!state.settings.openaiApiKeyConfigured) {
-    showToast("Add an OpenAI API key in Settings or .env first to enable the AI advisor.", "info", "AI Advisor");
-    return;
-  }
-
-  rpcAiState.loading = true;
-  renderRpcAiPanel();
-
-  try {
-    const payload = await request("/api/rpc-nodes/ai-advice", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chainKey: rpcDiscoveryState.chain?.key || "",
-        prompt: rpcAiPromptInput.value
-      }),
-      quiet: true
-    });
-
-    rpcAiState = {
-      loading: false,
-      content: String(payload.advice || "").trim(),
-      model: payload.model || state.settings.openaiRpcAdvisorModel || "",
-      generatedAt: payload.generatedAt || new Date().toISOString()
-    };
-    renderRpcAiPanel();
-    showToast("AI RPC brief generated.", "success", "AI Advisor");
-  } catch (error) {
-    rpcAiState.loading = false;
-    renderRpcAiPanel();
-    showToast(error.message || "AI advisor failed.", "error", "AI Advisor");
-  }
-}
-
 async function pulseRpcMesh() {
   const payload = await request("/api/control/test-rpc-pool", { method: "POST" });
   const summary = payload.summary || {};
@@ -3837,9 +3721,7 @@ function renderRpcNodes() {
   const chainGroups = buildRpcChainGroups();
   renderRpcOperationsOverview(chainGroups);
   renderRpcBroadcastAdvisor(chainGroups);
-  renderRpcDoctrineGrid(chainGroups);
   renderRpcChainCommandGrid(chainGroups);
-  renderRpcAiPanel();
 
   rpcList.innerHTML = chainGroups.length
     ? chainGroups
@@ -3982,27 +3864,33 @@ function renderRpcNodes() {
 }
 
 function setApiKeyStatus({ input, statusNode, source, message = null }) {
+  let status = "empty";
+  let text = "Not configured";
+
   if (message) {
-    statusNode.textContent = message;
-    return;
+    const normalizedMessage = String(message).toLowerCase();
+
+    text = message;
+    if (normalizedMessage.includes("fail")) {
+      status = "error";
+    } else if (normalizedMessage.includes("no key")) {
+      status = "empty";
+    } else {
+      status = "draft";
+    }
+  } else if (input.value.trim()) {
+    text = "New key ready to test or save";
+    status = "draft";
+  } else if (source === "saved") {
+    text = "Saved key available";
+    status = "saved";
+  } else if (source === "env") {
+    text = "Environment key available";
+    status = "env";
   }
 
-  if (input.value.trim()) {
-    statusNode.textContent = "New key ready to test or save";
-    return;
-  }
-
-  if (source === "saved") {
-    statusNode.textContent = "Saved key available";
-    return;
-  }
-
-  if (source === "env") {
-    statusNode.textContent = "Environment key available";
-    return;
-  }
-
-  statusNode.textContent = "Not configured";
+  statusNode.textContent = text;
+  statusNode.dataset.status = status;
 }
 
 function syncApiKeyControls({ input, deleteButton, source, placeholders, deleteLabel }) {
@@ -5551,10 +5439,6 @@ rpcChainSearchInput.addEventListener("blur", () => {
   }
 
   scheduleRpcDiscoveryScan({ immediate: true });
-});
-
-rpcAiGenerateButton.addEventListener("click", async () => {
-  await generateRpcAiAdvice();
 });
 
 settingsForm.addEventListener("submit", async (event) => {
