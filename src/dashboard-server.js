@@ -36,6 +36,12 @@ const scheduledTaskPollIntervalMs = Math.max(
   1000,
   Number(process.env.SCHEDULE_POLL_INTERVAL_MS || 1000)
 );
+const chainlistRpcCatalogUrl =
+  process.env.CHAINLIST_RPC_CATALOG_URL || "https://chainlist.org/rpcs.json";
+const chainlistRpcCacheTtlMs = Math.max(
+  60_000,
+  Number(process.env.CHAINLIST_RPC_CACHE_TTL_MS || 15 * 60 * 1000)
+);
 const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2";
 const explorerKeyTestChainId = 1;
 const mintPhaseOrder = ["gtd", "allowlist", "public"];
@@ -79,7 +85,8 @@ const chainCatalog = [
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
   { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
   { key: "blast", label: "Blast", chainId: 81457 },
-  { key: "shape", label: "Shape", chainId: 360 }
+  { key: "shape", label: "Shape", chainId: 360 },
+  { key: "plasma", label: "Plasma", chainId: 9745 }
 ];
 const rpcProviderNamePatterns = [
   { pattern: /alchemy/i, label: "Alchemy" },
@@ -92,6 +99,33 @@ const rpcProviderNamePatterns = [
   { pattern: /chainstack/i, label: "Chainstack" },
   { pattern: /drpc/i, label: "dRPC" }
 ];
+const rpcHostnameNoiseTokens = new Set([
+  "rpc",
+  "rpcs",
+  "mainnet",
+  "testnet",
+  "sepolia",
+  "node",
+  "nodes",
+  "public",
+  "api",
+  "network",
+  "net",
+  "main",
+  "https",
+  "http",
+  "ws",
+  "wss",
+  "com",
+  "org",
+  "io",
+  "xyz",
+  "app",
+  "dev",
+  "gg",
+  "one",
+  "chain"
+]);
 
 let database = null;
 let initialized = false;
@@ -106,6 +140,11 @@ const distributedTaskPatches = new Map();
 let scheduledTaskLoop = null;
 let scheduledTaskScanInFlight = false;
 let shutdownPromise = null;
+let chainlistRpcCatalogCache = {
+  expiresAt: 0,
+  value: null,
+  pending: null
+};
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -145,12 +184,68 @@ function findChainByChainId(chainId) {
   return chainCatalog.find((entry) => entry.chainId === normalized) || null;
 }
 
+function normalizeChainEntry(entry = {}) {
+  const key = String(entry.key || "").trim();
+  const label = String(entry.label || "").trim();
+  const chainId = Number(entry.chainId);
+
+  if (!key || !label || !Number.isFinite(chainId)) {
+    return null;
+  }
+
+  return {
+    key,
+    label,
+    chainId
+  };
+}
+
+function slugifyChainKey(value, chainId = "") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!normalized) {
+    return chainId ? `chain_${chainId}` : "";
+  }
+
+  const collidesWithDifferentChain = chainCatalog.some(
+    (entry) => entry.key === normalized && String(entry.chainId) !== String(chainId)
+  );
+  return collidesWithDifferentChain ? `${normalized}_${chainId}` : normalized;
+}
+
 function titleCaseWords(value) {
   return String(value || "")
     .split(/[\s_-]+/)
     .filter(Boolean)
     .map((segment) => segment[0].toUpperCase() + segment.slice(1))
     .join(" ");
+}
+
+function hostnameContainsChainIdentity(hostname, chain) {
+  const normalizedHostname = String(hostname || "").toLowerCase();
+  if (!normalizedHostname || !chain) {
+    return false;
+  }
+
+  const candidates = [
+    chain.key,
+    chain.label,
+    chain.label.replace(/\bmainnet\b/gi, ""),
+    chain.label.replace(/\bbeta\b/gi, "")
+  ]
+    .flatMap((value) =>
+      String(value || "")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((part) => part.length >= 3)
+    )
+    .filter(Boolean);
+
+  return candidates.some((candidate) => normalizedHostname.includes(candidate));
 }
 
 function formatRpcChainLabel(chain) {
@@ -185,7 +280,119 @@ function inferRpcProviderName(rpcUrl) {
   return titleCaseWords(firstLabel);
 }
 
+function inferChainLabelFromRpcUrl(rpcUrl, chainId) {
+  let hostname = "";
+  try {
+    hostname = new URL(String(rpcUrl || "")).hostname.toLowerCase();
+  } catch {
+    hostname = "";
+  }
+
+  const labels = hostname.split(".").filter(Boolean);
+  for (const label of labels) {
+    const tokens = label
+      .split(/[^a-z0-9]+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    const chainTokens = tokens.filter(
+      (token) =>
+        token.length >= 3 &&
+        !rpcHostnameNoiseTokens.has(token) &&
+        !rpcProviderNamePatterns.some((entry) => entry.pattern.test(token))
+    );
+
+    if (chainTokens.length > 0) {
+      return chainTokens.map((token) => titleCaseWords(token)).join(" ");
+    }
+  }
+
+  return `Chain ${chainId}`;
+}
+
+function deriveChainDescriptor(chainId, rpcUrl) {
+  const knownChain = findChainByChainId(chainId);
+  if (knownChain) {
+    return {
+      ...knownChain,
+      catalogued: true
+    };
+  }
+
+  const label = inferChainLabelFromRpcUrl(rpcUrl, chainId);
+  return {
+    key: slugifyChainKey(label, chainId),
+    label,
+    chainId: Number(chainId),
+    catalogued: false
+  };
+}
+
+function buildAvailableChains(extraEntries = []) {
+  const chainMap = new Map();
+
+  chainCatalog.forEach((entry) => {
+    const normalized = normalizeChainEntry(entry);
+    if (normalized) {
+      chainMap.set(normalized.key, normalized);
+    }
+  });
+
+  extraEntries.forEach((entry) => {
+    const normalized = normalizeChainEntry(entry);
+    if (!normalized) {
+      return;
+    }
+
+    const existing = chainMap.get(normalized.key);
+    if (!existing) {
+      chainMap.set(normalized.key, normalized);
+      return;
+    }
+
+    chainMap.set(normalized.key, {
+      key: existing.key,
+      label: existing.label || normalized.label,
+      chainId: Number.isFinite(existing.chainId) ? existing.chainId : normalized.chainId
+    });
+  });
+
+  return [...chainMap.values()];
+}
+
+function getAvailableChains() {
+  const rpcChains = (appState?.rpcNodes || [])
+    .map((node) => ({
+      key: node.chainKey,
+      label: node.chainLabel || "",
+      chainId: node.chainId
+    }))
+    .filter((entry) => entry.key && entry.label && Number.isFinite(Number(entry.chainId)));
+
+  return buildAvailableChains(rpcChains);
+}
+
+function findAvailableChainByKey(chainKey) {
+  const normalized = String(chainKey || "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return getAvailableChains().find((entry) => entry.key === normalized) || null;
+}
+
 function buildRpcNameSuggestion(rpcUrl, chain = null, chainId = null) {
+  let hostname = "";
+  try {
+    hostname = new URL(String(rpcUrl || "")).hostname.toLowerCase();
+  } catch {
+    hostname = "";
+  }
+
+  if (hostnameContainsChainIdentity(hostname, chain)) {
+    return chain.label;
+  }
+
   const providerName = inferRpcProviderName(rpcUrl);
   const chainLabel = formatRpcChainLabel(chain) || (chainId ? `Chain ${chainId}` : "");
 
@@ -198,6 +405,181 @@ function buildRpcNameSuggestion(rpcUrl, chain = null, chainId = null) {
   }
 
   return `${providerName} (${chainLabel})`;
+}
+
+function normalizeChainlistRpcUrl(entry) {
+  const rawValue =
+    typeof entry === "string"
+      ? entry
+      : typeof entry?.url === "string"
+        ? entry.url
+        : typeof entry?.rpc === "string"
+          ? entry.rpc
+          : "";
+  const normalized = String(rawValue || "").trim();
+  if (!normalized || !/^https?:\/\//i.test(normalized)) {
+    return null;
+  }
+
+  if (
+    /\$\{[^}]+\}|<[^>]+>|YOUR_|YOUR-|replace-with|replace_me|api[_-]?key|infura[_-]?api[_-]?key|alchemy[_-]?api[_-]?key/i.test(
+      normalized
+    )
+  ) {
+    return null;
+  }
+
+  try {
+    return new URL(normalized).toString();
+  } catch {
+    return null;
+  }
+}
+
+function rankRpcNodesByLatency(rpcNodes = []) {
+  const latencyFor = (node) =>
+    Number.isFinite(Number(node?.lastHealth?.latencyMs)) ? Number(node.lastHealth.latencyMs) : Infinity;
+  const statusRankFor = (node) => {
+    if (node?.lastHealth?.status === "healthy") {
+      return 0;
+    }
+
+    if (!node?.lastHealth) {
+      return 1;
+    }
+
+    if (node.lastHealth.status === "unknown" || node.lastHealth.status === "untested") {
+      return 2;
+    }
+
+    return 3;
+  };
+  const checkedAtFor = (node) => new Date(node?.lastHealth?.checkedAt || 0).getTime();
+
+  return [...rpcNodes].sort((left, right) => {
+    const statusDelta = statusRankFor(left) - statusRankFor(right);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    const latencyDelta = latencyFor(left) - latencyFor(right);
+    if (latencyDelta !== 0) {
+      return latencyDelta;
+    }
+
+    const freshnessDelta = checkedAtFor(right) - checkedAtFor(left);
+    if (freshnessDelta !== 0) {
+      return freshnessDelta;
+    }
+
+    return String(left?.name || left?.url || "").localeCompare(String(right?.name || right?.url || ""));
+  });
+}
+
+async function fetchChainlistRpcCatalog(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && chainlistRpcCatalogCache.value && chainlistRpcCatalogCache.expiresAt > now) {
+    return chainlistRpcCatalogCache.value;
+  }
+
+  if (!forceRefresh && chainlistRpcCatalogCache.pending) {
+    return chainlistRpcCatalogCache.pending;
+  }
+
+  const pending = (async () => {
+    const response = await fetch(chainlistRpcCatalogUrl, {
+      headers: {
+        accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Chainlist RPC catalog request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    if (!Array.isArray(payload)) {
+      throw new Error("Chainlist RPC catalog returned an unexpected payload");
+    }
+
+    chainlistRpcCatalogCache = {
+      expiresAt: Date.now() + chainlistRpcCacheTtlMs,
+      value: payload,
+      pending: null
+    };
+
+    return payload;
+  })();
+
+  chainlistRpcCatalogCache.pending = pending;
+
+  try {
+    return await pending;
+  } catch (error) {
+    chainlistRpcCatalogCache.pending = null;
+    throw error;
+  }
+}
+
+function findChainlistEntry(chainlistCatalog, chain) {
+  if (!Array.isArray(chainlistCatalog) || !chain) {
+    return null;
+  }
+
+  const wantedChainId = Number(chain.chainId);
+  if (!Number.isFinite(wantedChainId)) {
+    return null;
+  }
+
+  return (
+    chainlistCatalog.find((entry) => Number(entry?.chainId) === wantedChainId) ||
+    chainlistCatalog.find(
+      (entry) => String(entry?.name || "").trim().toLowerCase() === String(chain.label || "").trim().toLowerCase()
+    ) ||
+    null
+  );
+}
+
+function extractChainlistRpcUrls(chainlistEntry) {
+  const rawCandidates = [];
+
+  if (Array.isArray(chainlistEntry?.rpc)) {
+    rawCandidates.push(...chainlistEntry.rpc);
+  }
+
+  if (Array.isArray(chainlistEntry?.rpcs)) {
+    rawCandidates.push(...chainlistEntry.rpcs);
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  rawCandidates.forEach((entry) => {
+    const rpcUrl = normalizeChainlistRpcUrl(entry);
+    if (!rpcUrl || seen.has(rpcUrl)) {
+      return;
+    }
+
+    seen.add(rpcUrl);
+    normalized.push(rpcUrl);
+  });
+
+  return normalized;
+}
+
+function buildUniqueRpcNodeName(desiredName, existingNodes = []) {
+  const baseName = String(desiredName || "").trim() || "Custom RPC";
+  const takenNames = new Set(existingNodes.map((node) => String(node?.name || "").trim().toLowerCase()));
+  if (!takenNames.has(baseName.toLowerCase())) {
+    return baseName;
+  }
+
+  let suffix = 2;
+  while (takenNames.has(`${baseName} ${suffix}`.toLowerCase())) {
+    suffix += 1;
+  }
+
+  return `${baseName} ${suffix}`;
 }
 
 async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
@@ -227,13 +609,14 @@ async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
       throw new Error("RPC did not return a valid chain ID");
     }
 
-    const chain = findChainByChainId(chainId);
+    const chain = deriveChainDescriptor(chainId, normalizedUrl);
     return {
       url: normalizedUrl,
       chainId,
-      chainKey: chain?.key || "",
-      chainLabel: chain?.label || `Chain ${chainId}`,
-      supportedChain: Boolean(chain),
+      chainKey: chain.key,
+      chainLabel: chain.label,
+      supportedChain: true,
+      cataloguedChain: Boolean(chain.catalogued),
       blockNumber,
       nameSuggestion: buildRpcNameSuggestion(normalizedUrl, chain, chainId)
     };
@@ -1006,7 +1389,9 @@ function formatEthString(value) {
 }
 
 function getChainRpcNodes(chainKey) {
-  return (appState?.rpcNodes || []).filter((node) => node.enabled && node.chainKey === chainKey);
+  return rankRpcNodesByLatency(
+    (appState?.rpcNodes || []).filter((node) => node.enabled && node.chainKey === chainKey)
+  );
 }
 
 async function createReadProviderForChain(chainKey, preferredRpcNodeIds = []) {
@@ -2665,7 +3050,7 @@ function mapTaskHistoryEntries(entries = []) {
 }
 
 function chainLabel(chainKey) {
-  return chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey || "Unknown";
+  return findAvailableChainByKey(chainKey)?.label || chainKey || "Unknown";
 }
 
 async function reloadIntegrationSecrets() {
@@ -2714,6 +3099,7 @@ async function reloadAppState() {
     taskRuntimeById: mapTaskRuntimeEntries(taskRuntimeEntries),
     taskHistoryByTaskId: mapTaskHistoryEntries(taskHistoryEntries)
   };
+  appState.chains = getAvailableChains();
 }
 
 async function persistAppState() {
@@ -3113,7 +3499,7 @@ function buildTelemetry() {
         id: task.id,
         name: task.name,
         chainKey: task.chainKey,
-        chainLabel: chainCatalog.find((entry) => entry.key === task.chainKey)?.label || task.chainKey,
+        chainLabel: chainLabel(task.chainKey),
         priority: task.priority,
         priorityLabel: humanizePriority(task.priority),
         status: task.status,
@@ -3139,7 +3525,7 @@ function buildTelemetry() {
   )
     .map(([chainKey, count]) => ({
       chainKey,
-      label: chainCatalog.find((entry) => entry.key === chainKey)?.label || chainKey,
+      label: chainLabel(chainKey),
       count,
       share: taskViews.length ? Math.round((count / taskViews.length) * 100) : 0
     }))
@@ -3217,7 +3603,7 @@ function buildTelemetry() {
       id: node.id,
       name: node.name,
       chainKey: node.chainKey,
-      chainLabel: chainCatalog.find((entry) => entry.key === node.chainKey)?.label || node.chainKey,
+      chainLabel: chainLabel(node.chainKey),
       status: node.lastHealth?.status || "unknown",
       latencyMs: node.lastHealth?.latencyMs || null,
       checkedAt: node.lastHealth?.checkedAt || null,
@@ -3232,7 +3618,7 @@ function buildPublicState(includeDefaults = false) {
     wallets: appState.wallets,
     rpcNodes: appState.rpcNodes,
     settings: buildPublicSettings(),
-    chains: chainCatalog,
+    chains: appState.chains || getAvailableChains(),
     telemetry: buildTelemetry(),
     runState: getRunState(),
     authRequired: authIsRequired()
@@ -3540,16 +3926,17 @@ async function buildConfigForTask(task) {
       node.chainKey === task.chainKey &&
       (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
   );
+  const rankedRpcNodes = rankRpcNodesByLatency(configuredRpcNodes);
 
-  if (configuredRpcNodes.length === 0) {
+  if (rankedRpcNodes.length === 0) {
     throw new Error(`No enabled RPC nodes configured for ${task.chainKey}`);
   }
 
-  const chain = chainCatalog.find((entry) => entry.key === task.chainKey);
+  const chain = findAvailableChainByKey(task.chainKey);
 
   return normalizeConfig({
     ...defaultInputValues,
-    RPC_URLS: configuredRpcNodes.map((node) => node.url).join("\n"),
+    RPC_URLS: rankedRpcNodes.map((node) => node.url).join("\n"),
     PRIVATE_KEYS: privateKeys.join("\n"),
     CONTRACT_ADDRESS: task.contractAddress,
     ABI_JSON: task.abiJson,
@@ -4400,10 +4787,7 @@ async function handleRpcSave(request, response) {
     }
 
     const inspection = await inspectRpcEndpoint(payload.url);
-    const requestedChainKey = String(payload.chainKey || "").trim();
-    const resolvedChainKey =
-      inspection.chainKey ||
-      (chainCatalog.some((entry) => entry.key === requestedChainKey) ? requestedChainKey : "base_sepolia");
+    const resolvedChainKey = inspection.chainKey;
     const resolvedName =
       String(payload.name || "").trim() || inspection.nameSuggestion || "Custom RPC";
 
@@ -4412,6 +4796,8 @@ async function handleRpcSave(request, response) {
       name: resolvedName,
       url: inspection.url,
       chainKey: resolvedChainKey,
+      chainId: inspection.chainId,
+      chainLabel: inspection.chainLabel,
       enabled: payload.enabled !== false,
       group: payload.group || "Custom",
       source: "stored",
@@ -4432,12 +4818,109 @@ async function handleRpcSave(request, response) {
     }
 
     appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
+    appState.chains = getAvailableChains();
     await persistAppState();
     emitState();
     sendJson(response, 200, {
       ok: true,
       rpcNode,
       inspection
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleChainlistRpcImport(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const chain = findAvailableChainByKey(payload.chainKey);
+    if (!chain?.chainId) {
+      throw new Error("Choose a chain before importing Chainlist RPCs");
+    }
+
+    const importLimit = Math.min(10, Math.max(1, Number(payload.limit || 5)));
+    const probeBudget = Math.min(20, Math.max(importLimit * 3, importLimit));
+    const chainlistCatalog = await fetchChainlistRpcCatalog();
+    const chainlistEntry = findChainlistEntry(chainlistCatalog, chain);
+    if (!chainlistEntry) {
+      throw new Error(`Chainlist does not currently publish RPCs for ${chain.label}`);
+    }
+
+    const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
+    const candidateUrls = extractChainlistRpcUrls(chainlistEntry)
+      .filter((rpcUrl) => !existingUrls.has(rpcUrl))
+      .slice(0, probeBudget);
+
+    if (candidateUrls.length === 0) {
+      throw new Error(`No new Chainlist RPC URLs were available for ${chain.label}`);
+    }
+
+    const healthResults = await Promise.all(
+      candidateUrls.map(async (rpcUrl) => {
+        const temporaryNode = {
+          id: createId("rpc_probe"),
+          name: buildRpcNameSuggestion(rpcUrl, chain, chain.chainId),
+          url: rpcUrl,
+          chainKey: chain.key,
+          chainId: chain.chainId,
+          chainLabel: chain.label,
+          enabled: true,
+          group: "Chainlist",
+          source: "stored",
+          lastHealth: null
+        };
+
+        await testRpcNodeHealth(temporaryNode);
+        return temporaryNode;
+      })
+    );
+
+    const importableNodes = rankRpcNodesByLatency(
+      healthResults.filter((node) => node.lastHealth?.status === "healthy")
+    ).slice(0, importLimit);
+
+    if (importableNodes.length === 0) {
+      throw new Error(`Chainlist RPCs for ${chain.label} did not pass the health probe`);
+    }
+
+    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
+    const nodesToPersist = [];
+
+    importableNodes.forEach((node) => {
+      const name = buildUniqueRpcNodeName(
+        buildRpcNameSuggestion(node.url, chain, chain.chainId),
+        [...storedNodes, ...nodesToPersist]
+      );
+      nodesToPersist.push({
+        id: createId("rpc"),
+        name,
+        url: node.url,
+        chainKey: chain.key,
+        chainId: chain.chainId,
+        chainLabel: chain.label,
+        enabled: true,
+        group: "Chainlist",
+        source: "stored",
+        lastHealth: node.lastHealth
+      });
+    });
+
+    appState.rpcNodes = mergeRpcInventories([...nodesToPersist, ...storedNodes], buildEnvRpcNodes());
+    appState.chains = getAvailableChains();
+    await persistAppState();
+    emitState();
+
+    sendJson(response, 200, {
+      ok: true,
+      imported: nodesToPersist.length,
+      chain: {
+        key: chain.key,
+        label: chain.label,
+        chainId: chain.chainId
+      },
+      skipped: candidateUrls.length - nodesToPersist.length,
+      rpcNodes: nodesToPersist
     });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
@@ -4537,7 +5020,7 @@ async function handleExplorerAbiLookup(url, response) {
       throw new Error("Contract address is required for explorer ABI fetch");
     }
 
-    const chain = chainCatalog.find((entry) => entry.key === chainKey);
+    const chain = findAvailableChainByKey(chainKey);
     if (!chain?.chainId) {
       throw new Error(`Explorer ABI fetch is not configured for chain ${chainKey}`);
     }
@@ -5046,6 +5529,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/rpc-nodes/inspect") {
       await handleRpcInspect(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/import-chainlist") {
+      await handleChainlistRpcImport(request, response);
       return;
     }
 

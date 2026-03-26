@@ -15,8 +15,102 @@ const chainCatalog = [
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
   { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
   { key: "blast", label: "Blast", chainId: 81457 },
-  { key: "shape", label: "Shape", chainId: 360 }
+  { key: "shape", label: "Shape", chainId: 360 },
+  { key: "plasma", label: "Plasma", chainId: 9745 }
 ];
+
+function normalizeChainEntry(entry = {}) {
+  const key = String(entry.key || "").trim();
+  const label = String(entry.label || "").trim();
+  const chainId = Number(entry.chainId);
+
+  if (!key || !label || !Number.isFinite(chainId)) {
+    return null;
+  }
+
+  return {
+    key,
+    label,
+    chainId
+  };
+}
+
+function buildAvailableChains(extraEntries = []) {
+  const chainMap = new Map();
+
+  chainCatalog.forEach((entry) => {
+    const normalized = normalizeChainEntry(entry);
+    if (normalized) {
+      chainMap.set(normalized.key, normalized);
+    }
+  });
+
+  extraEntries.forEach((entry) => {
+    const normalized = normalizeChainEntry(entry);
+    if (!normalized || chainMap.has(normalized.key)) {
+      return;
+    }
+
+    chainMap.set(normalized.key, normalized);
+  });
+
+  return [...chainMap.values()];
+}
+
+function resolveStateChainEntry(state, chainKey) {
+  const normalized = String(chainKey || "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const rpcChains = (state?.rpcNodes || []).map((node) => ({
+    key: node.chainKey,
+    label: node.chainLabel || "",
+    chainId: node.chainId
+  }));
+
+  return buildAvailableChains(rpcChains).find((entry) => entry.key === normalized) || null;
+}
+
+function rankRpcNodesByLatency(rpcNodes = []) {
+  const latencyFor = (node) =>
+    Number.isFinite(Number(node?.lastHealth?.latencyMs)) ? Number(node.lastHealth.latencyMs) : Infinity;
+  const statusRankFor = (node) => {
+    if (node?.lastHealth?.status === "healthy") {
+      return 0;
+    }
+
+    if (!node?.lastHealth) {
+      return 1;
+    }
+
+    if (node.lastHealth.status === "unknown" || node.lastHealth.status === "untested") {
+      return 2;
+    }
+
+    return 3;
+  };
+  const checkedAtFor = (node) => new Date(node?.lastHealth?.checkedAt || 0).getTime();
+
+  return [...rpcNodes].sort((left, right) => {
+    const statusDelta = statusRankFor(left) - statusRankFor(right);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    const latencyDelta = latencyFor(left) - latencyFor(right);
+    if (latencyDelta !== 0) {
+      return latencyDelta;
+    }
+
+    const freshnessDelta = checkedAtFor(right) - checkedAtFor(left);
+    if (freshnessDelta !== 0) {
+      return freshnessDelta;
+    }
+
+    return String(left?.name || left?.url || "").localeCompare(String(right?.name || right?.url || ""));
+  });
+}
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -268,16 +362,17 @@ async function buildConfigForTask(database, state, task) {
       node.chainKey === task.chainKey &&
       (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
   );
+  const rankedRpcNodes = rankRpcNodesByLatency(configuredRpcNodes);
 
-  if (configuredRpcNodes.length === 0) {
+  if (rankedRpcNodes.length === 0) {
     throw new Error(`No enabled RPC nodes configured for ${task.chainKey}`);
   }
 
-  const chain = chainCatalog.find((entry) => entry.key === task.chainKey);
+  const chain = resolveStateChainEntry(state, task.chainKey);
 
   return normalizeConfig({
     ...defaultInputValues,
-    RPC_URLS: configuredRpcNodes.map((node) => node.url).join("\n"),
+    RPC_URLS: rankedRpcNodes.map((node) => node.url).join("\n"),
     PRIVATE_KEYS: privateKeys.join("\n"),
     CONTRACT_ADDRESS: task.contractAddress,
     ABI_JSON: task.abiJson,

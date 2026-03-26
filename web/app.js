@@ -62,6 +62,7 @@ const rpcFormSubtitle = document.getElementById("rpc-form-subtitle");
 const rpcFormBadge = document.getElementById("rpc-form-badge");
 const rpcCancelButton = document.getElementById("rpc-cancel-button");
 const rpcSubmitButton = document.getElementById("rpc-submit-button");
+const rpcImportChainlistButton = document.getElementById("rpc-import-chainlist-button");
 const rpcNameInput = document.getElementById("rpc-name-input");
 const rpcChainInput = document.getElementById("rpc-chain-input");
 const rpcUrlInput = document.getElementById("rpc-url-input");
@@ -1549,6 +1550,7 @@ async function inspectRpcUrl(url, options = {}) {
 
   if (!normalizedUrl) {
     rpcInspectRequestId += 1;
+    rpcNameInput.value = "";
     rpcAutoSuggestedName = "";
     setRpcDetectMessage();
     return;
@@ -1570,7 +1572,12 @@ async function inspectRpcUrl(url, options = {}) {
         return;
       }
 
-      if (payload.chainKey) {
+      if (payload.chainKey && payload.chainLabel && payload.chainId != null) {
+        ensureChainOption({
+          key: payload.chainKey,
+          label: payload.chainLabel,
+          chainId: payload.chainId
+        });
         rpcChainInput.value = payload.chainKey;
       }
 
@@ -1599,6 +1606,57 @@ async function inspectRpcUrl(url, options = {}) {
     rpcInspectTimer = null;
     void runInspection();
   }, 350);
+}
+
+async function importChainlistRpcNodes() {
+  const chainKey = rpcChainInput.value;
+  if (!chainKey) {
+    showToast("Choose a chain before importing Chainlist RPCs.", "info", "Chain Required");
+    return;
+  }
+
+  const originalLabel = rpcImportChainlistButton.textContent;
+  rpcImportChainlistButton.disabled = true;
+  rpcImportChainlistButton.textContent = "Importing...";
+  setRpcDetectMessage("Fetching Chainlist RPCs and probing latency...");
+
+  try {
+    const payload = await request("/api/rpc-nodes/import-chainlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chainKey,
+        limit: 5
+      })
+    });
+
+    const chainLabelCopy = payload.chain?.label || chainLabel(chainKey);
+    const importedCount = Number(payload.imported || 0);
+    const importedNames = Array.isArray(payload.rpcNodes)
+      ? payload.rpcNodes
+          .map((node) => node?.name)
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(", ")
+      : "";
+    setRpcDetectMessage(
+      importedCount > 0
+        ? `Imported ${importedCount} Chainlist RPC ${importedCount === 1 ? "node" : "nodes"} for ${chainLabelCopy}.`
+        : "Chainlist import completed."
+    );
+    showToast(
+      importedNames
+        ? `${importedCount} imported for ${chainLabelCopy}: ${importedNames}`
+        : `${importedCount} Chainlist RPC ${importedCount === 1 ? "node" : "nodes"} imported for ${chainLabelCopy}.`,
+      "success",
+      "Chainlist Import"
+    );
+  } catch {
+    setRpcDetectMessage("Chainlist import failed. You can still add RPCs manually.");
+  } finally {
+    rpcImportChainlistButton.disabled = false;
+    rpcImportChainlistButton.textContent = originalLabel;
+  }
 }
 
 function renderRpcNodes() {
@@ -1827,6 +1885,27 @@ function applyAppState(payload) {
     : "Batch tools are available for visual planning.";
 
   renderAll();
+}
+
+function ensureChainOption(chain) {
+  const key = String(chain?.key || chain?.chainKey || "").trim();
+  const label = String(chain?.label || chain?.chainLabel || "").trim();
+  const chainId = Number(chain?.chainId);
+
+  if (!key || !label || !Number.isFinite(chainId)) {
+    return;
+  }
+
+  const existingIndex = state.chains.findIndex((entry) => entry.key === key);
+  const nextEntry = { key, label, chainId };
+
+  if (existingIndex === -1) {
+    state.chains = [...state.chains, nextEntry];
+  } else {
+    state.chains = state.chains.map((entry, index) => (index === existingIndex ? nextEntry : entry));
+  }
+
+  populateChainSelectors();
 }
 
 function setView(viewName) {
@@ -3032,6 +3111,10 @@ rpcForm.addEventListener("submit", async (event) => {
 
 rpcCancelButton.addEventListener("click", () => {
   resetRpcForm();
+});
+
+rpcImportChainlistButton.addEventListener("click", async () => {
+  await importChainlistRpcNodes();
 });
 
 rpcUrlInput.addEventListener("input", () => {
