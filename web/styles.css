@@ -1972,6 +1972,7 @@ select:focus {
   justify-items: start;
   gap: 14px;
   pointer-events: none;
+  width: max-content;
 }
 
 .assistant-fab {
@@ -2072,6 +2073,11 @@ select:focus {
   gap: 16px;
   border-bottom: 1px solid rgba(124, 223, 255, 0.1);
   background: linear-gradient(180deg, rgba(113, 224, 255, 0.05), transparent);
+  cursor: grab;
+}
+
+.assistant-panel-header:active {
+  cursor: grabbing;
 }
 
 .assistant-panel-header .helper-copy:empty {
@@ -2475,6 +2481,7 @@ body[data-auth-state="locked"] .assistant-root {
     right: 14px;
     bottom: 14px;
     justify-items: stretch;
+    width: auto;
   }
 
   .assistant-fab {

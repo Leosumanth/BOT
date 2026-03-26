@@ -1710,10 +1710,9 @@ async function executeAssistantToolCall(call) {
 }
 
 async function requestOperatorAssistantReply({ message, previousResponseId = "" }) {
-  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
-  const apiKey = String(resolvedSecrets.openaiApiKey || "").trim();
+  const apiKey = String(integrationSecrets.openaiApiKey || "").trim();
   if (!apiKey) {
-    throw new Error("Add an OpenAI API key in Settings or OPENAI_API_KEY in .env to enable the AI operator.");
+    throw new Error("Save an OpenAI API key in Settings to enable the AI operator.");
   }
 
   const instructions = [

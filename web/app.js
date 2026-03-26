@@ -128,6 +128,7 @@ const assistantRoot = document.getElementById("assistant-root");
 const assistantFabButton = document.getElementById("assistant-fab-button");
 const assistantFabStatus = document.getElementById("assistant-fab-status");
 const assistantPanel = document.getElementById("assistant-panel");
+const assistantPanelHeader = assistantPanel.querySelector(".assistant-panel-header");
 const assistantStatus = document.getElementById("assistant-status");
 const assistantCloseButton = document.getElementById("assistant-close-button");
 const assistantResetButton = document.getElementById("assistant-reset-button");
@@ -271,6 +272,17 @@ let assistantState = {
 };
 let assistantRequestController = null;
 let assistantRequestToken = 0;
+const assistantPositionStorageKey = "mintbot.assistant.position.v1";
+let assistantDragState = {
+  active: false,
+  moved: false,
+  suppressClick: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  offsetX: 0,
+  offsetY: 0
+};
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1031,6 +1043,10 @@ function assistantModelLabel() {
   return /^gpt-5-mini(?:-|$)/i.test(String(model || "").trim()) ? "gpt-5-mini" : model;
 }
 
+function assistantUsesSavedDashboardKey() {
+  return state.settings.openaiApiKeySource === "saved";
+}
+
 function assistantAvailability() {
   if (!state.session.authenticated && state.session.authRequired !== false) {
     return {
@@ -1052,6 +1068,16 @@ function assistantAvailability() {
     };
   }
 
+  if (!assistantUsesSavedDashboardKey()) {
+    return {
+      ready: false,
+      fab: "Saved key required",
+      status: "Save an OpenAI API key in Settings to enable the live operator assistant.",
+      emptyTitle: "Saved key required",
+      emptyCopy: "Operator AI uses the OpenAI key saved in the dashboard settings."
+    };
+  }
+
   return {
     ready: true,
     fab: `Ready via ${assistantModelLabel()}`,
@@ -1059,6 +1085,187 @@ function assistantAvailability() {
     emptyTitle: "",
     emptyCopy: ""
   };
+}
+
+function isCompactAssistantLayout() {
+  return window.matchMedia("(max-width: 820px)").matches;
+}
+
+function clampAssistantPosition(left, top) {
+  const fabRect = assistantFabButton.getBoundingClientRect();
+  const width = Math.max(Math.round(fabRect.width || 280), 240);
+  const height = Math.max(Math.round(fabRect.height || 72), 72);
+
+  return {
+    left: Math.min(Math.max(14, Math.round(left)), Math.max(14, window.innerWidth - width - 14)),
+    top: Math.min(Math.max(14, Math.round(top)), Math.max(14, window.innerHeight - height - 14))
+  };
+}
+
+function readStoredAssistantPosition() {
+  try {
+    const rawValue = window.localStorage.getItem(assistantPositionStorageKey);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawValue);
+    if (!Number.isFinite(parsed?.left) || !Number.isFinite(parsed?.top)) {
+      return null;
+    }
+
+    return {
+      left: Number(parsed.left),
+      top: Number(parsed.top)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistAssistantPosition(position) {
+  if (isCompactAssistantLayout()) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(assistantPositionStorageKey, JSON.stringify(position));
+  } catch {}
+}
+
+function clearAssistantInlinePosition() {
+  assistantRoot.style.removeProperty("left");
+  assistantRoot.style.removeProperty("top");
+  assistantRoot.style.removeProperty("right");
+  assistantRoot.style.removeProperty("bottom");
+}
+
+function applyAssistantPosition(position = null) {
+  if (isCompactAssistantLayout()) {
+    clearAssistantInlinePosition();
+    return;
+  }
+
+  const nextPosition = position || readStoredAssistantPosition();
+  if (!nextPosition) {
+    clearAssistantInlinePosition();
+    return;
+  }
+
+  const clamped = clampAssistantPosition(nextPosition.left, nextPosition.top);
+  assistantRoot.style.left = `${clamped.left}px`;
+  assistantRoot.style.top = `${clamped.top}px`;
+  assistantRoot.style.right = "auto";
+  assistantRoot.style.bottom = "auto";
+}
+
+function syncAssistantPositionOnResize() {
+  if (isCompactAssistantLayout()) {
+    clearAssistantInlinePosition();
+    return;
+  }
+
+  const storedPosition = readStoredAssistantPosition();
+  if (!storedPosition) {
+    clearAssistantInlinePosition();
+    return;
+  }
+
+  const clamped = clampAssistantPosition(storedPosition.left, storedPosition.top);
+  persistAssistantPosition(clamped);
+  applyAssistantPosition(clamped);
+}
+
+function beginAssistantDrag(event) {
+  if (isCompactAssistantLayout()) {
+    return;
+  }
+
+  if (typeof event.button === "number" && event.button !== 0) {
+    return;
+  }
+
+  if (event.target.closest("button") && !assistantFabButton.contains(event.target)) {
+    return;
+  }
+
+  const fabRect = assistantFabButton.getBoundingClientRect();
+  assistantDragState.active = true;
+  assistantDragState.moved = false;
+  assistantDragState.pointerId = event.pointerId;
+  assistantDragState.startX = event.clientX;
+  assistantDragState.startY = event.clientY;
+  assistantDragState.offsetX = event.clientX - fabRect.left;
+  assistantDragState.offsetY = event.clientY - fabRect.top;
+
+  assistantRoot.style.left = `${Math.round(fabRect.left)}px`;
+  assistantRoot.style.top = `${Math.round(fabRect.top)}px`;
+  assistantRoot.style.right = "auto";
+  assistantRoot.style.bottom = "auto";
+
+  if (typeof event.currentTarget?.setPointerCapture === "function") {
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+  }
+
+  event.preventDefault();
+}
+
+function moveAssistantDrag(event) {
+  if (!assistantDragState.active) {
+    return;
+  }
+
+  if (assistantDragState.pointerId !== null && event.pointerId !== assistantDragState.pointerId) {
+    return;
+  }
+
+  if (!assistantDragState.moved) {
+    const deltaX = Math.abs(event.clientX - assistantDragState.startX);
+    const deltaY = Math.abs(event.clientY - assistantDragState.startY);
+    if (deltaX < 4 && deltaY < 4) {
+      return;
+    }
+  }
+
+  const nextPosition = clampAssistantPosition(
+    event.clientX - assistantDragState.offsetX,
+    event.clientY - assistantDragState.offsetY
+  );
+
+  assistantRoot.style.left = `${nextPosition.left}px`;
+  assistantRoot.style.top = `${nextPosition.top}px`;
+  assistantRoot.style.right = "auto";
+  assistantRoot.style.bottom = "auto";
+  assistantDragState.moved = true;
+}
+
+function endAssistantDrag(event) {
+  if (!assistantDragState.active) {
+    return;
+  }
+
+  if (assistantDragState.pointerId !== null && event.pointerId !== assistantDragState.pointerId) {
+    return;
+  }
+
+  if (assistantDragState.moved) {
+    persistAssistantPosition({
+      left: Number.parseInt(assistantRoot.style.left, 10) || 14,
+      top: Number.parseInt(assistantRoot.style.top, 10) || 14
+    });
+    assistantDragState.suppressClick = true;
+    window.setTimeout(() => {
+      assistantDragState.suppressClick = false;
+    }, 0);
+  }
+
+  assistantDragState.active = false;
+  assistantDragState.moved = false;
+  assistantDragState.pointerId = null;
+  assistantDragState.startX = 0;
+  assistantDragState.startY = 0;
 }
 
 function formatAssistantTimestamp(value) {
@@ -5036,6 +5243,10 @@ if (logoutButton) {
 }
 
 assistantFabButton.addEventListener("click", () => {
+  if (assistantDragState.suppressClick) {
+    return;
+  }
+
   toggleAssistantPanel();
 });
 
@@ -5050,6 +5261,13 @@ assistantResetButton.addEventListener("click", async () => {
 assistantStopButton.addEventListener("click", () => {
   stopAssistantMessage();
 });
+
+assistantFabButton.addEventListener("pointerdown", beginAssistantDrag);
+assistantPanelHeader.addEventListener("pointerdown", beginAssistantDrag);
+window.addEventListener("pointermove", moveAssistantDrag);
+window.addEventListener("pointerup", endAssistantDrag);
+window.addEventListener("pointercancel", endAssistantDrag);
+window.addEventListener("resize", syncAssistantPositionOnResize);
 
 assistantInput.addEventListener("input", () => {
   renderAssistant();
@@ -5646,6 +5864,7 @@ taskForm.addEventListener("submit", async (event) => {
 
 updateClock();
 window.setInterval(updateClock, 1000);
+applyAssistantPosition();
 
 setAuthState(false, null, true);
 
