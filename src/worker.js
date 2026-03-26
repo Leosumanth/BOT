@@ -14,7 +14,8 @@ const chainCatalog = [
   { key: "base", label: "Base", chainId: 8453 },
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
   { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
-  { key: "blast", label: "Blast", chainId: 81457 }
+  { key: "blast", label: "Blast", chainId: 81457 },
+  { key: "shape", label: "Shape", chainId: 360 }
 ];
 
 function createId(prefix) {

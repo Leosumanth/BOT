@@ -65,6 +65,7 @@ const rpcSubmitButton = document.getElementById("rpc-submit-button");
 const rpcNameInput = document.getElementById("rpc-name-input");
 const rpcChainInput = document.getElementById("rpc-chain-input");
 const rpcUrlInput = document.getElementById("rpc-url-input");
+const rpcDetectStatus = document.getElementById("rpc-detect-status");
 const rpcList = document.getElementById("rpc-list");
 const settingsForm = document.getElementById("settings-form");
 const profileNameInput = document.getElementById("profile-name-input");
@@ -174,6 +175,9 @@ let abiAutofillTimer = null;
 let abiAutofillRequestId = 0;
 let abiExplorerFetchTimer = null;
 let abiExplorerFetchRequestId = 0;
+let rpcInspectTimer = null;
+let rpcInspectRequestId = 0;
+let rpcAutoSuggestedName = "";
 let activeRpcEditId = null;
 let currentMintStartDetection = {
   enabled: false,
@@ -1467,6 +1471,7 @@ function rpcHealthDetail(node) {
 
 function resetRpcForm(options = {}) {
   activeRpcEditId = null;
+  rpcAutoSuggestedName = "";
   rpcFormTitle.textContent = "Add RPC Node";
   rpcFormSubtitle.textContent = "Create a stronger mesh with multiple fallback nodes.";
   rpcFormBadge.classList.add("hidden");
@@ -1479,6 +1484,10 @@ function resetRpcForm(options = {}) {
 
   if (!options.preserveUrl) {
     rpcUrlInput.value = "";
+  }
+
+  if (rpcDetectStatus) {
+    rpcDetectStatus.textContent = "Paste an RPC URL to auto-detect the chain and suggest a name.";
   }
 }
 
@@ -1496,8 +1505,100 @@ function startRpcEdit(node) {
   rpcNameInput.value = node.name || "";
   rpcChainInput.value = node.chainKey || rpcChainInput.value;
   rpcUrlInput.value = node.url || "";
+  rpcAutoSuggestedName = "";
+  if (rpcDetectStatus) {
+    rpcDetectStatus.textContent = "Editing stored node. Update the URL to re-detect its chain.";
+  }
   rpcNameInput.focus();
   rpcForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function setRpcDetectMessage(message) {
+  if (!rpcDetectStatus) {
+    return;
+  }
+
+  rpcDetectStatus.textContent =
+    message || "Paste an RPC URL to auto-detect the chain and suggest a name.";
+}
+
+function maybeApplySuggestedRpcName(nameSuggestion) {
+  const suggested = String(nameSuggestion || "").trim();
+  if (!suggested) {
+    return false;
+  }
+
+  const currentName = rpcNameInput.value.trim();
+  if (!currentName || currentName === rpcAutoSuggestedName) {
+    rpcNameInput.value = suggested;
+    rpcAutoSuggestedName = suggested;
+    return true;
+  }
+
+  return false;
+}
+
+async function inspectRpcUrl(url, options = {}) {
+  const { immediate = false } = options;
+  const normalizedUrl = String(url || "").trim();
+
+  if (rpcInspectTimer) {
+    clearTimeout(rpcInspectTimer);
+    rpcInspectTimer = null;
+  }
+
+  if (!normalizedUrl) {
+    rpcInspectRequestId += 1;
+    rpcAutoSuggestedName = "";
+    setRpcDetectMessage();
+    return;
+  }
+
+  const runInspection = async () => {
+    const requestId = ++rpcInspectRequestId;
+    setRpcDetectMessage("Inspecting RPC endpoint...");
+
+    try {
+      const payload = await request("/api/rpc-nodes/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: normalizedUrl }),
+        quiet: true
+      });
+
+      if (requestId !== rpcInspectRequestId) {
+        return;
+      }
+
+      if (payload.chainKey) {
+        rpcChainInput.value = payload.chainKey;
+      }
+
+      const appliedName = maybeApplySuggestedRpcName(payload.nameSuggestion);
+      const chainCopy = payload.chainLabel
+        ? `Detected ${payload.chainLabel} (chain ID ${payload.chainId}).`
+        : `Detected chain ID ${payload.chainId}.`;
+      const nameCopy =
+        appliedName && payload.nameSuggestion ? ` Suggested name: ${payload.nameSuggestion}.` : "";
+      setRpcDetectMessage(`${chainCopy}${nameCopy}`);
+    } catch {
+      if (requestId !== rpcInspectRequestId) {
+        return;
+      }
+
+      setRpcDetectMessage("Unable to auto-detect this RPC. You can still choose the chain manually.");
+    }
+  };
+
+  if (immediate) {
+    await runInspection();
+    return;
+  }
+
+  rpcInspectTimer = setTimeout(() => {
+    rpcInspectTimer = null;
+    void runInspection();
+  }, 350);
 }
 
 function renderRpcNodes() {
@@ -2931,6 +3032,20 @@ rpcForm.addEventListener("submit", async (event) => {
 
 rpcCancelButton.addEventListener("click", () => {
   resetRpcForm();
+});
+
+rpcUrlInput.addEventListener("input", () => {
+  void inspectRpcUrl(rpcUrlInput.value);
+});
+
+rpcUrlInput.addEventListener("blur", () => {
+  void inspectRpcUrl(rpcUrlInput.value, { immediate: true });
+});
+
+rpcNameInput.addEventListener("input", () => {
+  if (rpcNameInput.value.trim() !== rpcAutoSuggestedName) {
+    rpcAutoSuggestedName = "";
+  }
 });
 
 settingsForm.addEventListener("submit", async (event) => {

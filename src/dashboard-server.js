@@ -78,7 +78,19 @@ const chainCatalog = [
   { key: "base", label: "Base", chainId: 8453 },
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
   { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
-  { key: "blast", label: "Blast", chainId: 81457 }
+  { key: "blast", label: "Blast", chainId: 81457 },
+  { key: "shape", label: "Shape", chainId: 360 }
+];
+const rpcProviderNamePatterns = [
+  { pattern: /alchemy/i, label: "Alchemy" },
+  { pattern: /infura/i, label: "Infura" },
+  { pattern: /quicknode/i, label: "QuickNode" },
+  { pattern: /llamarpc/i, label: "LlamaRPC" },
+  { pattern: /publicnode/i, label: "PublicNode" },
+  { pattern: /ankr/i, label: "Ankr" },
+  { pattern: /blastapi/i, label: "BlastAPI" },
+  { pattern: /chainstack/i, label: "Chainstack" },
+  { pattern: /drpc/i, label: "dRPC" }
 ];
 
 let database = null;
@@ -97,6 +109,140 @@ let shutdownPromise = null;
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createProviderForRpcUrl(rpcUrl) {
+  return /^wss?:\/\//i.test(String(rpcUrl || ""))
+    ? new ethers.WebSocketProvider(rpcUrl)
+    : new ethers.JsonRpcProvider(rpcUrl);
+}
+
+async function destroyProvider(provider) {
+  if (!provider) {
+    return;
+  }
+
+  try {
+    if (typeof provider.destroy === "function") {
+      await provider.destroy();
+      return;
+    }
+
+    if (provider.websocket && typeof provider.websocket.close === "function") {
+      provider.websocket.close();
+    }
+  } catch {
+    // Ignore provider shutdown errors.
+  }
+}
+
+function findChainByChainId(chainId) {
+  const normalized = Number(chainId);
+  if (!Number.isFinite(normalized)) {
+    return null;
+  }
+
+  return chainCatalog.find((entry) => entry.chainId === normalized) || null;
+}
+
+function titleCaseWords(value) {
+  return String(value || "")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((segment) => segment[0].toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatRpcChainLabel(chain) {
+  if (!chain) {
+    return "";
+  }
+
+  return chain.key === "ethereum" ? "Mainnet ETH" : chain.label;
+}
+
+function inferRpcProviderName(rpcUrl) {
+  let hostname = "";
+  try {
+    hostname = new URL(String(rpcUrl || "")).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+
+  const knownProvider = rpcProviderNamePatterns.find((entry) => entry.pattern.test(hostname));
+  if (knownProvider) {
+    return knownProvider.label;
+  }
+
+  const firstLabel = hostname.split(".")[0] || "";
+  if (
+    !firstLabel ||
+    ["rpc", "mainnet", "sepolia", "testnet", "api", "node", "nodes", "public"].includes(firstLabel)
+  ) {
+    return null;
+  }
+
+  return titleCaseWords(firstLabel);
+}
+
+function buildRpcNameSuggestion(rpcUrl, chain = null, chainId = null) {
+  const providerName = inferRpcProviderName(rpcUrl);
+  const chainLabel = formatRpcChainLabel(chain) || (chainId ? `Chain ${chainId}` : "");
+
+  if (!providerName) {
+    return chainLabel || "Custom RPC";
+  }
+
+  if (!chainLabel || providerName.toLowerCase() === chainLabel.toLowerCase()) {
+    return providerName;
+  }
+
+  return `${providerName} (${chainLabel})`;
+}
+
+async function inspectRpcEndpoint(rpcUrl, timeoutMs = 10000) {
+  const normalizedUrl = String(rpcUrl || "").trim();
+  if (!normalizedUrl) {
+    throw new Error("RPC URL is required");
+  }
+
+  try {
+    new URL(normalizedUrl);
+  } catch {
+    throw new Error("RPC URL is invalid");
+  }
+
+  let provider = null;
+  let timeoutId = null;
+  try {
+    provider = createProviderForRpcUrl(normalizedUrl);
+    const [network, blockNumber] = await Promise.race([
+      Promise.all([provider.getNetwork(), provider.getBlockNumber()]),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("RPC inspection timed out")), timeoutMs);
+      })
+    ]);
+    const chainId = Number(network.chainId);
+    if (!Number.isFinite(chainId)) {
+      throw new Error("RPC did not return a valid chain ID");
+    }
+
+    const chain = findChainByChainId(chainId);
+    return {
+      url: normalizedUrl,
+      chainId,
+      chainKey: chain?.key || "",
+      chainLabel: chain?.label || `Chain ${chainId}`,
+      supportedChain: Boolean(chain),
+      blockNumber,
+      nameSuggestion: buildRpcNameSuggestion(normalizedUrl, chain, chainId)
+    };
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    await destroyProvider(provider);
+  }
 }
 
 function getQueueConfig() {
@@ -4253,15 +4399,28 @@ async function handleRpcSave(request, response) {
       throw new Error("Env RPC nodes cannot be overwritten from the dashboard");
     }
 
+    const inspection = await inspectRpcEndpoint(payload.url);
+    const requestedChainKey = String(payload.chainKey || "").trim();
+    const resolvedChainKey =
+      inspection.chainKey ||
+      (chainCatalog.some((entry) => entry.key === requestedChainKey) ? requestedChainKey : "base_sepolia");
+    const resolvedName =
+      String(payload.name || "").trim() || inspection.nameSuggestion || "Custom RPC";
+
     const rpcNode = {
       id: payload.id || createId("rpc"),
-      name: String(payload.name || "Custom RPC").trim() || "Custom RPC",
-      url: String(payload.url).trim(),
-      chainKey: String(payload.chainKey || "base_sepolia"),
+      name: resolvedName,
+      url: inspection.url,
+      chainKey: resolvedChainKey,
       enabled: payload.enabled !== false,
       group: payload.group || "Custom",
       source: "stored",
-      lastHealth: payload.lastHealth || null
+      lastHealth: {
+        status: "healthy",
+        latencyMs: null,
+        blockNumber: inspection.blockNumber,
+        checkedAt: new Date().toISOString()
+      }
     };
 
     const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
@@ -4275,7 +4434,11 @@ async function handleRpcSave(request, response) {
     appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
     await persistAppState();
     emitState();
-    sendJson(response, 200, { ok: true });
+    sendJson(response, 200, {
+      ok: true,
+      rpcNode,
+      inspection
+    });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
   }
@@ -4283,9 +4446,10 @@ async function handleRpcSave(request, response) {
 
 async function testRpcNodeHealth(rpcNode) {
   const started = Date.now();
+  let provider = null;
 
   try {
-    const provider = new ethers.JsonRpcProvider(rpcNode.url);
+    provider = createProviderForRpcUrl(rpcNode.url);
     const blockNumber = await provider.getBlockNumber();
     const latencyMs = Date.now() - started;
 
@@ -4301,9 +4465,21 @@ async function testRpcNodeHealth(rpcNode) {
       error: formatError(error),
       checkedAt: new Date().toISOString()
     };
+  } finally {
+    await destroyProvider(provider);
   }
 
   return rpcNode.lastHealth;
+}
+
+async function handleRpcInspect(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const inspection = await inspectRpcEndpoint(payload.url);
+    sendJson(response, 200, { ok: true, ...inspection });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
 }
 
 async function handleRpcTest(rpcId, response) {
@@ -4865,6 +5041,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/wallets/import") {
       await handleWalletImport(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/inspect") {
+      await handleRpcInspect(request, response);
       return;
     }
 
