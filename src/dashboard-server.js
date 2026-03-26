@@ -6,6 +6,7 @@ const http = require("http");
 const path = require("path");
 const { ethers } = require("ethers");
 const { AbortRunError, formatError, runMintBot } = require("./bot");
+const { hasClaimAutomation } = require("./claims");
 const mintAutomation = require("./mint-automation");
 const { defaultInputValues, normalizeConfig, normalizeGasStrategyValue } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
@@ -303,6 +304,17 @@ function defaultTaskState() {
     rpcNodeIds: [],
     mintFunction: "",
     mintArgs: "",
+    claimIntegrationEnabled: false,
+    claimProjectKey: "",
+    walletClaimsJson: "",
+    claimFetchEnabled: false,
+    claimFetchUrl: "",
+    claimFetchMethod: "GET",
+    claimFetchHeadersJson: "",
+    claimFetchCookiesJson: "",
+    claimFetchBodyJson: "",
+    claimResponseMappingJson: "",
+    claimResponseRoot: "",
     gasStrategy: "normal",
     gasLimit: "",
     maxFeeGwei: "",
@@ -418,6 +430,26 @@ function sanitizeTaskInput(payload, existingTask = null) {
     rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : base.rpcNodeIds || [],
     mintFunction: String(payload.mintFunction ?? base.mintFunction ?? "").trim(),
     mintArgs: String(payload.mintArgs ?? base.mintArgs ?? "").trim(),
+    claimIntegrationEnabled: Boolean(
+      payload.claimIntegrationEnabled ?? base.claimIntegrationEnabled ?? false
+    ),
+    claimProjectKey: String(payload.claimProjectKey ?? base.claimProjectKey ?? "").trim(),
+    walletClaimsJson: String(payload.walletClaimsJson ?? base.walletClaimsJson ?? "").trim(),
+    claimFetchEnabled: Boolean(payload.claimFetchEnabled ?? base.claimFetchEnabled ?? false),
+    claimFetchUrl: String(payload.claimFetchUrl ?? base.claimFetchUrl ?? "").trim(),
+    claimFetchMethod:
+      String(payload.claimFetchMethod ?? base.claimFetchMethod ?? "GET").trim().toUpperCase() || "GET",
+    claimFetchHeadersJson: String(
+      payload.claimFetchHeadersJson ?? base.claimFetchHeadersJson ?? ""
+    ).trim(),
+    claimFetchCookiesJson: String(
+      payload.claimFetchCookiesJson ?? base.claimFetchCookiesJson ?? ""
+    ).trim(),
+    claimFetchBodyJson: String(payload.claimFetchBodyJson ?? base.claimFetchBodyJson ?? "").trim(),
+    claimResponseMappingJson: String(
+      payload.claimResponseMappingJson ?? base.claimResponseMappingJson ?? ""
+    ).trim(),
+    claimResponseRoot: String(payload.claimResponseRoot ?? base.claimResponseRoot ?? "").trim(),
     gasStrategy: normalizeGasStrategyValue(payload.gasStrategy || base.gasStrategy || "normal"),
     gasLimit: String(payload.gasLimit ?? base.gasLimit ?? "").trim(),
     maxFeeGwei: String(payload.maxFeeGwei ?? base.maxFeeGwei ?? "").trim(),
@@ -771,7 +803,7 @@ function looksLikeQuantityInput(input, inputIndex, totalInputs) {
   return totalInputs === 1 && inputIndex === 0;
 }
 
-function defaultValueForAbiInput(input, inputIndex, totalInputs) {
+function defaultValueForAbiInput(input, inputIndex, totalInputs, quantity = 1) {
   const type = String(input?.type || "");
 
   if (/^address$/i.test(type)) {
@@ -799,20 +831,20 @@ function defaultValueForAbiInput(input, inputIndex, totalInputs) {
   }
 
   if (isIntegerAbiType(type)) {
-    return looksLikeQuantityInput(input, inputIndex, totalInputs) ? 1 : 0;
+    return looksLikeQuantityInput(input, inputIndex, totalInputs) ? quantity : 0;
   }
 
   return null;
 }
 
-function inferMintArgsFromAbi(abiEntries, mintFunction = "") {
+function inferMintArgsFromAbi(abiEntries, mintFunction = "", quantity = 1) {
   const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
   if (!mintEntry?.inputs?.length) {
     return [];
   }
 
   return mintEntry.inputs.map((input, inputIndex) =>
-    defaultValueForAbiInput(input, inputIndex, mintEntry.inputs.length)
+    defaultValueForAbiInput(input, inputIndex, mintEntry.inputs.length, quantity)
   );
 }
 
@@ -1120,6 +1152,7 @@ function isEmptyProofLikeValue(value) {
     return (
       normalized === "" ||
       normalized === "0x" ||
+      /\{\{\s*claim\./i.test(normalized) ||
       /^0x0+$/.test(normalized) ||
       normalized === String(mintAutomation.ZERO_BYTES_32 || "").toLowerCase()
     );
@@ -1129,6 +1162,10 @@ function isEmptyProofLikeValue(value) {
 }
 
 function taskRequiresManualLaunchReview(task, abiEntries = null) {
+  if (hasClaimAutomation(task)) {
+    return false;
+  }
+
   const resolvedAbiEntries =
     abiEntries ||
     (() => {
@@ -1992,7 +2029,10 @@ async function buildPhaseTasksFromTask(task, abiEntries) {
 
     const phaseWaitUntilIso = resolvePhaseWaitUntil(task.waitUntilIso, startTimeInfo.waitUntilIso);
     const readyState = buildPhaseTaskReadyState(task, abiEntries, phaseType, phaseWaitUntilIso);
-    const reviewNeeded = reviewWalletIds.length > 0 || (!provider && Boolean(warning)) || hasProofLikeInput(candidate);
+    const reviewNeeded =
+      reviewWalletIds.length > 0 ||
+      (!provider && Boolean(warning)) ||
+      (hasProofLikeInput(candidate) && !hasClaimAutomation(task));
     const phaseTags = [...new Set([...(task.tags || []), "auto-phase", mintPhaseLabels[phaseType].toLowerCase()])];
     if (reviewNeeded) {
       phaseTags.push("review");
@@ -2053,7 +2093,7 @@ async function buildPhaseTasksFromTask(task, abiEntries) {
       rpcNode?.name ? `Planner RPC: ${rpcNode.name}` : "",
       `Auto launch: ${describeAutoLaunchMode(autoLaunchPlan.mode)}`,
       warning || "",
-      hasProofLikeInput(candidate) || hasSignatureLikeInput(candidate)
+      (hasProofLikeInput(candidate) || hasSignatureLikeInput(candidate)) && !hasClaimAutomation(task)
         ? "Proof or signature inputs may still need manual values."
         : "",
       !argResolution.supported ? `Args need review: ${argResolution.reason}` : ""
@@ -2137,7 +2177,8 @@ async function buildPhaseAutofillPreview({
   abiEntries,
   walletIds = [],
   rpcNodeIds = [],
-  quantityPerWallet = 1
+  quantityPerWallet = 1,
+  claimTaskSettings = {}
 }) {
   const candidates = buildMintPhaseCandidates(abiEntries);
   if (!candidates.length) {
@@ -2216,6 +2257,7 @@ async function buildPhaseAutofillPreview({
         {
           autoArm: true,
           abiJson: JSON.stringify(abiEntries),
+          ...claimTaskSettings,
           mintStartDetectionEnabled: false,
           mintStartDetectionConfig: null,
           readyCheckFunction: "",
@@ -2236,7 +2278,7 @@ async function buildPhaseAutofillPreview({
           mintArgs: JSON.stringify(
             mintAutomation.resolveFunctionArgsFromEntry(candidate, {
               walletAddress: "{{wallet}}",
-              quantity: 1
+              quantity: quantityPerWallet
             }).args || []
           )
         },
@@ -2248,6 +2290,7 @@ async function buildPhaseAutofillPreview({
         {
           autoArm: true,
           abiJson: JSON.stringify(abiEntries),
+          ...claimTaskSettings,
           chainKey,
           contractAddress,
           walletIds: ["preview"],
@@ -2256,7 +2299,7 @@ async function buildPhaseAutofillPreview({
           mintArgs: JSON.stringify(
             mintAutomation.resolveFunctionArgsFromEntry(candidate, {
               walletAddress: "{{wallet}}",
-              quantity: 1
+              quantity: quantityPerWallet
             }).args || []
           ),
           executionTriggerMode: "standard",
@@ -2308,7 +2351,8 @@ async function buildMintAutofill({
   requestedFunction = "",
   walletIds = [],
   rpcNodeIds = [],
-  quantityPerWallet = 1
+  quantityPerWallet = 1,
+  claimTaskSettings = {}
 }) {
   const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
   const warnings = [];
@@ -2333,12 +2377,17 @@ async function buildMintAutofill({
     abiEntries,
     walletIds,
     rpcNodeIds,
-    quantityPerWallet
+    quantityPerWallet,
+    claimTaskSettings
   });
 
   return {
     mintFunction: resolvedMintFunction.mintFunction,
-    mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
+    mintArgs: inferMintArgsFromAbi(
+      abiEntries,
+      resolvedMintFunction.mintFunction,
+      Math.max(1, Number(quantityPerWallet || 1))
+    ),
     quantityPerWallet: Math.max(1, Number(quantityPerWallet || 1)),
     priceEth: priceResolution.priceEth || "0",
     platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
@@ -3359,7 +3408,20 @@ async function buildConfigForTask(task) {
     ABI_JSON: task.abiJson,
     MINT_FUNCTION: task.mintFunction,
     MINT_ARGS: task.mintArgs,
+    QUANTITY_PER_WALLET: task.quantityPerWallet,
     MINT_VALUE_ETH: task.priceEth,
+    CHAIN_KEY: task.chainKey,
+    CLAIM_INTEGRATION_ENABLED: task.claimIntegrationEnabled,
+    CLAIM_PROJECT_KEY: task.claimProjectKey,
+    WALLET_CLAIMS_JSON: task.walletClaimsJson,
+    CLAIM_FETCH_ENABLED: task.claimFetchEnabled,
+    CLAIM_FETCH_URL: task.claimFetchUrl,
+    CLAIM_FETCH_METHOD: task.claimFetchMethod,
+    CLAIM_FETCH_HEADERS_JSON: task.claimFetchHeadersJson,
+    CLAIM_FETCH_COOKIES_JSON: task.claimFetchCookiesJson,
+    CLAIM_FETCH_BODY_JSON: task.claimFetchBodyJson,
+    CLAIM_RESPONSE_MAPPING_JSON: task.claimResponseMappingJson,
+    CLAIM_RESPONSE_ROOT: task.claimResponseRoot,
     GAS_STRATEGY: task.gasStrategy,
     GAS_LIMIT: task.gasLimit,
     MAX_FEE_GWEI: task.maxFeeGwei,
@@ -4350,7 +4412,20 @@ async function handleContractAutofill(request, response) {
       requestedFunction: payload.mintFunction,
       walletIds: Array.isArray(payload.walletIds) ? payload.walletIds : [],
       rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : [],
-      quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || 1))
+      quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || 1)),
+      claimTaskSettings: {
+        claimIntegrationEnabled: Boolean(payload.claimIntegrationEnabled),
+        claimProjectKey: String(payload.claimProjectKey || "").trim(),
+        walletClaimsJson: String(payload.walletClaimsJson || "").trim(),
+        claimFetchEnabled: Boolean(payload.claimFetchEnabled),
+        claimFetchUrl: String(payload.claimFetchUrl || "").trim(),
+        claimFetchMethod: String(payload.claimFetchMethod || "GET").trim().toUpperCase(),
+        claimFetchHeadersJson: String(payload.claimFetchHeadersJson || "").trim(),
+        claimFetchCookiesJson: String(payload.claimFetchCookiesJson || "").trim(),
+        claimFetchBodyJson: String(payload.claimFetchBodyJson || "").trim(),
+        claimResponseMappingJson: String(payload.claimResponseMappingJson || "").trim(),
+        claimResponseRoot: String(payload.claimResponseRoot || "").trim()
+      }
     });
 
     sendJson(response, 200, {

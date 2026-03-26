@@ -1,6 +1,14 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const {
+  applyTemplatePlaceholders,
+  buildCookieHeader,
+  cloneValue,
+  extractMappedClaimRecord,
+  mergeClaimRecords,
+  resolveWalletClaimRecord
+} = require("./claims");
 const mintAutomation = require("./mint-automation");
 
 class AbortRunError extends Error {
@@ -121,25 +129,269 @@ async function waitUntil(isoString, pollIntervalMs, signal, logger) {
   }
 }
 
+function buildClaimTemplateContext(config, session, claimRecord = null) {
+  return {
+    wallet: session.walletAddress,
+    walletAddress: session.walletAddress,
+    walletChecksum: session.walletAddress,
+    walletIndex: session.walletIndex,
+    index: session.walletIndex,
+    timestamp: Date.now(),
+    contract: config.contractAddress,
+    contractAddress: config.contractAddress,
+    chainKey: config.chainKey || "",
+    quantity: config.quantityPerWallet || 1,
+    projectKey: config.claimProjectKey || "",
+    claim: claimRecord || {},
+    config: {
+      chainKey: config.chainKey || "",
+      contractAddress: config.contractAddress,
+      quantityPerWallet: config.quantityPerWallet || 1
+    }
+  };
+}
+
 function applyPlaceholders(value, context) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => applyPlaceholders(entry, context));
+  return applyTemplatePlaceholders(value, context);
+}
+
+function claimRecordTargetsCandidate(claimRecord, candidate) {
+  if (!claimRecord || !candidate) {
+    return true;
   }
 
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, applyPlaceholders(entry, context)])
-    );
+  const requestedFunction = String(
+    claimRecord.mintFunction || claimRecord.functionName || claimRecord.function || ""
+  ).trim();
+  const requestedSignature = String(
+    claimRecord.mintSignature || claimRecord.functionSignature || claimRecord.methodSignature || ""
+  ).trim();
+
+  if (!requestedFunction && !requestedSignature) {
+    return true;
   }
 
-  if (typeof value !== "string") {
+  return (
+    requestedFunction.toLowerCase() === String(candidate.name || "").toLowerCase() ||
+    requestedSignature.toLowerCase() === String(candidate.signature || "").toLowerCase()
+  );
+}
+
+function parseBigIntLike(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "bigint") {
     return value;
   }
 
-  return value
-    .replaceAll("{{wallet}}", context.walletAddress)
-    .replaceAll("{{index}}", String(context.walletIndex))
-    .replaceAll("{{timestamp}}", String(context.timestamp));
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return BigInt(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function parseEthLike(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return ethers.parseEther(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function resolveClaimMintValue(claimRecord, quantity = 1n) {
+  if (!claimRecord || typeof claimRecord !== "object") {
+    return null;
+  }
+
+  const totalWeiKeys = ["mintValueWei", "valueWei", "totalValueWei"];
+  for (const key of totalWeiKeys) {
+    const parsed = parseBigIntLike(claimRecord[key]);
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+
+  const totalEthKeys = ["mintValueEth", "valueEth", "totalValueEth"];
+  for (const key of totalEthKeys) {
+    const parsed = parseEthLike(claimRecord[key]);
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+
+  const unitWeiKeys = ["priceWei", "unitPriceWei", "pricePerTokenWei"];
+  for (const key of unitWeiKeys) {
+    const parsed = parseBigIntLike(claimRecord[key]);
+    if (parsed != null) {
+      return parsed * quantity;
+    }
+  }
+
+  const unitEthKeys = ["priceEth", "price", "unitPriceEth", "pricePerTokenEth"];
+  for (const key of unitEthKeys) {
+    const parsed = parseEthLike(claimRecord[key]);
+    if (parsed != null) {
+      return parsed * quantity;
+    }
+  }
+
+  return null;
+}
+
+function normalizeHeadersObject(headers) {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "")
+      .map(([key, value]) => [key, String(value)])
+  );
+}
+
+function buildClaimFetchTimeoutMs(config) {
+  const configuredTimeoutMs = Number(config?.txTimeoutMs);
+  if (Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0) {
+    return Math.max(2000, configuredTimeoutMs);
+  }
+
+  return 15000;
+}
+
+function createTimedAbortController(signal, timeoutMs) {
+  const controller = new AbortController();
+  const cleanupFns = [];
+  let timedOut = false;
+
+  if (signal?.aborted) {
+    controller.abort();
+  } else if (signal) {
+    const onAbort = () => controller.abort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    cleanupFns.push(() => signal.removeEventListener("abort", onAbort));
+  }
+
+  if (timeoutMs > 0) {
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    cleanupFns.push(() => clearTimeout(timeoutId));
+  }
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup() {
+      cleanupFns.splice(0).forEach((cleanup) => cleanup());
+    }
+  };
+}
+
+async function fetchWalletClaimRecord(config, session, context, baseClaimRecord = null) {
+  if (!config.claimFetchEnabled || !config.claimFetchUrl) {
+    return null;
+  }
+
+  if (typeof fetch !== "function") {
+    throw new Error("Global fetch is unavailable for claim API requests");
+  }
+
+  const { signal, logger } = context;
+  const templateContext = buildClaimTemplateContext(config, session, baseClaimRecord);
+  const fetchUrl = applyPlaceholders(config.claimFetchUrl, templateContext);
+  const headers = normalizeHeadersObject(applyPlaceholders(config.claimFetchHeaders || {}, templateContext));
+  const cookies = applyPlaceholders(
+    config.claimFetchCookies !== undefined ? config.claimFetchCookies : {},
+    templateContext
+  );
+  const cookieHeader = buildCookieHeader(cookies);
+  if (cookieHeader && !headers.Cookie && !headers.cookie) {
+    headers.Cookie = cookieHeader;
+  }
+
+  const method = String(config.claimFetchMethod || "GET").toUpperCase();
+  const rawBody =
+    config.claimFetchBodyTemplate === undefined
+      ? undefined
+      : applyPlaceholders(config.claimFetchBodyTemplate, templateContext);
+  const requestOptions = {
+    method,
+    headers
+  };
+
+  if (!["GET", "HEAD"].includes(method) && rawBody !== undefined) {
+    if (typeof rawBody === "string") {
+      requestOptions.body = rawBody;
+    } else {
+      if (!requestOptions.headers["Content-Type"] && !requestOptions.headers["content-type"]) {
+        requestOptions.headers["Content-Type"] = "application/json";
+      }
+      requestOptions.body = JSON.stringify(rawBody);
+    }
+  }
+
+  const claimAbort = createTimedAbortController(signal, buildClaimFetchTimeoutMs(config));
+  requestOptions.signal = claimAbort.signal;
+
+  try {
+    logger.info(`[wallet ${session.walletIndex}] Fetching wallet claim payload from ${fetchUrl}`);
+    const response = await fetch(fetchUrl, requestOptions);
+    if (!response.ok) {
+      throw new Error(`Claim API returned ${response.status} ${response.statusText}`);
+    }
+
+    const rawText = await response.text();
+    let parsedPayload;
+    try {
+      parsedPayload = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      parsedPayload = rawText;
+    }
+
+    const claimRecord = extractMappedClaimRecord(
+      parsedPayload,
+      config.claimResponseMapping,
+      config.claimResponseRoot
+    );
+    return claimRecord;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      if (signal?.aborted) {
+        throw new AbortRunError();
+      }
+
+      if (claimAbort.timedOut()) {
+        throw new Error(`Claim API request timed out after ${buildClaimFetchTimeoutMs(config)}ms`);
+      }
+    }
+
+    throw error;
+  } finally {
+    claimAbort.cleanup();
+  }
 }
 
 function buildBaseOverrides(config) {
@@ -198,8 +450,11 @@ function getEffectivePriorityBoostPercent(config) {
   return profile.priorityBoostPercent + (config.priorityBoostPercent || 0);
 }
 
-async function buildRuntimeOverrides(config, provider) {
+async function buildRuntimeOverrides(config, provider, options = {}) {
   const overrides = buildBaseOverrides(config);
+  if (options.mintValueOverride != null) {
+    overrides.value = options.mintValueOverride;
+  }
   if (config.autoMintMode) {
     return {
       ...overrides,
@@ -377,39 +632,65 @@ function buildPlanFailureSummary(failures) {
     .join(" | ");
 }
 
-function buildAutomatedMintArgs(config, session, candidate) {
-  if (
-    config.mintArgsProvided &&
-    config.mintFunctionProvided &&
-    String(candidate.name || "").toLowerCase() === String(config.mintFunction || "").toLowerCase()
-  ) {
+async function buildAutomatedMintArgs(config, session, candidate, context) {
+  const claimRecord = await session.ensureClaimRecord(context);
+  if (claimRecord && !claimRecordTargetsCandidate(claimRecord, candidate)) {
     return {
-      supported: true,
-      args: applyPlaceholders(config.mintArgsTemplate, {
-        walletAddress: session.walletAddress,
-        walletIndex: session.walletIndex,
-        timestamp: Date.now()
-      }),
-      source: "config"
+      supported: false,
+      reason: "claim payload targets a different mint function",
+      source: "claim",
+      claimRecord
     };
   }
 
+  const templateContext = buildClaimTemplateContext(config, session, claimRecord);
+  if (Array.isArray(claimRecord?.mintArgs)) {
+    if (
+      config.mintFunctionProvided &&
+      String(candidate.name || "").toLowerCase() !== String(config.mintFunction || "").toLowerCase()
+    ) {
+      return {
+        supported: false,
+        reason: "claim mint args are reserved for the configured mint function",
+        source: "claim",
+        claimRecord
+      };
+    }
+
+    return {
+      supported: true,
+      args: applyPlaceholders(claimRecord.mintArgs, templateContext),
+      source: "claim",
+      claimRecord
+    };
+  }
+
+  const fallbackArgs =
+    config.mintArgsProvided &&
+    config.mintFunctionProvided &&
+    String(candidate.name || "").toLowerCase() === String(config.mintFunction || "").toLowerCase()
+      ? config.mintArgsTemplate
+      : null;
   const argResolution = mintAutomation.resolveFunctionArgsFromEntry(candidate, {
     walletAddress: session.walletAddress,
-    quantity: 1
+    quantity: config.quantityPerWallet || 1,
+    fallbackArgs,
+    claimRecord
   });
   if (!argResolution.supported) {
     return {
       supported: false,
       reason: argResolution.reason,
-      source: "auto"
+      source: fallbackArgs ? "config" : "auto",
+      claimRecord
     };
   }
 
   return {
     supported: true,
-    args: argResolution.args,
-    source: "auto"
+    args: applyPlaceholders(argResolution.args, templateContext),
+    source: claimRecord ? `${fallbackArgs ? "config" : "auto"}+claim` : fallbackArgs ? "config" : "auto",
+    claimRecord
   };
 }
 
@@ -482,11 +763,20 @@ async function simulateMintMethod(method, args, overrides) {
   }
 }
 
-async function discoverAutomatedMintValue({ config, session, candidate, method, args }) {
+async function discoverAutomatedMintValue({ config, session, candidate, method, args, claimRecord }) {
   if (!candidate.payable) {
     return {
       value: 0n,
       source: "nonpayable",
+      lastError: null
+    };
+  }
+
+  const claimValue = resolveClaimMintValue(claimRecord, extractCandidateQuantity(candidate, args));
+  if (claimValue != null) {
+    return {
+      value: claimValue,
+      source: "claim",
       lastError: null
     };
   }
@@ -548,7 +838,7 @@ async function buildAutomatedMintPlan(config, session, context, attempt) {
   for (const candidate of session.automationAnalysis.candidates) {
     throwIfAborted(signal);
     const method = getContractMethod(session.contract, candidate.name);
-    const argResolution = buildAutomatedMintArgs(config, session, candidate);
+    const argResolution = await buildAutomatedMintArgs(config, session, candidate, context);
 
     if (!argResolution.supported) {
       failures.push({
@@ -563,7 +853,8 @@ async function buildAutomatedMintPlan(config, session, context, attempt) {
       session,
       candidate,
       method,
-      args: argResolution.args
+      args: argResolution.args,
+      claimRecord: argResolution.claimRecord || null
     });
     const feeOverrides = await buildCompetitiveFeeOverrides(session.provider, config, {
       attempt
@@ -633,6 +924,63 @@ async function buildAutomatedMintPlan(config, session, context, attempt) {
       attemptedFunctions: session.automationAnalysis.candidates.map((candidate) => candidate.signature)
     }
   );
+}
+
+async function resolveManualMintArgs(config, session, context) {
+  const claimRecord = await session.ensureClaimRecord(context);
+  const templateContext = buildClaimTemplateContext(config, session, claimRecord);
+  const manualCandidate = session.manualMintEntry
+    ? {
+        name: session.manualMintEntry.name,
+        signature: mintAutomation.formatFunctionSignature(session.manualMintEntry)
+      }
+    : null;
+
+  if (claimRecord && manualCandidate && !claimRecordTargetsCandidate(claimRecord, manualCandidate)) {
+    throw new Error("Claim payload targets a different mint function than the configured manual function");
+  }
+
+  if (Array.isArray(claimRecord?.mintArgs)) {
+    session.mintArgs = applyPlaceholders(claimRecord.mintArgs, templateContext);
+    return session.mintArgs;
+  }
+
+  if (!session.manualMintEntry) {
+    session.mintArgs = applyPlaceholders(config.mintArgsTemplate, templateContext);
+    return session.mintArgs;
+  }
+
+  const argResolution = mintAutomation.resolveFunctionArgsFromEntry(session.manualMintEntry, {
+    walletAddress: session.walletAddress,
+    quantity: config.quantityPerWallet || 1,
+    fallbackArgs: config.mintArgsTemplate,
+    claimRecord
+  });
+  if (!argResolution.supported) {
+    throw new Error(`Unable to resolve mint args: ${argResolution.reason}`);
+  }
+
+  session.mintArgs = applyPlaceholders(argResolution.args, templateContext);
+  return session.mintArgs;
+}
+
+async function resolveManualMintValue(config, session, args, context) {
+  const claimRecord = await session.ensureClaimRecord(context);
+  const claimValue = resolveClaimMintValue(
+    claimRecord,
+    extractCandidateQuantity(session.manualMintEntry, args)
+  );
+  if (claimValue != null) {
+    return {
+      value: claimValue,
+      source: "claim"
+    };
+  }
+
+  return {
+    value: ethers.parseEther(config.mintValueEth),
+    source: config.mintValueProvided ? "config" : "default"
+  };
 }
 
 function buildGasSettingsSnapshot(source = {}) {
@@ -2458,13 +2806,10 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
         )
       : null;
     const mintMethod = config.autoMintMode ? null : getContractMethod(contract, config.mintFunction);
-    const mintArgs = config.autoMintMode
-      ? []
-      : applyPlaceholders(config.mintArgsTemplate, {
-          walletAddress,
-          walletIndex,
-          timestamp: Date.now()
-        });
+    const manualMintEntry = config.autoMintMode
+      ? null
+      : mintAutomation.findAbiFunctionEntry(config.abi, config.mintFunction);
+    const mintArgs = config.autoMintMode ? [] : null;
     let nextPlannedNonce =
       (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
 
@@ -2497,8 +2842,16 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
       }
     } else {
       logger.info(`[wallet ${walletIndex}] Function: ${config.mintFunction}`);
-      logger.info(`[wallet ${walletIndex}] Args: ${JSON.stringify(mintArgs)}`);
+      logger.info(`[wallet ${walletIndex}] Args template: ${JSON.stringify(config.mintArgsTemplate)}`);
       logger.info(`[wallet ${walletIndex}] Value: ${config.mintValueEth} ETH`);
+    }
+
+    if (config.claimIntegrationEnabled) {
+      logger.info(
+        `[wallet ${walletIndex}] Claims adapter: ${config.claimProjectKey || "custom"}${
+          config.claimFetchEnabled ? " with official API fetch" : ""
+        }`
+      );
     }
 
     logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
@@ -2521,6 +2874,7 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
       automationAnalysis,
       cachedMintPrice: undefined,
       mintMethod,
+      manualMintEntry,
       mintArgs,
       getPlannedNonce() {
         return nextPlannedNonce;
@@ -2530,8 +2884,36 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
           nextPlannedNonce = tx.nonce + 1;
         }
       },
+      claimRecord: undefined,
+      claimRecordSource: null,
       preparedMint: null,
       lastMintPlan: null,
+      async ensureClaimRecord(runtimeContext = context) {
+        if (this.claimRecord !== undefined) {
+          return this.claimRecord;
+        }
+
+        if (!config.claimIntegrationEnabled) {
+          this.claimRecord = null;
+          this.claimRecordSource = null;
+          return this.claimRecord;
+        }
+
+        const manualClaim = resolveWalletClaimRecord(config.walletClaims, {
+          walletAddress,
+          walletIndex
+        });
+        const fetchedClaim = await fetchWalletClaimRecord(config, this, runtimeContext, manualClaim);
+        this.claimRecord = mergeClaimRecords(manualClaim, fetchedClaim) || null;
+        this.claimRecordSource =
+          manualClaim && fetchedClaim ? "manual+fetch" : fetchedClaim ? "fetch" : manualClaim ? "manual" : null;
+
+        if (this.claimRecordSource) {
+          logger.info(`[wallet ${walletIndex}] Claim payload ready via ${this.claimRecordSource}`);
+        }
+
+        return this.claimRecord;
+      },
       async refreshPlannedNonce() {
         const pendingNonce =
           (await provider.getTransactionCount(walletAddress, "pending")) + config.nonceOffset;
@@ -2556,11 +2938,15 @@ async function tryPreparePresignedMint(config, session, context) {
   }
 
   const { signal, logger } = context;
-  const { provider, mintMethod, mintArgs, wallet, walletIndex } = session;
+  const { provider, mintMethod, wallet, walletIndex } = session;
   throwIfAborted(signal);
 
   try {
-    const overrides = await buildRuntimeOverrides(config, provider);
+    const mintArgs = await resolveManualMintArgs(config, session, context);
+    const mintValue = await resolveManualMintValue(config, session, mintArgs, context);
+    const overrides = await buildRuntimeOverrides(config, provider, {
+      mintValueOverride: mintValue.value
+    });
 
     if (config.simulateTransaction) {
       await mintMethod.staticCall(...mintArgs, overrides);
@@ -2581,7 +2967,9 @@ async function tryPreparePresignedMint(config, session, context) {
       logger
     });
 
-    logger.info(`[wallet ${walletIndex}] Mint broadcast armed with a pre-signed transaction`);
+    logger.info(
+      `[wallet ${walletIndex}] Mint broadcast armed with a pre-signed transaction using ${mintValue.source}`
+    );
     return preparedMint;
   } catch (error) {
     throw attachErrorContext(
@@ -2641,8 +3029,7 @@ async function closeWalletSessions(sessions) {
 
 async function executeWalletSession(config, session, context) {
   const { signal, logger } = context;
-  const { provider, rpcUrl, wallet, walletAddress, walletIndex, contract, mintMethod, mintArgs } =
-    session;
+  const { provider, rpcUrl, wallet, walletAddress, walletIndex, contract, mintMethod } = session;
 
   try {
     await maybeWaitJitter(config.startJitterMs, walletIndex, signal, logger);
@@ -2781,11 +3168,15 @@ async function executeWalletSession(config, session, context) {
             });
           }
         } else if (config.dryRun) {
-          const overrides = await buildRuntimeOverrides(config, provider);
+          const manualMintArgs = await resolveManualMintArgs(config, session, context);
+          const manualMintValue = await resolveManualMintValue(config, session, manualMintArgs, context);
+          const overrides = await buildRuntimeOverrides(config, provider, {
+            mintValueOverride: manualMintValue.value
+          });
 
           if (config.simulateTransaction) {
-            await mintMethod.staticCall(...mintArgs, overrides);
-            const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
+            await mintMethod.staticCall(...manualMintArgs, overrides);
+            const estimatedGas = await mintMethod.estimateGas(...manualMintArgs, overrides);
             logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
           }
 
@@ -3121,6 +3512,13 @@ async function runMintBot(config, hooks = {}) {
     logger.info(`Trigger block: ${config.triggerBlockNumber}`);
   }
   logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
+  logger.info(
+    `Claims adapter: ${
+      config.claimIntegrationEnabled
+        ? `${config.claimProjectKey || "custom"}${config.claimFetchEnabled ? " with API fetch" : ""}`
+        : "disabled"
+    }`
+  );
   logger.info(
     `Pre-signed launch: ${
       config.preSignTransactions

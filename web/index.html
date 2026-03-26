@@ -534,6 +534,82 @@
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <div>
+                <h4>Claims and Adapter</h4>
+                <p class="helper-copy">Feed per-wallet proofs, vouchers, GTD payloads, cookies, tokens, and custom args into the mint flow.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label class="toggle-stack">
+                <span>Claims Adapter</span>
+                <label class="switch-row">
+                  <input id="task-claim-integration-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+              <label>
+                <span>Project Key</span>
+                <input id="task-claim-project-key-input" type="text" placeholder="azuki-gtd" />
+              </label>
+              <label class="toggle-stack">
+                <span>Fetch Claim API</span>
+                <label class="switch-row">
+                  <input id="task-claim-fetch-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Claim API URL</span>
+                <input id="task-claim-fetch-url-input" type="text" placeholder="https://mint.project.xyz/api/claim/{{wallet}}" />
+              </label>
+              <label>
+                <span>Claim API Method</span>
+                <select id="task-claim-fetch-method-input">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                  <option value="DELETE">DELETE</option>
+                </select>
+              </label>
+              <label>
+                <span>Response Root</span>
+                <input id="task-claim-response-root-input" type="text" placeholder="data.claim" />
+              </label>
+            </div>
+            <div class="form-grid single">
+              <label>
+                <span>Wallet Claims JSON</span>
+                <textarea id="task-wallet-claims-input" rows="4" placeholder='{"0xabc...":{"proof":["0x..."],"signature":"0x...","mintArgs":[1,["0x..."],"0x..."]}}'></textarea>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Claim Headers JSON</span>
+                <textarea id="task-claim-fetch-headers-input" rows="3" placeholder='{"Authorization":"Bearer {{claim.authToken}}"}'></textarea>
+              </label>
+              <label>
+                <span>Claim Cookies JSON</span>
+                <textarea id="task-claim-fetch-cookies-input" rows="3" placeholder='{"session":"{{claim.sessionCookie}}"}'></textarea>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Claim Body JSON</span>
+                <textarea id="task-claim-fetch-body-input" rows="4" placeholder='{"wallet":"{{wallet}}","contract":"{{contract}}"}'></textarea>
+              </label>
+              <label>
+                <span>Response Mapping JSON</span>
+                <textarea id="task-claim-response-mapping-input" rows="4" placeholder='{"proof":"proof","signature":"signature","mintArgs":"mintArgs","priceEth":"price"}'></textarea>
+              </label>
+            </div>
+            <p class="helper-copy">Use `{{wallet}}`, `{{index}}`, `{{contract}}`, `{{quantity}}`, and `{{claim.someKey}}` placeholders in the API request block.</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
                 <h4>Phase Planner</h4>
                 <p class="helper-copy">Best-effort GTD, allowlist, and public task generation from the same ABI and wallets.</p>
               </div>

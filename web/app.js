@@ -104,6 +104,17 @@ const fetchAbiButton = document.getElementById("fetch-abi-button");
 const taskPlatformInput = document.getElementById("task-platform-input");
 const taskFunctionInput = document.getElementById("task-function-input");
 const taskArgsInput = document.getElementById("task-args-input");
+const taskClaimIntegrationToggle = document.getElementById("task-claim-integration-toggle");
+const taskClaimProjectKeyInput = document.getElementById("task-claim-project-key-input");
+const taskClaimFetchToggle = document.getElementById("task-claim-fetch-toggle");
+const taskClaimFetchUrlInput = document.getElementById("task-claim-fetch-url-input");
+const taskClaimFetchMethodInput = document.getElementById("task-claim-fetch-method-input");
+const taskClaimResponseRootInput = document.getElementById("task-claim-response-root-input");
+const taskWalletClaimsInput = document.getElementById("task-wallet-claims-input");
+const taskClaimFetchHeadersInput = document.getElementById("task-claim-fetch-headers-input");
+const taskClaimFetchCookiesInput = document.getElementById("task-claim-fetch-cookies-input");
+const taskClaimFetchBodyInput = document.getElementById("task-claim-fetch-body-input");
+const taskClaimResponseMappingInput = document.getElementById("task-claim-response-mapping-input");
 const taskAutoPhaseToggle = document.getElementById("task-auto-phase-toggle");
 const taskPhasePreview = document.getElementById("task-phase-preview");
 const walletGroupTabs = document.getElementById("wallet-group-tabs");
@@ -2021,7 +2032,7 @@ function looksLikeQuantityInput(input, inputIndex, totalInputs) {
   return totalInputs === 1 && inputIndex === 0;
 }
 
-function defaultValueForAbiInput(input, inputIndex, totalInputs) {
+function defaultValueForAbiInput(input, inputIndex, totalInputs, quantity = 1) {
   const type = String(input?.type || "");
 
   if (/^address$/i.test(type)) {
@@ -2049,20 +2060,20 @@ function defaultValueForAbiInput(input, inputIndex, totalInputs) {
   }
 
   if (isIntegerAbiType(type)) {
-    return looksLikeQuantityInput(input, inputIndex, totalInputs) ? 1 : 0;
+    return looksLikeQuantityInput(input, inputIndex, totalInputs) ? quantity : 0;
   }
 
   return null;
 }
 
-function inferMintArgsFromAbi(abiEntries, mintFunction = "") {
+function inferMintArgsFromAbi(abiEntries, mintFunction = "", quantity = 1) {
   const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
   if (!mintEntry?.inputs?.length) {
     return [];
   }
 
   return mintEntry.inputs.map((input, inputIndex) =>
-    defaultValueForAbiInput(input, inputIndex, mintEntry.inputs.length)
+    defaultValueForAbiInput(input, inputIndex, mintEntry.inputs.length, quantity)
   );
 }
 
@@ -2074,7 +2085,11 @@ function buildLocalMintAutofill(abiEntries, requestedFunction = "", quantityPerW
       : Math.max(1, Number(quantityPerWallet || 1));
   return {
     mintFunction: resolvedMintFunction.mintFunction,
-    mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
+    mintArgs: inferMintArgsFromAbi(
+      abiEntries,
+      resolvedMintFunction.mintFunction,
+      normalizedQuantity ?? 1
+    ),
     quantityPerWallet: normalizedQuantity,
     platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
     detectedMintFunctions: resolvedMintFunction.detectedFunctions
@@ -2335,7 +2350,8 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
         mintFunction: taskFunctionInput.value,
         walletIds: selectedWalletIds(),
         rpcNodeIds: selectedRpcIds(),
-        quantityPerWallet: Number(taskQuantityInput.value || 1)
+        quantityPerWallet: Number(taskQuantityInput.value || 1),
+        ...buildClaimTaskSettings()
       })
     });
 
@@ -2525,6 +2541,17 @@ function openTaskModal(task = null) {
   taskPlatformInput.value = task?.platform || "Generic EVM (auto-detect)";
   taskFunctionInput.value = task?.mintFunction || "";
   taskArgsInput.value = task?.mintArgs || "";
+  taskClaimIntegrationToggle.checked = Boolean(task?.claimIntegrationEnabled);
+  taskClaimProjectKeyInput.value = task?.claimProjectKey || "";
+  taskClaimFetchToggle.checked = Boolean(task?.claimFetchEnabled);
+  taskClaimFetchUrlInput.value = task?.claimFetchUrl || "";
+  taskClaimFetchMethodInput.value = task?.claimFetchMethod || "GET";
+  taskClaimResponseRootInput.value = task?.claimResponseRoot || "";
+  taskWalletClaimsInput.value = task?.walletClaimsJson || "";
+  taskClaimFetchHeadersInput.value = task?.claimFetchHeadersJson || "";
+  taskClaimFetchCookiesInput.value = task?.claimFetchCookiesJson || "";
+  taskClaimFetchBodyInput.value = task?.claimFetchBodyJson || "";
+  taskClaimResponseMappingInput.value = task?.claimResponseMappingJson || "";
   taskAutoPhaseToggle.checked = !task;
   taskAutoPhaseToggle.disabled = Boolean(task);
   taskAutoArmToggle.checked = task?.autoArm ?? true;
@@ -2607,6 +2634,22 @@ function closeTaskModal() {
   taskModal.classList.add("hidden");
 }
 
+function buildClaimTaskSettings() {
+  return {
+    claimIntegrationEnabled: taskClaimIntegrationToggle.checked,
+    claimProjectKey: taskClaimProjectKeyInput.value,
+    walletClaimsJson: taskWalletClaimsInput.value,
+    claimFetchEnabled: taskClaimFetchToggle.checked,
+    claimFetchUrl: taskClaimFetchUrlInput.value,
+    claimFetchMethod: taskClaimFetchMethodInput.value,
+    claimFetchHeadersJson: taskClaimFetchHeadersInput.value,
+    claimFetchCookiesJson: taskClaimFetchCookiesInput.value,
+    claimFetchBodyJson: taskClaimFetchBodyInput.value,
+    claimResponseMappingJson: taskClaimResponseMappingInput.value,
+    claimResponseRoot: taskClaimResponseRootInput.value
+  };
+}
+
 function buildTaskPayload() {
   return {
     id: taskIdInput.value || undefined,
@@ -2624,6 +2667,7 @@ function buildTaskPayload() {
     rpcNodeIds: selectedRpcIds(),
     mintFunction: taskFunctionInput.value,
     mintArgs: taskArgsInput.value,
+    ...buildClaimTaskSettings(),
     autoGeneratePhaseTasks: !taskIdInput.value && taskAutoPhaseToggle.checked,
     autoArm: taskAutoArmToggle.checked,
     gasStrategy: taskGasStrategyInput.value,
@@ -3099,6 +3143,27 @@ taskFunctionInput.addEventListener("change", () => {
 
 taskQuantityInput.addEventListener("change", () => {
   refreshPhasePreviewFromCurrentInput("Quantity updated");
+});
+
+[taskClaimIntegrationToggle, taskClaimFetchToggle, taskClaimFetchMethodInput].forEach((element) => {
+  element.addEventListener("change", () => {
+    refreshPhasePreviewFromCurrentInput("Claims updated");
+  });
+});
+
+[
+  taskClaimProjectKeyInput,
+  taskClaimFetchUrlInput,
+  taskClaimResponseRootInput,
+  taskWalletClaimsInput,
+  taskClaimFetchHeadersInput,
+  taskClaimFetchCookiesInput,
+  taskClaimFetchBodyInput,
+  taskClaimResponseMappingInput
+].forEach((element) => {
+  element.addEventListener("change", () => {
+    refreshPhasePreviewFromCurrentInput("Claims updated");
+  });
 });
 
 taskAbiInput.addEventListener("input", () => {

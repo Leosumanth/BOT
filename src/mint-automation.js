@@ -187,6 +187,128 @@ function zeroBytes(length) {
   return `0x${"00".repeat(length)}`;
 }
 
+function findValueByNormalizedKey(source, normalizedKey) {
+  if (!source || typeof source !== "object" || Array.isArray(source) || !normalizedKey) {
+    return undefined;
+  }
+
+  for (const [key, value] of Object.entries(source)) {
+    if (normalizeAbiName(key) === normalizedKey) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveClaimOverrideForInput(input, inputIndex, totalInputs, options = {}) {
+  const inputName = inputLabel(input);
+  const normalizedInputName = normalizeAbiName(inputName);
+  const claimRecord =
+    options.claimRecord && typeof options.claimRecord === "object" && !Array.isArray(options.claimRecord)
+      ? options.claimRecord
+      : null;
+  const argOverrides =
+    claimRecord?.argOverrides &&
+    typeof claimRecord.argOverrides === "object" &&
+    !Array.isArray(claimRecord.argOverrides)
+      ? claimRecord.argOverrides
+      : null;
+
+  const sources = [
+    options.inputValues && typeof options.inputValues === "object" ? options.inputValues : null,
+    argOverrides,
+    claimRecord
+  ].filter(Boolean);
+
+  const candidateValues = [];
+  for (const source of sources) {
+    if (Array.isArray(source) && source[inputIndex] !== undefined) {
+      candidateValues.push(source[inputIndex]);
+    }
+
+    if (source[String(inputIndex)] !== undefined) {
+      candidateValues.push(source[String(inputIndex)]);
+    }
+
+    if (inputName && source[inputName] !== undefined) {
+      candidateValues.push(source[inputName]);
+    }
+
+    if (normalizedInputName) {
+      const namedValue = findValueByNormalizedKey(source, normalizedInputName);
+      if (namedValue !== undefined) {
+        candidateValues.push(namedValue);
+      }
+    }
+  }
+
+  if (looksLikeProofInput(input)) {
+    const proofKeys = [
+      "proof",
+      "merkleProof",
+      "merkleproof",
+      "allowlistProof",
+      "whitelistProof",
+      "wlProof",
+      "claimProof"
+    ];
+    for (const source of sources) {
+      for (const key of proofKeys) {
+        const value = source[key] ?? findValueByNormalizedKey(source, normalizeAbiName(key));
+        if (value !== undefined) {
+          candidateValues.push(value);
+        }
+      }
+    }
+  }
+
+  if (looksLikeSignatureInput(input)) {
+    const signatureKeys = ["signature", "sig", "voucher", "auth", "permit", "signedPayload"];
+    for (const source of sources) {
+      for (const key of signatureKeys) {
+        const value = source[key] ?? findValueByNormalizedKey(source, normalizeAbiName(key));
+        if (value !== undefined) {
+          candidateValues.push(value);
+        }
+      }
+    }
+  }
+
+  if (looksLikeQuantityInput(input, inputIndex, totalInputs)) {
+    const quantityKeys = ["quantity", "qty", "mintQuantity", "claimQuantity", "requestedQuantity", "amount"];
+    for (const source of sources) {
+      for (const key of quantityKeys) {
+        const value = source[key] ?? findValueByNormalizedKey(source, normalizeAbiName(key));
+        if (value !== undefined) {
+          candidateValues.push(value);
+        }
+      }
+    }
+  }
+
+  for (const value of candidateValues) {
+    if (value !== undefined) {
+      return {
+        matched: true,
+        value: cloneValue(value)
+      };
+    }
+  }
+
+  if (Array.isArray(options.fallbackArgs) && options.fallbackArgs[inputIndex] !== undefined) {
+    return {
+      matched: true,
+      value: cloneValue(options.fallbackArgs[inputIndex])
+    };
+  }
+
+  return {
+    matched: false,
+    value: undefined
+  };
+}
+
 function defaultValueForAbiInput(input, inputIndex, totalInputs, options = {}) {
   const type = String(input?.type || "").trim();
   const walletAddress = options.walletAddress || "{{wallet}}";
@@ -196,6 +318,14 @@ function defaultValueForAbiInput(input, inputIndex, totalInputs, options = {}) {
     return {
       supported: false,
       reason: "missing ABI type"
+    };
+  }
+
+  const override = resolveClaimOverrideForInput(input, inputIndex, totalInputs, options);
+  if (override.matched) {
+    return {
+      supported: true,
+      value: override.value
     };
   }
 
@@ -675,6 +805,7 @@ module.exports = {
   abiFunctionNameMap,
   buildMintFunctionAnalysis,
   commonPriceReadFunctionNames,
+  cloneValue,
   defaultValueForAbiInput,
   describeMintFunctionDetection,
   detectMintStartFunctionsFromAbi,

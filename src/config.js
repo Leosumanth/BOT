@@ -8,13 +8,26 @@ const defaultInputValues = {
   RPC_URLS: "",
   PRIVATE_KEY: "",
   PRIVATE_KEYS: "",
+  CHAIN_KEY: "",
   CONTRACT_ADDRESS: "",
   ABI_PATH: "./abi/contract.json",
   ABI_JSON: "",
   AUTO_MINT_MODE: true,
   MINT_FUNCTION: "",
   MINT_ARGS: "",
+  QUANTITY_PER_WALLET: "1",
   MINT_VALUE_ETH: "",
+  CLAIM_INTEGRATION_ENABLED: false,
+  CLAIM_PROJECT_KEY: "",
+  WALLET_CLAIMS_JSON: "",
+  CLAIM_FETCH_ENABLED: false,
+  CLAIM_FETCH_URL: "",
+  CLAIM_FETCH_METHOD: "GET",
+  CLAIM_FETCH_HEADERS_JSON: "",
+  CLAIM_FETCH_COOKIES_JSON: "",
+  CLAIM_FETCH_BODY_JSON: "",
+  CLAIM_RESPONSE_MAPPING_JSON: "",
+  CLAIM_RESPONSE_ROOT: "",
   RETRY_WINDOW_MS: "",
   GAS_LIMIT: "",
   MAX_FEE_GWEI: "",
@@ -224,6 +237,40 @@ function parseJsonValue(value, name) {
   } catch (error) {
     throw new Error(`Unable to parse ${name}: ${error.message}`);
   }
+}
+
+function parseJsonOrStringValue(value, name) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function parseJsonContainerValue(value, name) {
+  const parsed = parseJsonValue(value, name);
+  if (parsed === undefined) {
+    return undefined;
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`${name} must be a JSON object or array`);
+  }
+
+  return parsed;
 }
 
 function normalizeAbiJson(parsed) {
@@ -558,6 +605,8 @@ function normalizeConfig(raw) {
     "MINT_START_DETECTION_ENABLED",
     autoMintMode
   );
+  const quantityPerWallet = Math.max(1, optionalInteger(raw, "QUANTITY_PER_WALLET") || 1);
+  const claimIntegrationEnabled = optionalBoolean(raw, "CLAIM_INTEGRATION_ENABLED", false);
   const gasStrategy = (() => {
     const strategy = normalizeGasStrategyValue(
       optionalString(raw, "GAS_STRATEGY") || (autoMintMode ? "aggressive" : "normal")
@@ -576,7 +625,9 @@ function normalizeConfig(raw) {
     contractAddress: required(raw, "CONTRACT_ADDRESS"),
     abiPath,
     abi,
+    chainKey: optionalString(raw, "CHAIN_KEY"),
     autoMintMode,
+    quantityPerWallet,
     mintFunctionProvided: !isBlank(raw.MINT_FUNCTION),
     mintArgsProvided: !isBlank(raw.MINT_ARGS),
     mintValueProvided: !isBlank(raw.MINT_VALUE_ETH),
@@ -585,6 +636,27 @@ function normalizeConfig(raw) {
     mintFunction: resolvedMintFunction.mintFunction,
     mintArgsTemplate: parseJsonArrayValue(raw.MINT_ARGS, "MINT_ARGS", []),
     mintValueEth: optionalString(raw, "MINT_VALUE_ETH") || "0",
+    claimIntegrationEnabled,
+    claimProjectKey: optionalString(raw, "CLAIM_PROJECT_KEY"),
+    walletClaims: claimIntegrationEnabled
+      ? parseJsonContainerValue(raw.WALLET_CLAIMS_JSON, "WALLET_CLAIMS_JSON")
+      : undefined,
+    claimFetchEnabled: claimIntegrationEnabled ? optionalBoolean(raw, "CLAIM_FETCH_ENABLED", false) : false,
+    claimFetchUrl: optionalString(raw, "CLAIM_FETCH_URL"),
+    claimFetchMethod: (optionalString(raw, "CLAIM_FETCH_METHOD") || "GET").toUpperCase(),
+    claimFetchHeaders: claimIntegrationEnabled
+      ? parseJsonObjectValue(raw.CLAIM_FETCH_HEADERS_JSON, "CLAIM_FETCH_HEADERS_JSON")
+      : {},
+    claimFetchCookies: claimIntegrationEnabled
+      ? parseJsonOrStringValue(raw.CLAIM_FETCH_COOKIES_JSON, "CLAIM_FETCH_COOKIES_JSON")
+      : undefined,
+    claimFetchBodyTemplate: claimIntegrationEnabled
+      ? parseJsonOrStringValue(raw.CLAIM_FETCH_BODY_JSON, "CLAIM_FETCH_BODY_JSON")
+      : undefined,
+    claimResponseMapping: claimIntegrationEnabled
+      ? parseJsonObjectValue(raw.CLAIM_RESPONSE_MAPPING_JSON, "CLAIM_RESPONSE_MAPPING_JSON")
+      : {},
+    claimResponseRoot: optionalString(raw, "CLAIM_RESPONSE_ROOT"),
     gasLimit: optionalNumber(raw, "GAS_LIMIT"),
     maxFeeGwei: optionalNumber(raw, "MAX_FEE_GWEI"),
     maxPriorityFeeGwei: optionalNumber(raw, "MAX_PRIORITY_FEE_GWEI"),
@@ -698,6 +770,27 @@ function normalizeConfig(raw) {
     throw new Error("PRIVATE_RELAY_URL is required when PRIVATE_RELAY_ENABLED=true");
   }
 
+  if (normalized.claimIntegrationEnabled && normalized.claimFetchEnabled && !normalized.claimFetchUrl) {
+    throw new Error("CLAIM_FETCH_URL is required when CLAIM_FETCH_ENABLED=true");
+  }
+
+  if (
+    normalized.claimIntegrationEnabled &&
+    normalized.claimFetchHeaders &&
+    Object.values(normalized.claimFetchHeaders).some(
+      (value) => value !== undefined && value !== null && typeof value !== "string"
+    )
+  ) {
+    throw new Error("CLAIM_FETCH_HEADERS_JSON values must all be strings");
+  }
+
+  if (
+    normalized.claimIntegrationEnabled &&
+    !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].includes(normalized.claimFetchMethod)
+  ) {
+    throw new Error("CLAIM_FETCH_METHOD must be GET, POST, PUT, PATCH, DELETE, or HEAD");
+  }
+
   if (
     normalized.privateRelayHeaders &&
     Object.values(normalized.privateRelayHeaders).some((value) => typeof value !== "string")
@@ -729,6 +822,10 @@ function normalizeConfig(raw) {
     )
   ) {
     normalized.mintStartDetectionEnabled = false;
+  }
+
+  if (!normalized.claimIntegrationEnabled) {
+    normalized.claimFetchEnabled = false;
   }
 
   return normalized;
