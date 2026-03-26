@@ -2952,6 +2952,24 @@ function formatEthString(value) {
   return trimmed || "0";
 }
 
+function nativeAssetMetaForChain(chainKey) {
+  switch (String(chainKey || "").trim()) {
+    case "bsc":
+      return { symbol: "BNB", name: "BNB" };
+    case "ethereum":
+    case "sepolia":
+    case "base":
+    case "base_sepolia":
+    case "arbitrum":
+    case "blast":
+    case "shape":
+    case "plasma":
+      return { symbol: "ETH", name: "Ether" };
+    default:
+      return { symbol: "COIN", name: "Native Coin" };
+  }
+}
+
 function getChainRpcNodes(chainKey) {
   return rankRpcNodesByLatency(
     (appState?.rpcNodes || []).filter((node) => node.enabled && node.chainKey === chainKey)
@@ -2996,6 +3014,153 @@ async function createReadProviderForChain(chainKey, preferredRpcNodeIds = []) {
     provider: null,
     rpcNode: null,
     warning: lastError ? `Unable to reach configured RPC nodes: ${formatError(lastError)}` : null
+  };
+}
+
+async function createWalletAssetReadProvider(chainKey) {
+  const configuredProvider = await createReadProviderForChain(chainKey);
+  if (configuredProvider.provider) {
+    return {
+      ...configuredProvider,
+      sourceLabel: configuredProvider.rpcNode?.name || "Configured RPC"
+    };
+  }
+
+  const chain =
+    findAvailableChainByKey(chainKey) ||
+    buildAvailableChains().find((entry) => entry.key === chainKey) ||
+    null;
+  if (!chain) {
+    return {
+      provider: null,
+      rpcNode: null,
+      warning: configuredProvider.warning || `Unknown chain ${chainKey}`,
+      sourceLabel: null
+    };
+  }
+
+  try {
+    const preview = await collectChainlistRpcCandidates(chain, {
+      limit: 1,
+      probeBudget: 4,
+      transportFilter: "http",
+      forceRefresh: false
+    });
+    const candidate = preview.candidates.find((entry) => entry.lastHealth?.status === "healthy") || null;
+    if (!candidate) {
+      return {
+        provider: null,
+        rpcNode: null,
+        warning: configuredProvider.warning || `No healthy public RPC was found for ${chain.label}`,
+        sourceLabel: null
+      };
+    }
+
+    return {
+      provider: new ethers.JsonRpcProvider(candidate.url),
+      rpcNode: {
+        ...candidate,
+        chainKey,
+        chainLabel: chain.label
+      },
+      warning: null,
+      sourceLabel: `${candidate.name || "Chainlist RPC"} · Chainlist`
+    };
+  } catch (error) {
+    return {
+      provider: null,
+      rpcNode: null,
+      warning:
+        configuredProvider.warning ||
+        `Unable to find a reachable public RPC for ${chain.label}: ${formatError(error)}`,
+      sourceLabel: null
+    };
+  }
+}
+
+async function readWalletAssetSnapshot(wallet) {
+  if (!wallet?.address) {
+    throw new Error("Wallet address is required");
+  }
+
+  const chainsToInspect = buildAvailableChains().filter(
+    (chain) => !/sepolia/i.test(String(chain.key || "")) && !/sepolia/i.test(String(chain.label || ""))
+  );
+  if (chainsToInspect.length === 0) {
+    return {
+      wallet,
+      generatedAt: new Date().toISOString(),
+      assets: [],
+      warnings: [{ chainLabel: "RPC", message: "No supported chains are available for balance inspection yet." }]
+    };
+  }
+
+  const results = await Promise.all(
+    chainsToInspect.map(async (chain) => {
+      const providerResult = await createWalletAssetReadProvider(chain.key);
+      if (!providerResult.provider) {
+        return {
+          asset: null,
+          warning: {
+            chainKey: chain.key,
+            chainLabel: chain.label,
+            message: providerResult.warning || `Unable to inspect ${chain.label} right now.`
+          }
+        };
+      }
+
+      try {
+        const balance = await providerResult.provider.getBalance(wallet.address);
+        const assetMeta = nativeAssetMetaForChain(chain.key);
+        return {
+          asset: {
+            chainKey: chain.key,
+            chainLabel: chain.label,
+            assetSymbol: assetMeta.symbol,
+            assetName: assetMeta.name,
+            balanceWei: balance.toString(),
+            balanceFormatted: formatEthString(balance) || "0",
+            balanceFloat: Number(formatEthString(balance) || 0),
+            rpcLabel: providerResult.sourceLabel || providerResult.rpcNode?.name || "RPC",
+            transportLabel: isSocketRpcUrl(providerResult.rpcNode?.url) ? "WebSocket" : "HTTPS",
+            latencyMs: providerResult.rpcNode?.lastHealth?.latencyMs ?? null,
+            checkedAt: providerResult.rpcNode?.lastHealth?.checkedAt || new Date().toISOString()
+          },
+          warning: null
+        };
+      } catch (error) {
+        return {
+          asset: null,
+          warning: {
+            chainKey: chain.key,
+            chainLabel: chain.label,
+            message: formatError(error)
+          }
+        };
+      } finally {
+        await destroyProvider(providerResult.provider);
+      }
+    })
+  );
+
+  const assets = results
+    .map((entry) => entry.asset)
+    .filter(Boolean)
+    .sort((left, right) => {
+      const balanceDelta = Number(right.balanceFloat || 0) - Number(left.balanceFloat || 0);
+      if (balanceDelta !== 0) {
+        return balanceDelta;
+      }
+
+      return String(left.chainLabel || "").localeCompare(String(right.chainLabel || ""));
+    });
+
+  const warnings = results.map((entry) => entry.warning).filter(Boolean);
+  return {
+    wallet,
+    generatedAt: new Date().toISOString(),
+    assets,
+    warnings
   };
 }
 
@@ -6376,6 +6541,39 @@ async function handleWalletDelete(walletId, response) {
   sendJson(response, 200, { ok: true });
 }
 
+async function handleWalletAssets(walletId, response) {
+  const wallet = appState.wallets.find((entry) => entry.id === walletId);
+  if (!wallet) {
+    sendJson(response, 404, { error: "Wallet not found" });
+    return;
+  }
+
+  try {
+    const snapshot = await readWalletAssetSnapshot(wallet);
+    sendJson(response, 200, {
+      ok: true,
+      wallet: {
+        id: wallet.id,
+        label: wallet.label,
+        address: wallet.address,
+        addressShort: wallet.addressShort,
+        group: wallet.group,
+        status: wallet.status,
+        source: wallet.source
+      },
+      generatedAt: snapshot.generatedAt,
+      assets: snapshot.assets,
+      warnings: snapshot.warnings,
+      summary: {
+        chainCount: snapshot.assets.length,
+        warningCount: snapshot.warnings.length
+      }
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleRpcSave(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -7312,6 +7510,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/wallets/import") {
       await handleWalletImport(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && route[0] === "api" && route[1] === "wallets" && route[2] && route[3] === "assets") {
+      await handleWalletAssets(route[2], response);
       return;
     }
 

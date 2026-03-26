@@ -57,6 +57,11 @@ const walletGroupInput = document.getElementById("wallet-group-input");
 const walletKeysInput = document.getElementById("wallet-keys-input");
 const walletList = document.getElementById("wallet-list");
 const walletCount = document.getElementById("wallet-count");
+const walletAssetsTitle = document.getElementById("wallet-assets-title");
+const walletAssetsSubtitle = document.getElementById("wallet-assets-subtitle");
+const walletAssetsStatus = document.getElementById("wallet-assets-status");
+const walletAssetsList = document.getElementById("wallet-assets-list");
+const walletAssetsRefreshButton = document.getElementById("wallet-assets-refresh-button");
 const rpcForm = document.getElementById("rpc-form");
 const rpcFormTitle = document.getElementById("rpc-form-title");
 const rpcFormSubtitle = document.getElementById("rpc-form-subtitle");
@@ -234,6 +239,15 @@ let activeRpcEditId = null;
 let rpcFormGroup = "Custom";
 let rpcSelectedChainlistCandidate = null;
 let rpcPendingSavePayload = null;
+let walletAssetInspector = {
+  walletId: "",
+  loading: false,
+  error: "",
+  assets: [],
+  warnings: [],
+  generatedAt: "",
+  summary: null
+};
 let rpcDiscoveryState = {
   query: "",
   chain: null,
@@ -279,11 +293,6 @@ const assistantViewCommands = [
     view: "wallets",
     label: "Wallets",
     aliases: ["wallets", "wallet", "saved wallets"]
-  },
-  {
-    view: "transfer",
-    label: "Transfer",
-    aliases: ["transfer", "transfers"]
   },
   {
     view: "rpc",
@@ -2244,18 +2253,26 @@ function renderTasks() {
 }
 
 function renderWallets() {
+  const selectedWalletId = walletAssetInspector.walletId;
   walletCount.textContent = pluralize(state.wallets.length, "wallet");
   walletList.innerHTML = state.wallets.length
     ? state.wallets
         .map(
           (wallet) => `
-            <div class="list-row">
+            <div
+              class="list-row wallet-list-row ${selectedWalletId === wallet.id ? "selected" : ""}"
+              data-wallet-select="${escapeHtml(wallet.id)}"
+              tabindex="0"
+              role="button"
+              aria-pressed="${selectedWalletId === wallet.id ? "true" : "false"}"
+            >
               <div>
                 <strong>${escapeHtml(wallet.label)}</strong>
                 <p class="muted-copy">${escapeHtml(wallet.addressShort)} | ${escapeHtml(wallet.group || "Imported")} | ${escapeHtml(wallet.source || "stored")}</p>
               </div>
               <div class="task-actions">
                 <span class="wallet-chip">${escapeHtml(wallet.status)}</span>
+                <span class="queue-chip">Inspect Assets</span>
                 ${
                   wallet.source === "env"
                     ? '<span class="rpc-chip">env-managed</span>'
@@ -2268,6 +2285,29 @@ function renderWallets() {
         .join("")
     : `<div class="empty-state"><h3>No wallets imported</h3><p>Add wallets to start building task groups.</p></div>`;
 
+  walletList.querySelectorAll("[data-wallet-select]").forEach((row) => {
+    const openAssets = async () => {
+      await loadWalletAssets(row.dataset.walletSelect);
+    };
+
+    row.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-wallet-delete]")) {
+        return;
+      }
+
+      await openAssets();
+    });
+
+    row.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+
+      event.preventDefault();
+      await openAssets();
+    });
+  });
+
   walletList.querySelectorAll("[data-wallet-delete]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -2276,6 +2316,180 @@ function renderWallets() {
       } catch {}
     });
   });
+}
+
+function selectedInspectedWallet() {
+  return state.wallets.find((wallet) => wallet.id === walletAssetInspector.walletId) || null;
+}
+
+function renderWalletAssets() {
+  if (!walletAssetsList || !walletAssetsTitle || !walletAssetsSubtitle || !walletAssetsStatus || !walletAssetsRefreshButton) {
+    return;
+  }
+
+  const wallet = selectedInspectedWallet();
+  if (!wallet) {
+    walletAssetInspector = {
+      walletId: "",
+      loading: false,
+      error: "",
+      assets: [],
+      warnings: [],
+      generatedAt: "",
+      summary: null
+    };
+    walletAssetsTitle.textContent = "Assets & Coins";
+    walletAssetsSubtitle.textContent = "Click a wallet to inspect native balances across available EVM chains.";
+    walletAssetsStatus.classList.add("hidden");
+    walletAssetsStatus.textContent = "";
+    walletAssetsRefreshButton.disabled = true;
+    walletAssetsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Select a wallet</h3>
+        <p>Click any saved wallet to load its native coin balances.</p>
+      </div>
+    `;
+    return;
+  }
+
+  walletAssetsTitle.textContent = `${wallet.label} Assets`;
+  walletAssetsSubtitle.textContent = `${wallet.addressShort} · ${wallet.group || "Imported"} · ${wallet.source || "stored"}`;
+  walletAssetsRefreshButton.disabled = walletAssetInspector.loading;
+
+  if (walletAssetInspector.loading) {
+    walletAssetsStatus.classList.remove("hidden");
+    walletAssetsStatus.textContent = "Loading balances across configured and discovered chains...";
+    walletAssetsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Loading assets</h3>
+        <p>Checking reachable RPCs and reading native balances for this wallet.</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (walletAssetInspector.error) {
+    walletAssetsStatus.classList.remove("hidden");
+    walletAssetsStatus.textContent = walletAssetInspector.error;
+    walletAssetsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Asset lookup failed</h3>
+        <p>${escapeHtml(walletAssetInspector.error)}</p>
+      </div>
+    `;
+    return;
+  }
+
+  const assets = Array.isArray(walletAssetInspector.assets) ? walletAssetInspector.assets : [];
+  const warnings = Array.isArray(walletAssetInspector.warnings) ? walletAssetInspector.warnings : [];
+  const nonZeroCount = assets.filter((asset) => Number(asset.balanceFloat || 0) > 0).length;
+  const statusParts = [];
+  if (assets.length > 0) {
+    statusParts.push(`${pluralize(assets.length, "chain")} checked`);
+    statusParts.push(`${pluralize(nonZeroCount, "balance")} above zero`);
+  }
+  if (walletAssetInspector.generatedAt) {
+    statusParts.push(`updated ${relativeTime(walletAssetInspector.generatedAt)}`);
+  }
+  walletAssetsStatus.classList.toggle("hidden", statusParts.length === 0);
+  walletAssetsStatus.textContent = statusParts.join(" · ");
+
+  if (!assets.length && !warnings.length) {
+    walletAssetsList.innerHTML = `
+      <div class="empty-state">
+        <h3>No assets found</h3>
+        <p>No reachable chain balances were returned for this wallet yet.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const assetMarkup = assets
+    .map(
+      (asset) => `
+        <div class="list-row">
+          <div>
+            <strong>${escapeHtml(asset.chainLabel || asset.chainKey || "Unknown chain")}</strong>
+            <p class="muted-copy">${escapeHtml(asset.assetName || asset.assetSymbol || "Native coin")} · via ${escapeHtml(asset.rpcLabel || "RPC")}</p>
+          </div>
+          <div class="wallet-assets-value">
+            <strong class="wallet-assets-balance">${escapeHtml(asset.balanceFormatted || "0")} ${escapeHtml(asset.assetSymbol || "")}</strong>
+            <div class="wallet-assets-meta">
+              <span class="wallet-chip">${escapeHtml(asset.transportLabel || "RPC")}</span>
+              ${
+                asset.latencyMs !== null && asset.latencyMs !== undefined
+                  ? `<span class="queue-chip">${escapeHtml(`${asset.latencyMs}ms`)}</span>`
+                  : ""
+              }
+              ${
+                asset.checkedAt
+                  ? `<span class="queue-chip">${escapeHtml(relativeTime(asset.checkedAt))}</span>`
+                  : ""
+              }
+            </div>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+
+  const warningMarkup = warnings
+    .map(
+      (warning) => `
+        <div class="wallet-assets-warning">
+          <strong>${escapeHtml(warning.chainLabel || "Chain warning")}</strong>
+          <p class="muted-copy">${escapeHtml(warning.message || "Unable to read this chain right now.")}</p>
+        </div>
+      `
+    )
+    .join("");
+
+  walletAssetsList.innerHTML = `${assetMarkup}${warningMarkup}`;
+}
+
+async function loadWalletAssets(walletId) {
+  const wallet = state.wallets.find((entry) => entry.id === walletId);
+  if (!wallet) {
+    return;
+  }
+
+  walletAssetInspector = {
+    walletId,
+    loading: true,
+    error: "",
+    assets: [],
+    warnings: [],
+    generatedAt: "",
+    summary: null
+  };
+  renderWallets();
+  renderWalletAssets();
+
+  try {
+    const payload = await request(`/api/wallets/${walletId}/assets`);
+    walletAssetInspector = {
+      walletId,
+      loading: false,
+      error: "",
+      assets: Array.isArray(payload.assets) ? payload.assets : [],
+      warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+      generatedAt: payload.generatedAt || new Date().toISOString(),
+      summary: payload.summary || null
+    };
+  } catch (error) {
+    walletAssetInspector = {
+      walletId,
+      loading: false,
+      error: error.message || "Asset lookup failed",
+      assets: [],
+      warnings: [],
+      generatedAt: "",
+      summary: null
+    };
+  }
+
+  renderWallets();
+  renderWalletAssets();
 }
 
 function rpcHealthMarkup(node) {
@@ -4160,6 +4374,7 @@ function renderAll() {
   renderDashboard();
   renderTasks();
   renderWallets();
+  renderWalletAssets();
   renderRpcNodes();
   renderSettings();
   renderRuntime();
@@ -5548,6 +5763,16 @@ rpcChainSearchInput.addEventListener("blur", () => {
 
   scheduleRpcDiscoveryScan({ immediate: true });
 });
+
+if (walletAssetsRefreshButton) {
+  walletAssetsRefreshButton.addEventListener("click", async () => {
+    if (!walletAssetInspector.walletId || walletAssetInspector.loading) {
+      return;
+    }
+
+    await loadWalletAssets(walletAssetInspector.walletId);
+  });
+}
 
 if (rpcTransportTabs) {
   rpcTransportTabs.querySelectorAll("[data-rpc-transport-filter]").forEach((button) => {

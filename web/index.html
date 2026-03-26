@@ -56,7 +56,6 @@
             <button class="nav-button active" data-view="dashboard" type="button">Dashboard</button>
             <button class="nav-button" data-view="tasks" type="button">Tasks</button>
             <button class="nav-button" data-view="wallets" type="button">Wallets</button>
-            <button class="nav-button" data-view="transfer" type="button">Transfer</button>
             <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
             <button class="nav-button" data-view="settings" type="button">Settings</button>
           </nav>
@@ -243,7 +242,7 @@
             </div>
           </div>
 
-          <div class="content-grid">
+          <div class="stack-list wallets-shell">
             <section class="surface" data-tilt>
               <div class="surface-header">
                 <div>
@@ -264,36 +263,38 @@
               </form>
             </section>
 
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Saved Wallets</h3>
-                  <p class="helper-copy">Local operator fleet and grouped addresses.</p>
+            <div class="content-grid wallets-detail-grid">
+              <section class="surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3>Saved Wallets</h3>
+                    <p class="helper-copy">Local operator fleet and grouped addresses.</p>
+                  </div>
+                  <span id="wallet-count" class="muted-copy"></span>
                 </div>
-                <span id="wallet-count" class="muted-copy"></span>
-              </div>
-              <div id="wallet-list" class="stack-list"></div>
-            </section>
-          </div>
-        </section>
+                <div id="wallet-list" class="stack-list"></div>
+              </section>
 
-        <section class="view" data-view-panel="transfer">
-          <div class="view-header">
-            <div>
-              <h2>Transfer</h2>
-              <p class="view-subtitle">Review transfer-ready tasks and post-mint routing options.</p>
+              <section class="surface wallet-assets-surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3 id="wallet-assets-title">Assets & Coins</h3>
+                    <p id="wallet-assets-subtitle" class="helper-copy">
+                      Click a wallet to inspect native balances across available EVM chains.
+                    </p>
+                  </div>
+                  <button id="wallet-assets-refresh-button" class="ghost-button fx-button" type="button">Refresh Assets</button>
+                </div>
+                <p id="wallet-assets-status" class="helper-copy hidden"></p>
+                <div id="wallet-assets-list" class="stack-list">
+                  <div class="empty-state">
+                    <h3>Select a wallet</h3>
+                    <p>Click any saved wallet to load its native coin balances.</p>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
-
-          <section class="surface" data-tilt>
-            <div class="empty-state">
-              <h3>Transfer routing stays local</h3>
-              <p>
-                Tasks can store a post-mint transfer toggle and destination. This panel acts as a
-                planning board for those transfer paths.
-              </p>
-            </div>
-          </section>
         </section>
 
         <section class="view" data-view-panel="rpc">
