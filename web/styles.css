@@ -520,12 +520,14 @@ body[data-current-view="rpc"] .topbar {
   display: none;
 }
 
-body[data-current-view="settings"] .view-header h2 {
+body[data-current-view="settings"] .view-header h2,
+body[data-current-view="rpc"] .view-header h2 {
   font-size: clamp(38px, 4vw, 54px);
   line-height: 1.02;
 }
 
-body[data-current-view="settings"] .view-subtitle {
+body[data-current-view="settings"] .view-subtitle,
+body[data-current-view="rpc"] .view-subtitle {
   max-width: 940px;
   font-size: 18px;
   line-height: 1.65;
@@ -598,80 +600,6 @@ body[data-current-view="settings"] .view-subtitle {
 .settings-shell {
   display: grid;
   gap: 22px;
-}
-
-.settings-hero {
-  position: relative;
-  overflow: hidden;
-  padding: 24px 26px;
-  border-radius: calc(var(--radius-xl) + 2px);
-  border: 1px solid rgba(124, 223, 255, 0.16);
-  background:
-    radial-gradient(circle at 100% 0%, rgba(76, 255, 210, 0.08), transparent 24%),
-    radial-gradient(circle at 8% 12%, rgba(113, 224, 255, 0.12), transparent 30%),
-    linear-gradient(180deg, rgba(14, 24, 37, 0.9), rgba(9, 17, 29, 0.94));
-}
-
-.settings-hero::after,
-.settings-summary-card::after {
-  content: "";
-  position: absolute;
-  inset: auto -8% -52px auto;
-  width: 150px;
-  height: 150px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(113, 224, 255, 0.16), transparent 72%);
-  pointer-events: none;
-}
-
-.settings-hero-copy {
-  display: grid;
-  gap: 12px;
-  max-width: 860px;
-}
-
-.settings-hero h3 {
-  margin: 0;
-  font-size: clamp(28px, 3vw, 40px);
-  line-height: 1.04;
-}
-
-.settings-hero .helper-copy {
-  font-size: 16px;
-  line-height: 1.72;
-}
-
-.settings-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 18px;
-}
-
-.settings-summary-card {
-  position: relative;
-  overflow: hidden;
-  padding: 18px;
-  border-radius: var(--radius-xl);
-  border: 1px solid rgba(124, 223, 255, 0.14);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
-    linear-gradient(135deg, rgba(113, 224, 255, 0.05), transparent 48%),
-    rgba(7, 14, 24, 0.68);
-}
-
-.settings-summary-card strong {
-  display: block;
-  margin: 8px 0 6px;
-  font-size: 20px;
-  line-height: 1.2;
-}
-
-.settings-summary-card p {
-  margin: 0;
-  color: #bfd2e7;
-  font-size: 15px;
-  line-height: 1.6;
 }
 
 .settings-layout {
@@ -800,21 +728,8 @@ body[data-current-view="settings"] .view-subtitle {
 
 .settings-footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 18px 20px;
-  border-radius: var(--radius-xl);
-  border: 1px solid rgba(124, 223, 255, 0.14);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
-    rgba(8, 15, 25, 0.72);
-}
-
-.settings-footer .helper-copy {
-  max-width: 720px;
-  font-size: 15px;
-  line-height: 1.65;
+  justify-content: flex-end;
+  padding-top: 4px;
 }
 
 .hero-surface {
@@ -2789,16 +2704,9 @@ body[data-auth-state="locked"] .assistant-root {
     font-size: 30px;
   }
 
-  body[data-current-view="settings"] .view-subtitle {
+  body[data-current-view="settings"] .view-subtitle,
+  body[data-current-view="rpc"] .view-subtitle {
     font-size: 16px;
-  }
-
-  .settings-hero {
-    padding: 20px;
-  }
-
-  .settings-summary-grid {
-    grid-template-columns: 1fr;
   }
 
   .settings-card h4 {
