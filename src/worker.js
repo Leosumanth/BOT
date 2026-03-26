@@ -44,8 +44,41 @@ function truncateMiddle(value, start = 8, end = 6) {
   return `${value.slice(0, start)}...${value.slice(-end)}`;
 }
 
+function normalizePrivateKeyValue(value) {
+  const trimmed = String(value || "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return `0x${trimmed}`;
+  }
+
+  return trimmed;
+}
+
 function deriveAddress(privateKey) {
-  return new ethers.Wallet(privateKey).address;
+  return new ethers.Wallet(normalizePrivateKeyValue(privateKey)).address;
+}
+
+function validateResolvedPrivateKey(privateKey, wallet = null) {
+  const normalized = normalizePrivateKeyValue(privateKey);
+  const walletLabel = wallet?.label || wallet?.addressShort || wallet?.address || "Selected wallet";
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`${walletLabel} has an invalid private key format. Re-import that wallet secret.`);
+  }
+
+  let derivedAddress;
+  try {
+    derivedAddress = deriveAddress(normalized);
+  } catch {
+    throw new Error(`${walletLabel} has an unreadable private key. Re-import that wallet secret.`);
+  }
+
+  if (wallet?.address && derivedAddress.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error(
+      `${walletLabel} private key does not match the saved wallet address ${wallet.address}. Re-import that wallet.`
+    );
+  }
+
+  return normalized;
 }
 
 function buildEnvWalletEntries() {
@@ -57,7 +90,8 @@ function buildEnvWalletEntries() {
 
   keys.forEach((privateKey, index) => {
     try {
-      const address = deriveAddress(privateKey);
+      const normalizedPrivateKey = validateResolvedPrivateKey(privateKey);
+      const address = deriveAddress(normalizedPrivateKey);
       const addressLower = address.toLowerCase();
       if (knownAddresses.has(addressLower)) {
         return;
@@ -76,7 +110,7 @@ function buildEnvWalletEntries() {
         createdAt,
         updatedAt: createdAt
       });
-      keyMap.set(id, privateKey);
+      keyMap.set(id, normalizedPrivateKey);
       knownAddresses.add(addressLower);
     } catch {
       // Ignore invalid env keys.
@@ -191,13 +225,14 @@ async function loadExecutionState(database) {
   };
 }
 
-async function resolveWalletPrivateKeys(database, walletIds) {
+async function resolveWalletPrivateKeys(database, walletIds, walletMap = new Map()) {
   const { keyMap } = buildEnvWalletEntries();
   const privateKeys = [];
 
   for (const walletId of walletIds) {
+    const wallet = walletMap.get(walletId) || null;
     if (keyMap.has(walletId)) {
-      privateKeys.push(keyMap.get(walletId));
+      privateKeys.push(validateResolvedPrivateKey(keyMap.get(walletId), wallet));
       continue;
     }
 
@@ -206,7 +241,7 @@ async function resolveWalletPrivateKeys(database, walletIds) {
       throw new Error(`Wallet secret not found for wallet ${walletId}`);
     }
 
-    privateKeys.push(decryptSecret(storedSecret.secret_ciphertext));
+    privateKeys.push(validateResolvedPrivateKey(decryptSecret(storedSecret.secret_ciphertext), wallet));
   }
 
   return privateKeys;
@@ -220,7 +255,8 @@ async function buildConfigForTask(database, state, task) {
     throw new Error("Select at least one wallet before running a task");
   }
 
-  const privateKeys = await resolveWalletPrivateKeys(database, walletIds);
+  const walletMap = new Map(wallets.map((wallet) => [wallet.id, wallet]));
+  const privateKeys = await resolveWalletPrivateKeys(database, walletIds, walletMap);
   if (privateKeys.length !== walletIds.length) {
     throw new Error("One or more selected wallets could not be resolved");
   }
@@ -262,6 +298,8 @@ async function buildConfigForTask(database, state, task) {
     WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
     PRE_SIGN_TRANSACTIONS: true,
     MULTI_RPC_BROADCAST: task.multiRpcBroadcast,
+    MINT_START_DETECTION_ENABLED: task.mintStartDetectionEnabled,
+    MINT_START_DETECTION_JSON: JSON.stringify(task.mintStartDetectionConfig || {}),
     READY_CHECK_FUNCTION: task.readyCheckFunction,
     READY_CHECK_ARGS: task.readyCheckArgs,
     READY_CHECK_MODE: task.readyCheckMode,

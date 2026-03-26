@@ -1199,7 +1199,8 @@ async function transferMintedAssets({
               config,
               walletIndex,
               label: "Transfer",
-              logger
+              logger,
+              signal
             }),
           submitReplacement: (txRequest) =>
             submitTransactionWithRoute({
@@ -1210,7 +1211,8 @@ async function transferMintedAssets({
               txRequest,
               walletIndex,
               label: "Transfer",
-              logger
+              logger,
+              signal
             }),
           config,
           walletIndex,
@@ -1236,7 +1238,8 @@ async function transferMintedAssets({
               config,
               walletIndex,
               label: "Transfer",
-              logger
+              logger,
+              signal
             }),
           submitReplacement: (txRequest) =>
             submitTransactionWithRoute({
@@ -1247,7 +1250,8 @@ async function transferMintedAssets({
               txRequest,
               walletIndex,
               label: "Transfer",
-              logger
+              logger,
+              signal
             }),
           config,
           walletIndex,
@@ -1500,6 +1504,8 @@ async function waitForMintStartDetection(contract, config, walletIndex, signal, 
     throwIfAborted(signal);
     pollCount += 1;
     const summaries = [];
+    let blockedByPause = false;
+    let openSignal = null;
 
     for (const detector of detectors) {
       if (detector.disabled) {
@@ -1514,7 +1520,7 @@ async function waitForMintStartDetection(contract, config, walletIndex, signal, 
         if (detector.semantics === "truthy") {
           isOpen = Boolean(value);
         } else if (detector.semantics === "paused") {
-          isOpen = false;
+          blockedByPause = Boolean(value);
         } else if (detector.semantics === "increase") {
           if (detector.baselineLabel == null) {
             detector.baselineRaw = value;
@@ -1544,11 +1550,11 @@ async function waitForMintStartDetection(contract, config, walletIndex, signal, 
 
         summaries.push(`${detector.functionName}=${valueLabel}`);
 
-        if (isOpen) {
-          logger.info(
-            `[wallet ${walletIndex}] Mint start detected via ${detector.functionName} -> ${valueLabel}`
-          );
-          return;
+        if (isOpen && !openSignal) {
+          openSignal = {
+            functionName: detector.functionName,
+            valueLabel
+          };
         }
       } catch (error) {
         detector.disabled = true;
@@ -1567,9 +1573,18 @@ async function waitForMintStartDetection(contract, config, walletIndex, signal, 
       return;
     }
 
+    if (openSignal && !blockedByPause) {
+      logger.info(
+        `[wallet ${walletIndex}] Mint start detected via ${openSignal.functionName} -> ${openSignal.valueLabel}`
+      );
+      return;
+    }
+
     if (pollCount === 1 || pollCount % 10 === 0) {
       logger.info(
-        `[wallet ${walletIndex}] Waiting for mint start detection: ${summaries.join(" | ")}`
+        `[wallet ${walletIndex}] Waiting for mint start detection: ${summaries.join(" | ")}${
+          blockedByPause ? " | paused=true" : ""
+        }`
       );
     }
 
@@ -1627,36 +1642,95 @@ function extractRelayTransactionHash(result) {
   return null;
 }
 
-async function sendRelayRpcRequest(config, signedTransaction) {
+function buildPrivateRelayTimeoutMs(config) {
+  const configuredTimeoutMs = Number(config?.txTimeoutMs);
+  if (Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0) {
+    return Math.max(1000, configuredTimeoutMs);
+  }
+
+  return 10000;
+}
+
+function createRelayAbortController(signal, timeoutMs) {
+  const controller = new AbortController();
+  const cleanupFns = [];
+  let timedOut = false;
+
+  if (signal?.aborted) {
+    controller.abort();
+  } else if (signal) {
+    const onAbort = () => controller.abort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    cleanupFns.push(() => signal.removeEventListener("abort", onAbort));
+  }
+
+  if (timeoutMs > 0) {
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    cleanupFns.push(() => clearTimeout(timeoutId));
+  }
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup() {
+      cleanupFns.splice(0).forEach((cleanup) => cleanup());
+    }
+  };
+}
+
+async function sendRelayRpcRequest(config, signedTransaction, signal) {
   if (typeof fetch !== "function") {
     throw new Error("Global fetch is unavailable. Use Node.js 18 or newer.");
   }
 
-  const response = await fetch(config.privateRelayUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(config.privateRelayHeaders || {})
-    },
-    body: JSON.stringify({
-      id: Date.now(),
-      jsonrpc: "2.0",
-      method: config.privateRelayMethod,
-      params: buildRelayRequestParams(config, signedTransaction)
-    })
-  });
+  throwIfAborted(signal);
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.error) {
-    throw new Error(
-      payload.error?.message ||
-        payload.error?.data ||
-        payload.result ||
-        `Private relay request failed with status ${response.status}`
-    );
+  const relayTimeoutMs = buildPrivateRelayTimeoutMs(config);
+  const relayAbort = createRelayAbortController(signal, relayTimeoutMs);
+
+  try {
+    const response = await fetch(config.privateRelayUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(config.privateRelayHeaders || {})
+      },
+      body: JSON.stringify({
+        id: Date.now(),
+        jsonrpc: "2.0",
+        method: config.privateRelayMethod,
+        params: buildRelayRequestParams(config, signedTransaction)
+      }),
+      signal: relayAbort.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.error) {
+      throw new Error(
+        payload.error?.message ||
+          payload.error?.data ||
+          payload.result ||
+          `Private relay request failed with status ${response.status}`
+      );
+    }
+
+    return payload.result;
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new AbortRunError();
+    }
+
+    if (relayAbort.timedOut()) {
+      throw new Error(`Private relay request timed out after ${relayTimeoutMs}ms`);
+    }
+
+    throw error;
+  } finally {
+    relayAbort.cleanup();
   }
-
-  return payload.result;
 }
 
 async function wrapSignedTransactionResponse(provider, signedTransaction) {
@@ -1824,7 +1898,8 @@ async function submitSignedTransactionWithRoute({
   signedTransaction,
   walletIndex,
   label,
-  logger
+  logger,
+  signal
 }) {
   if (!config.privateRelayEnabled) {
     return submitSignedTransactionToPublicRpcMesh({
@@ -1839,7 +1914,7 @@ async function submitSignedTransactionWithRoute({
   }
 
   try {
-    const relayResult = await sendRelayRpcRequest(config, signedTransaction);
+    const relayResult = await sendRelayRpcRequest(config, signedTransaction, signal);
     const relayHash = extractRelayTransactionHash(relayResult);
     const wrappedTransaction = await wrapSignedTransactionResponse(provider, signedTransaction);
 
@@ -1851,6 +1926,10 @@ async function submitSignedTransactionWithRoute({
 
     return wrappedTransaction;
   } catch (error) {
+    if (error instanceof AbortRunError) {
+      throw error;
+    }
+
     if (config.privateRelayOnly) {
       throw new Error(`Private relay submission failed: ${formatError(error)}`);
     }
@@ -1878,7 +1957,8 @@ async function submitTransactionWithRoute({
   txRequest,
   walletIndex,
   label,
-  logger
+  logger,
+  signal
 }) {
   const populatedTransaction = await wallet.populateTransaction(txRequest);
   const signedTransaction = await wallet.signTransaction(populatedTransaction);
@@ -1889,7 +1969,8 @@ async function submitTransactionWithRoute({
     signedTransaction,
     walletIndex,
     label,
-    logger
+    logger,
+    signal
   });
 }
 
@@ -1903,7 +1984,8 @@ async function sendContractTransaction({
   config,
   walletIndex,
   label,
-  logger
+  logger,
+  signal
 }) {
   if (!config.privateRelayEnabled && !config.multiRpcBroadcast) {
     return contractMethod(...args, overrides);
@@ -1918,7 +2000,8 @@ async function sendContractTransaction({
     txRequest,
     walletIndex,
     label,
-    logger
+    logger,
+    signal
   });
 }
 
@@ -2569,7 +2652,8 @@ async function executeWalletSession(config, session, context) {
                 txRequest: currentPlan.txRequest,
                 walletIndex,
                 label: "Mint",
-                logger
+                logger,
+                signal
               }),
             submitReplacement: (txRequest) =>
               submitTransactionWithRoute({
@@ -2580,7 +2664,8 @@ async function executeWalletSession(config, session, context) {
                 txRequest,
                 walletIndex,
                 label: "Mint",
-                logger
+                logger,
+                signal
               }),
             config,
             walletIndex,
@@ -2625,7 +2710,8 @@ async function executeWalletSession(config, session, context) {
                 signedTransaction: preparedMint.signedTransaction,
                 walletIndex,
                 label: "Mint",
-                logger
+                logger,
+                signal
               }),
             submitReplacement: (txRequest) =>
               submitTransactionWithRoute({
@@ -2636,7 +2722,8 @@ async function executeWalletSession(config, session, context) {
                 txRequest,
                 walletIndex,
                 label: "Mint",
-                logger
+                logger,
+                signal
               }),
             config,
             walletIndex,

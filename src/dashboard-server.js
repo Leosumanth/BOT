@@ -2339,7 +2339,7 @@ async function buildMintAutofill({
   return {
     mintFunction: resolvedMintFunction.mintFunction,
     mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
-    quantityPerWallet: 1,
+    quantityPerWallet: Math.max(1, Number(quantityPerWallet || 1)),
     priceEth: priceResolution.priceEth || "0",
     platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
     detectedMintFunctions: resolvedMintFunction.detectedFunctions,

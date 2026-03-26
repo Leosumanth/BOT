@@ -611,7 +611,8 @@ function filteredTasks() {
       (task.tags || []).some((tag) => tag.toLowerCase().includes(search));
 
     const matchesStatus =
-      state.taskStatusFilter === "all" || task.status === state.taskStatusFilter;
+      state.taskStatusFilter === "all" ||
+      (state.taskStatusFilter === "done" ? Boolean(task.done) : task.status === state.taskStatusFilter);
 
     return matchesSearch && matchesStatus;
   });
@@ -2065,12 +2066,16 @@ function inferMintArgsFromAbi(abiEntries, mintFunction = "") {
   );
 }
 
-function buildLocalMintAutofill(abiEntries, requestedFunction = "") {
+function buildLocalMintAutofill(abiEntries, requestedFunction = "", quantityPerWallet = null) {
   const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
+  const normalizedQuantity =
+    quantityPerWallet === null || quantityPerWallet === undefined
+      ? null
+      : Math.max(1, Number(quantityPerWallet || 1));
   return {
     mintFunction: resolvedMintFunction.mintFunction,
     mintArgs: inferMintArgsFromAbi(abiEntries, resolvedMintFunction.mintFunction),
-    quantityPerWallet: 1,
+    quantityPerWallet: normalizedQuantity,
     platform: inferTaskPlatformFromAbi(abiEntries, resolvedMintFunction.mintFunction),
     detectedMintFunctions: resolvedMintFunction.detectedFunctions
   };
@@ -2093,7 +2098,12 @@ function applyMintAutofill(autofill, options = {}) {
     taskArgsInput.value = JSON.stringify(autofill.mintArgs);
   }
 
-  if (includeQuantity && autofill?.quantityPerWallet) {
+  if (
+    includeQuantity &&
+    autofill?.quantityPerWallet !== null &&
+    autofill?.quantityPerWallet !== undefined &&
+    (!taskQuantityInput.value.trim() || Number(taskQuantityInput.value) < 1)
+  ) {
     taskQuantityInput.value = String(autofill.quantityPerWallet);
   }
 
@@ -2383,7 +2393,11 @@ function applyAbiAutofillFromCurrentInput(options = {}) {
 
   try {
     const abiEntries = parseAbiEntries(taskAbiInput.value);
-    const localAutofill = buildLocalMintAutofill(abiEntries, taskFunctionInput.value);
+    const localAutofill = buildLocalMintAutofill(
+      abiEntries,
+      taskFunctionInput.value,
+      Number(taskQuantityInput.value || 1)
+    );
     setMintStartDetectionState(null);
     renderPhasePreview([]);
     applyMintAutofill(localAutofill, {
@@ -2456,7 +2470,10 @@ async function fetchAbiForCurrentTask(options = {}) {
     setTaskAbiOrigin("explorer", lookupKey);
     setMintStartDetectionState(payload.autofill?.mintStartDetection || null);
     renderPhasePreview(payload.autofill?.phasePreview || []);
-    applyMintAutofill(payload.autofill || buildLocalMintAutofill(payload.abi || [], taskFunctionInput.value));
+    applyMintAutofill(
+      payload.autofill ||
+        buildLocalMintAutofill(payload.abi || [], taskFunctionInput.value, Number(taskQuantityInput.value || 1))
+    );
     updateAbiStatus(
       buildAbiStatusSourceLabel(
         auto ? `${payload.provider || "Explorer"} auto-loaded` : payload.provider || "Explorer",
