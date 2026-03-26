@@ -626,10 +626,6 @@ body[data-current-view="rpc"] .view-subtitle {
   gap: 8px;
 }
 
-.settings-card-step {
-  margin-bottom: 2px;
-}
-
 .settings-card h4 {
   font-size: 28px;
   line-height: 1.08;
@@ -643,14 +639,6 @@ body[data-current-view="rpc"] .view-subtitle {
 
 .settings-field {
   gap: 10px;
-}
-
-.settings-field > span {
-  color: #dbeeff;
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
 
 .settings-field input {
