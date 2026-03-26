@@ -78,8 +78,6 @@ const rpcInlineCandidateList = document.getElementById("rpc-inline-candidate-lis
 const rpcPagePulseButton = document.getElementById("rpc-page-pulse-button");
 const rpcOpsOverview = document.getElementById("rpc-ops-overview");
 const rpcBroadcastAdvisor = document.getElementById("rpc-broadcast-advisor");
-const rpcChainCommandCaption = document.getElementById("rpc-chain-command-caption");
-const rpcChainCommandGrid = document.getElementById("rpc-chain-command-grid");
 const rpcList = document.getElementById("rpc-list");
 const rpcChainlistModal = document.getElementById("rpc-chainlist-modal");
 const rpcChainlistModalTitle = document.getElementById("rpc-chainlist-modal-title");
@@ -2417,8 +2415,11 @@ function renderRpcDiscoverySummary() {
   } else {
     const chips = [
       `${Number(summary.published || 0)} published`,
+      Number(summary.publishedSocketCount || 0) > 0 ? `${Number(summary.publishedSocketCount || 0)} ws published` : null,
       `${Number(summary.probed || 0)} probed`,
+      Number(summary.probedSocketCount || 0) > 0 ? `${Number(summary.probedSocketCount || 0)} ws probed` : null,
       `${Number(summary.healthy || 0)} healthy`,
+      Number(summary.healthySocketCount || 0) > 0 ? `${Number(summary.healthySocketCount || 0)} ws healthy` : null,
       Number(summary.skippedExisting || 0) > 0 ? `${Number(summary.skippedExisting)} already saved` : null,
       Number(summary.skippedProbeBudget || 0) > 0 ? `${Number(summary.skippedProbeBudget)} unprobed` : null
     ].filter(Boolean);
@@ -2501,6 +2502,7 @@ function renderRpcDiscoveryCandidates() {
     .map((candidate) => {
       const isSelected = selectedUrls.has(candidate.url);
       const rankingChip = candidate.recommended ? "Recommended" : `Rank #${candidate.rank || "?"}`;
+      const transportLabel = isSocketRpcUrl(candidate.url) ? "WebSocket" : "HTTPS";
 
       return `
         <label class="rpc-candidate-card ${isSelected ? "selected" : ""}">
@@ -2520,6 +2522,7 @@ function renderRpcDiscoveryCandidates() {
               <div class="chip-row">
                 <span class="queue-chip">${escapeHtml(candidate.chainLabel || rpcDiscoveryState.chain.label)}</span>
                 <span class="queue-chip">${escapeHtml(rankingChip)}</span>
+                <span class="queue-chip">${escapeHtml(transportLabel)}</span>
                 <span class="queue-chip">${escapeHtml(formatLatencyLabel(candidate.lastHealth?.latencyMs))}</span>
               </div>
               <p class="rpc-node-url">${escapeHtml(candidate.url)}</p>
@@ -2948,6 +2951,7 @@ function renderRpcChainlistCandidates() {
       const isHealthy = candidate.lastHealth?.status === "healthy";
       const isSelected = candidate.url === rpcChainlistScan.selectedUrl;
       const rankingChip = candidate.recommended ? "Fastest healthy" : `Rank #${candidate.rank || "?"}`;
+      const transportLabel = isSocketRpcUrl(candidate.url) ? "WebSocket" : "HTTPS";
 
       return `
         <button
@@ -2965,6 +2969,7 @@ function renderRpcChainlistCandidates() {
               <div class="chip-row">
                 <span class="queue-chip">${escapeHtml(candidate.chainLabel || chainLabelCopy)}</span>
                 <span class="queue-chip">${escapeHtml(rankingChip)}</span>
+                <span class="queue-chip">${escapeHtml(transportLabel)}</span>
                 <span class="queue-chip">${escapeHtml("Chainlist")}</span>
               </div>
               <p class="rpc-node-url">${escapeHtml(candidate.url)}</p>
@@ -3721,7 +3726,6 @@ function renderRpcNodes() {
   const chainGroups = buildRpcChainGroups();
   renderRpcOperationsOverview(chainGroups);
   renderRpcBroadcastAdvisor(chainGroups);
-  renderRpcChainCommandGrid(chainGroups);
 
   rpcList.innerHTML = chainGroups.length
     ? chainGroups

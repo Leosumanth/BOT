@@ -156,8 +156,12 @@ function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function isSocketRpcUrl(rpcUrl) {
+  return /^wss?:\/\//i.test(String(rpcUrl || "").trim());
+}
+
 function createProviderForRpcUrl(rpcUrl) {
-  return /^wss?:\/\//i.test(String(rpcUrl || ""))
+  return isSocketRpcUrl(rpcUrl)
     ? new ethers.WebSocketProvider(rpcUrl)
     : new ethers.JsonRpcProvider(rpcUrl);
 }
@@ -423,7 +427,7 @@ function normalizeChainlistRpcUrl(entry) {
           ? entry.rpc
           : "";
   const normalized = String(rawValue || "").trim();
-  if (!normalized || !/^https?:\/\//i.test(normalized)) {
+  if (!normalized || !/^(https?|wss?):\/\//i.test(normalized)) {
     return null;
   }
 
@@ -440,6 +444,40 @@ function normalizeChainlistRpcUrl(entry) {
   } catch {
     return null;
   }
+}
+
+function selectChainlistProbeUrls(rpcUrls = [], probeBudget = 0) {
+  const budget = Math.max(1, Number(probeBudget) || 0);
+  const socketUrls = [];
+  const standardUrls = [];
+
+  rpcUrls.forEach((rpcUrl) => {
+    if (isSocketRpcUrl(rpcUrl)) {
+      socketUrls.push(rpcUrl);
+      return;
+    }
+
+    standardUrls.push(rpcUrl);
+  });
+
+  const selected = [];
+  const seen = new Set();
+  const addUrl = (rpcUrl) => {
+    if (!rpcUrl || seen.has(rpcUrl) || selected.length >= budget) {
+      return;
+    }
+
+    seen.add(rpcUrl);
+    selected.push(rpcUrl);
+  };
+
+  // Reserve part of the probe budget for websocket endpoints when Chainlist provides them.
+  const guaranteedSocketCount = Math.min(socketUrls.length, Math.max(1, Math.ceil(budget / 4)));
+  socketUrls.slice(0, guaranteedSocketCount).forEach(addUrl);
+  standardUrls.forEach(addUrl);
+  socketUrls.slice(guaranteedSocketCount).forEach(addUrl);
+
+  return selected;
 }
 
 function rankRpcNodesByLatency(rpcNodes = []) {
@@ -844,7 +882,7 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
     throw new Error(`All published Chainlist RPC URLs for ${chain.label} are already configured`);
   }
 
-  const candidateUrls = freshUrls.slice(0, probeBudget);
+  const candidateUrls = selectChainlistProbeUrls(freshUrls, probeBudget);
   const probeResults = await Promise.all(
     candidateUrls.map(async (rpcUrl) => {
       const candidate = {
@@ -865,24 +903,51 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
     })
   );
 
-  const rankedCandidates = rankRpcNodesByLatency(probeResults).slice(0, resultLimit);
+  const rankedCandidates = rankRpcNodesByLatency(probeResults);
+  const recommendedCandidate =
+    rankedCandidates.find((candidate) => candidate.lastHealth?.status === "healthy") || rankedCandidates[0] || null;
+  const healthySocketCandidate =
+    rankedCandidates.find(
+      (candidate) => candidate.lastHealth?.status === "healthy" && isSocketRpcUrl(candidate.url)
+    ) || null;
+  const previewCandidates = [];
+  const previewUrls = new Set();
+  const pushPreviewCandidate = (candidate) => {
+    if (!candidate || previewUrls.has(candidate.url) || previewCandidates.length >= resultLimit) {
+      return;
+    }
+
+    previewUrls.add(candidate.url);
+    previewCandidates.push(candidate);
+  };
+
+  pushPreviewCandidate(recommendedCandidate);
+  pushPreviewCandidate(healthySocketCandidate);
+  rankedCandidates.forEach(pushPreviewCandidate);
+
   const namedCandidates = [];
-  rankedCandidates.forEach((candidate, index) => {
+  previewCandidates.forEach((candidate) => {
+    const originalRank = rankedCandidates.findIndex((entry) => entry.url === candidate.url) + 1;
     namedCandidates.push({
       ...candidate,
       name: buildUniqueRpcNodeName(candidate.name, namedCandidates),
-      recommended: index === 0 && candidate.lastHealth?.status === "healthy",
-      rank: index + 1
+      recommended: candidate.url === recommendedCandidate?.url && candidate.lastHealth?.status === "healthy",
+      rank: originalRank > 0 ? originalRank : null
     });
   });
 
   return {
     chain,
     publishedCount: publishedUrls.length,
+    publishedSocketCount: publishedUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl)).length,
     skippedExistingCount,
     skippedProbeBudgetCount: Math.max(0, freshUrls.length - candidateUrls.length),
     probedCount: candidateUrls.length,
+    probedSocketCount: candidateUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl)).length,
     healthyCount: probeResults.filter((candidate) => candidate.lastHealth?.status === "healthy").length,
+    healthySocketCount: probeResults.filter(
+      (candidate) => candidate.lastHealth?.status === "healthy" && isSocketRpcUrl(candidate.url)
+    ).length,
     candidates: namedCandidates
   };
 }

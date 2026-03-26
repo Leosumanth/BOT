@@ -522,15 +522,15 @@ body[data-current-view="rpc"] .topbar {
 
 body[data-current-view="settings"] .view-header h2,
 body[data-current-view="rpc"] .view-header h2 {
-  font-size: clamp(38px, 4vw, 54px);
-  line-height: 1.02;
+  font-size: clamp(34px, 3.6vw, 48px);
+  line-height: 1.04;
 }
 
 body[data-current-view="settings"] .view-subtitle,
 body[data-current-view="rpc"] .view-subtitle {
   max-width: 940px;
-  font-size: 18px;
-  line-height: 1.65;
+  font-size: 17px;
+  line-height: 1.58;
   color: #9db2ca;
 }
 
@@ -599,7 +599,8 @@ body[data-current-view="rpc"] .view-subtitle {
 
 .settings-shell {
   display: grid;
-  gap: 22px;
+  gap: 18px;
+  padding: 18px;
 }
 
 .settings-layout {
@@ -607,34 +608,34 @@ body[data-current-view="rpc"] .view-subtitle {
 }
 
 .settings-panel {
-  gap: 18px;
+  gap: 16px;
 }
 
 .settings-card {
   display: grid;
-  gap: 14px;
-  padding: 20px;
+  gap: 12px;
+  padding: 16px;
 }
 
 .settings-card-header {
   align-items: flex-start;
-  gap: 18px;
+  gap: 14px;
 }
 
 .settings-card-header > div {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .settings-card h4 {
-  font-size: 28px;
-  line-height: 1.08;
+  font-size: 24px;
+  line-height: 1.12;
   letter-spacing: 0.01em;
 }
 
 .settings-card .helper-copy {
-  font-size: 16px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 1.58;
 }
 
 .settings-field {
@@ -642,9 +643,9 @@ body[data-current-view="rpc"] .view-subtitle {
 }
 
 .settings-field input {
-  min-height: 60px;
-  padding: 15px 18px;
-  font-size: 17px;
+  min-height: 54px;
+  padding: 13px 16px;
+  font-size: 16px;
   border-color: rgba(124, 223, 255, 0.18);
 }
 
@@ -653,20 +654,20 @@ body[data-current-view="rpc"] .view-subtitle {
 }
 
 .settings-field-note {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .settings-status-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 0 16px;
+  min-height: 36px;
+  padding: 0 14px;
   border-radius: 999px;
   border: 1px solid rgba(124, 223, 255, 0.16);
   background: rgba(255, 255, 255, 0.04);
   color: #c4d8eb;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -708,9 +709,9 @@ body[data-current-view="rpc"] .view-subtitle {
 
 .settings-actions .ghost-button,
 .settings-actions .primary-button {
-  min-height: 54px;
-  padding: 0 20px;
-  font-size: 15px;
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -2694,11 +2695,11 @@ body[data-auth-state="locked"] .assistant-root {
 
   body[data-current-view="settings"] .view-subtitle,
   body[data-current-view="rpc"] .view-subtitle {
-    font-size: 16px;
+    font-size: 15px;
   }
 
   .settings-card h4 {
-    font-size: 24px;
+    font-size: 22px;
   }
 
   .settings-footer {

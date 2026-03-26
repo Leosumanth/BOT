@@ -307,6 +307,22 @@
           </div>
 
           <div class="stack-list rpc-ops-shell">
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Mint Broadcast Command</h3>
+                  <p class="helper-copy">
+                    Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
+                  </p>
+                </div>
+                <div class="queue-actions">
+                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Pulse Mesh</button>
+                </div>
+              </div>
+              <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
+              <div id="rpc-broadcast-advisor" class="rpc-advisory-grid"></div>
+            </section>
+
             <div class="content-grid rpc-advanced-grid">
               <section class="surface" data-tilt>
                 <div class="surface-header rpc-builder-header">
@@ -367,36 +383,7 @@
                   </div>
                 </form>
               </section>
-
-              <section class="surface" data-tilt>
-                <div class="surface-header">
-                  <div>
-                    <h3>Chain Command Matrix</h3>
-                    <p class="helper-copy">
-                      Rank primaries, hot failovers, websocket listeners, and chain-by-chain broadcast depth.
-                    </p>
-                  </div>
-                  <span id="rpc-chain-command-caption" class="muted-copy">No chain mesh yet</span>
-                </div>
-                <div id="rpc-chain-command-grid" class="rpc-chain-command-grid"></div>
-              </section>
             </div>
-
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Mint Broadcast Command</h3>
-                  <p class="helper-copy">
-                    Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
-                  </p>
-                </div>
-                <div class="queue-actions">
-                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Pulse Mesh</button>
-                </div>
-              </div>
-              <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
-              <div id="rpc-broadcast-advisor" class="rpc-advisory-grid"></div>
-            </section>
 
             <section class="surface" data-tilt>
               <div class="surface-header">
