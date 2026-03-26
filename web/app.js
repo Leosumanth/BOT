@@ -671,6 +671,7 @@ function chainLabel(chainKey) {
 
 const rpcChainAliases = {
   ethereum: ["ethereum", "eth", "mainnet", "mainnet eth", "eth mainnet"],
+  bsc: ["bsc", "bnb", "bnb chain", "binance smart chain", "bnb smart chain"],
   sepolia: ["sepolia", "eth sepolia", "ethereum sepolia"],
   base: ["base", "base mainnet"],
   base_sepolia: ["base sepolia", "base testnet"],
@@ -2431,11 +2432,8 @@ function renderRpcDiscoverySummary() {
   } else {
     const chips = [
       `${Number(summary.published || 0)} published`,
-      Number(summary.publishedSocketCount || 0) > 0 ? `${Number(summary.publishedSocketCount || 0)} ws published` : null,
       `${Number(summary.probed || 0)} probed`,
-      Number(summary.probedSocketCount || 0) > 0 ? `${Number(summary.probedSocketCount || 0)} ws probed` : null,
       `${Number(summary.healthy || 0)} healthy`,
-      Number(summary.healthySocketCount || 0) > 0 ? `${Number(summary.healthySocketCount || 0)} ws healthy` : null,
       Number(summary.skippedExisting || 0) > 0 ? `${Number(summary.skippedExisting)} already saved` : null,
       Number(summary.skippedProbeBudget || 0) > 0 ? `${Number(summary.skippedProbeBudget)} unprobed` : null
     ].filter(Boolean);
@@ -2514,7 +2512,20 @@ function renderRpcDiscoveryCandidates() {
     return;
   }
 
-  const filteredCandidates = rpcDiscoveryCandidatesByTransport(rpcDiscoveryState.candidates || []);
+  if (rpcDiscoveryState.summary?.transportUnavailable) {
+    const transportLabel = rpcDiscoveryState.transportFilter === "ws" ? "websocket" : "normal";
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>No ${escapeHtml(transportLabel)} RPCs published</h3>
+        <p>Chainlist does not currently publish ${escapeHtml(transportLabel)} RPC URLs for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  const filteredCandidates = healthyVisibleRpcDiscoveryCandidates();
   if (filteredCandidates.length === 0) {
     if (rpcDiscoveryState.summary?.allConfigured) {
       rpcInlineCandidateList.innerHTML = `
@@ -2534,8 +2545,8 @@ function renderRpcDiscoveryCandidates() {
         : "normal RPCs";
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
-        <h3>No ${escapeHtml(transportLabel)} ready</h3>
-        <p>No scanned ${escapeHtml(transportLabel)} are available for ${escapeHtml(rpcDiscoveryState.chain.label)} in the current result set.</p>
+        <h3>No healthy ${escapeHtml(transportLabel)} ready</h3>
+        <p>The live probe did not find a healthy low-latency ${escapeHtml(transportLabel)} endpoint for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -2549,17 +2560,15 @@ function renderRpcDiscoveryCandidates() {
       const isSelected = selectedUrls.has(candidate.url);
       const rankingChip = candidate.recommended ? "Recommended" : `Rank #${candidate.rank || "?"}`;
       const transportLabel = isSocketRpcUrl(candidate.url) ? "WebSocket" : "HTTPS";
-      const isHealthy = candidate.lastHealth?.status === "healthy";
 
       return `
-        <label class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""} ${isHealthy ? "" : "is-disabled"}">
+        <label class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""}">
           <div class="rpc-candidate-head">
             <div class="rpc-candidate-select">
               <input
                 type="checkbox"
                 data-rpc-discovery-toggle="${escapeHtml(candidate.url)}"
                 ${isSelected ? "checked" : ""}
-                ${isHealthy ? "" : "disabled"}
               />
             </div>
             <div class="rpc-candidate-copy">
@@ -2645,6 +2654,7 @@ async function runRpcDiscoveryScan(options = {}) {
     return;
   }
 
+  const transportFilter = String(rpcDiscoveryState.transportFilter || "http");
   const query = String(rpcChainSearchInput.value || "").trim();
   const normalizedQuery = normalizeChainSearchValue(query);
   rpcDiscoveryState.query = query;
@@ -2701,8 +2711,9 @@ async function runRpcDiscoveryScan(options = {}) {
       body: JSON.stringify({
         chainKey: localMatch?.chain?.key || "",
         query,
-        limit: 8,
-        probeBudget: 20,
+        transportFilter,
+        limit: transportFilter === "ws" ? 6 : 8,
+        probeBudget: transportFilter === "ws" ? 8 : 12,
         forceRefresh
       }),
       quiet: true
@@ -2746,7 +2757,9 @@ async function runRpcDiscoveryScan(options = {}) {
 
     const healthyCount = Number(payload.healthy || 0);
     setRpcDetectMessage(
-      payload.allConfigured
+      payload.transportUnavailable
+        ? `${resolvedChain.label} matched, but Chainlist does not currently publish ${transportFilter === "ws" ? "websocket" : "normal"} RPC URLs for this chain.`
+        : payload.allConfigured
         ? `${resolvedChain.label} matched. All published Chainlist RPCs for this chain are already configured.`
         : healthyCount > 0
         ? `${resolvedChain.label} matched. The recommended RPC is highlighted, and all healthy results are preselected so you can uncheck any you do not want.`
@@ -3106,8 +3119,9 @@ async function loadChainlistRpcCandidates(options = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chainKey,
+        transportFilter: rpcDiscoveryState.transportFilter || "http",
         limit: 8,
-        probeBudget: 20,
+        probeBudget: rpcDiscoveryState.transportFilter === "ws" ? 8 : 12,
         forceRefresh
       })
     });
@@ -5548,6 +5562,11 @@ if (rpcTransportTabs) {
 
       rpcDiscoveryState.transportFilter = nextFilter;
       renderRpcTransportTabs();
+      if (rpcChainSearchInput.value.trim()) {
+        void runRpcDiscoveryScan();
+        return;
+      }
+
       renderRpcDiscoverySummary();
       renderRpcDiscoveryCandidates();
     });

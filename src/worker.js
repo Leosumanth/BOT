@@ -10,6 +10,7 @@ const { decryptSecret } = require("./security");
 
 const chainCatalog = [
   { key: "ethereum", label: "Ethereum", chainId: 1 },
+  { key: "bsc", label: "BNB Smart Chain", chainId: 56 },
   { key: "sepolia", label: "Sepolia", chainId: 11155111 },
   { key: "base", label: "Base", chainId: 8453 },
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },

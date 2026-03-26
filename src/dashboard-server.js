@@ -103,6 +103,7 @@ const mintPhaseGasProfiles = {
 const clients = new Set();
 const chainCatalog = [
   { key: "ethereum", label: "Ethereum", chainId: 1 },
+  { key: "bsc", label: "BNB Smart Chain", chainId: 56 },
   { key: "sepolia", label: "Sepolia", chainId: 11155111 },
   { key: "base", label: "Base", chainId: 8453 },
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
@@ -176,6 +177,19 @@ function createId(prefix) {
 
 function isSocketRpcUrl(rpcUrl) {
   return /^wss?:\/\//i.test(String(rpcUrl || "").trim());
+}
+
+function normalizeRpcTransportFilter(transportFilter) {
+  const normalized = String(transportFilter || "http").trim().toLowerCase();
+  if (normalized === "ws") {
+    return "ws";
+  }
+
+  if (normalized === "all") {
+    return "all";
+  }
+
+  return "http";
 }
 
 function createProviderForRpcUrl(rpcUrl) {
@@ -464,8 +478,22 @@ function normalizeChainlistRpcUrl(entry) {
   }
 }
 
-function selectChainlistProbeUrls(rpcUrls = [], probeBudget = 0) {
+function filterRpcUrlsByTransport(rpcUrls = [], transportFilter = "http") {
+  const normalizedFilter = normalizeRpcTransportFilter(transportFilter);
+  if (normalizedFilter === "ws") {
+    return rpcUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl));
+  }
+
+  if (normalizedFilter === "all") {
+    return rpcUrls;
+  }
+
+  return rpcUrls.filter((rpcUrl) => !isSocketRpcUrl(rpcUrl));
+}
+
+function selectChainlistProbeUrls(rpcUrls = [], probeBudget = 0, transportFilter = "http") {
   const budget = Math.max(1, Number(probeBudget) || 0);
+  const normalizedFilter = normalizeRpcTransportFilter(transportFilter);
   const socketUrls = [];
   const standardUrls = [];
 
@@ -488,6 +516,16 @@ function selectChainlistProbeUrls(rpcUrls = [], probeBudget = 0) {
     seen.add(rpcUrl);
     selected.push(rpcUrl);
   };
+
+  if (normalizedFilter === "ws") {
+    socketUrls.forEach(addUrl);
+    return selected;
+  }
+
+  if (normalizedFilter === "http") {
+    standardUrls.forEach(addUrl);
+    return selected;
+  }
 
   // Reserve part of the probe budget for websocket endpoints when Chainlist provides them.
   const guaranteedSocketCount = Math.min(socketUrls.length, Math.max(1, Math.ceil(budget / 4)));
@@ -910,6 +948,7 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
     throw new Error("Choose a chain before scanning Chainlist RPCs");
   }
 
+  const transportFilter = normalizeRpcTransportFilter(options.transportFilter);
   const resultLimit = Math.min(10, Math.max(1, Number(options.limit || 6)));
   const probeBudget = Math.min(30, Math.max(resultLimit, Number(options.probeBudget || resultLimit * 4)));
   const chainlistCatalog =
@@ -919,9 +958,28 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
     throw new Error(`Chainlist does not currently publish RPCs for ${chain.label}`);
   }
 
-  const publishedUrls = extractChainlistRpcUrls(chainlistEntry);
-  if (publishedUrls.length === 0) {
+  const allPublishedUrls = extractChainlistRpcUrls(chainlistEntry);
+  if (allPublishedUrls.length === 0) {
     throw new Error(`Chainlist does not currently publish usable RPC URLs for ${chain.label}`);
+  }
+
+  const publishedUrls = filterRpcUrlsByTransport(allPublishedUrls, transportFilter);
+  if (publishedUrls.length === 0) {
+    return {
+      chain,
+      transportFilter,
+      publishedCount: 0,
+      publishedSocketCount: 0,
+      skippedExistingCount: 0,
+      skippedProbeBudgetCount: 0,
+      probedCount: 0,
+      probedSocketCount: 0,
+      healthyCount: 0,
+      healthySocketCount: 0,
+      allConfigured: false,
+      transportUnavailable: true,
+      candidates: []
+    };
   }
 
   const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
@@ -931,6 +989,7 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
   if (freshUrls.length === 0) {
     return {
       chain,
+      transportFilter,
       publishedCount: publishedUrls.length,
       publishedSocketCount: publishedUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl)).length,
       skippedExistingCount,
@@ -940,11 +999,12 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
       healthyCount: 0,
       healthySocketCount: 0,
       allConfigured: true,
+      transportUnavailable: false,
       candidates: []
     };
   }
 
-  const candidateUrls = selectChainlistProbeUrls(freshUrls, probeBudget);
+  const candidateUrls = selectChainlistProbeUrls(freshUrls, probeBudget, transportFilter);
   const probeResults = await Promise.all(
     candidateUrls.map(async (rpcUrl) => {
       const candidate = {
@@ -968,10 +1028,6 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
   const rankedCandidates = rankRpcNodesByLatency(probeResults);
   const recommendedCandidate =
     rankedCandidates.find((candidate) => candidate.lastHealth?.status === "healthy") || rankedCandidates[0] || null;
-  const healthySocketCandidate =
-    rankedCandidates.find(
-      (candidate) => candidate.lastHealth?.status === "healthy" && isSocketRpcUrl(candidate.url)
-    ) || null;
   const previewCandidates = [];
   const previewUrls = new Set();
   const pushPreviewCandidate = (candidate) => {
@@ -984,7 +1040,6 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
   };
 
   pushPreviewCandidate(recommendedCandidate);
-  pushPreviewCandidate(healthySocketCandidate);
   rankedCandidates.forEach(pushPreviewCandidate);
 
   const namedCandidates = [];
@@ -1000,6 +1055,7 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
 
   return {
     chain,
+    transportFilter,
     publishedCount: publishedUrls.length,
     publishedSocketCount: publishedUrls.filter((rpcUrl) => isSocketRpcUrl(rpcUrl)).length,
     skippedExistingCount,
@@ -1011,6 +1067,7 @@ async function collectChainlistRpcCandidates(chain, options = {}) {
       (candidate) => candidate.lastHealth?.status === "healthy" && isSocketRpcUrl(candidate.url)
     ).length,
     allConfigured: false,
+    transportUnavailable: false,
     candidates: namedCandidates
   };
 }
@@ -6220,6 +6277,7 @@ async function handleChainlistRpcImport(request, response) {
     const preview = await collectChainlistRpcCandidates(chain, {
       limit: importLimit,
       probeBudget: Math.max(importLimit * 4, importLimit),
+      transportFilter: payload.transportFilter,
       forceRefresh: payload.forceRefresh,
       chainlistCatalog: resolvedChain.chainlistCatalog,
       chainlistEntry: resolvedChain.chainlistEntry
@@ -6281,6 +6339,7 @@ async function handleChainlistRpcCandidates(request, response) {
     const preview = await collectChainlistRpcCandidates(chain, {
       limit: payload.limit,
       probeBudget: payload.probeBudget,
+      transportFilter: payload.transportFilter,
       forceRefresh: payload.forceRefresh,
       chainlistCatalog: resolvedChain.chainlistCatalog,
       chainlistEntry: resolvedChain.chainlistEntry
@@ -6303,6 +6362,8 @@ async function handleChainlistRpcCandidates(request, response) {
       healthy: preview.healthyCount,
       healthySocketCount: preview.healthySocketCount,
       allConfigured: preview.allConfigured,
+      transportFilter: preview.transportFilter,
+      transportUnavailable: preview.transportUnavailable,
       candidates: preview.candidates
     });
   } catch (error) {
