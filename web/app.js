@@ -1710,6 +1710,14 @@ function assistantUsesSavedDashboardKey() {
   return state.settings.openaiApiKeySource === "saved";
 }
 
+function apiKeyHealthHasError(healthStatus) {
+  return String(healthStatus || "").trim().toLowerCase() === "error";
+}
+
+function apiKeySourceLabel(source) {
+  return source === "saved" ? "Saved" : source === "env" ? "Environment" : "Current";
+}
+
 function assistantAvailability() {
   if (!state.session.authenticated && state.session.authRequired !== false) {
     return {
@@ -1738,6 +1746,16 @@ function assistantAvailability() {
       status: "Save an OpenAI API key in Settings to enable the live operator assistant.",
       emptyTitle: "Saved key required",
       emptyCopy: "Operator AI uses the OpenAI key saved in the dashboard settings."
+    };
+  }
+
+  if (apiKeyHealthHasError(state.settings.openaiApiKeyHealthStatus)) {
+    return {
+      ready: false,
+      fab: "OpenAI key invalid",
+      status: "The saved OpenAI API key failed validation. Replace it in Settings to re-enable the live operator assistant.",
+      emptyTitle: "OpenAI key invalid",
+      emptyCopy: "Replace the saved OpenAI API key in Settings, then I can answer questions and control the app again."
     };
   }
 
@@ -2466,67 +2484,108 @@ function renderLogs() {
 }
 
 function buildFeatureAlerts() {
-  const unavailableFeatures = [];
+  const missingFeatures = [];
+  const failingFeatures = [];
 
-  if (!state.settings.openaiApiKeyConfigured) {
-    unavailableFeatures.push({
-      label: "OpenAI assistant",
-      keyLabel: "OpenAI API key"
-    });
-  }
-
-  if (!state.settings.explorerApiKeyConfigured) {
-    unavailableFeatures.push({
-      label: "Explorer ABI fetches",
-      keyLabel: "Etherscan API key"
-    });
-  }
-
-  if (!state.settings.alchemyApiKeyConfigured) {
-    unavailableFeatures.push({
-      label: "Alchemy RPC import",
-      keyLabel: "Alchemy API key"
-    });
-  }
-
-  if (!state.settings.drpcApiKeyConfigured) {
-    unavailableFeatures.push({
-      label: "dRPC RPC import",
-      keyLabel: "dRPC API key"
-    });
-  }
-
-  if (!state.settings.openseaApiKeyConfigured) {
-    unavailableFeatures.push({
-      label: "OpenSea discovery",
-      keyLabel: "OpenSea API key"
-    });
-  }
-
-  if (!unavailableFeatures.length) {
-    return [];
-  }
-
-  if (unavailableFeatures.length === 1) {
-    const [feature] = unavailableFeatures;
-    return [
-      {
-        severity: "warning",
-        title: `${feature.label} unavailable`,
-        detail: `Add the ${feature.keyLabel} in Settings to enable ${feature.label.toLowerCase()}.`
-      }
-    ];
-  }
-
-  return [
-    {
-      severity: "warning",
-      title: "Features unavailable",
-      detail: `Configure the missing keys in Settings to enable ${formatLabelList(
-        unavailableFeatures.map((feature) => feature.label)
-      )}.`
+  function registerFeature({ label, keyLabel, configured, healthy, healthStatus }) {
+    if (!configured) {
+      missingFeatures.push({
+        label,
+        keyLabel
+      });
+      return;
     }
-  ];
+
+    if (healthy === false && apiKeyHealthHasError(healthStatus)) {
+      failingFeatures.push({
+        label,
+        keyLabel
+      });
+    }
+  }
+
+  registerFeature({
+    label: "OpenAI assistant",
+    keyLabel: "OpenAI API key",
+    configured: state.settings.openaiApiKeyConfigured,
+    healthy: state.settings.openaiApiKeyHealthy,
+    healthStatus: state.settings.openaiApiKeyHealthStatus
+  });
+
+  registerFeature({
+    label: "Explorer ABI fetches",
+    keyLabel: "Etherscan API key",
+    configured: state.settings.explorerApiKeyConfigured,
+    healthy: state.settings.explorerApiKeyHealthy,
+    healthStatus: state.settings.explorerApiKeyHealthStatus
+  });
+
+  registerFeature({
+    label: "Alchemy RPC import",
+    keyLabel: "Alchemy API key",
+    configured: state.settings.alchemyApiKeyConfigured,
+    healthy: state.settings.alchemyApiKeyHealthy,
+    healthStatus: state.settings.alchemyApiKeyHealthStatus
+  });
+
+  registerFeature({
+    label: "dRPC RPC import",
+    keyLabel: "dRPC API key",
+    configured: state.settings.drpcApiKeyConfigured,
+    healthy: state.settings.drpcApiKeyHealthy,
+    healthStatus: state.settings.drpcApiKeyHealthStatus
+  });
+
+  registerFeature({
+    label: "OpenSea discovery",
+    keyLabel: "OpenSea API key",
+    configured: state.settings.openseaApiKeyConfigured,
+    healthy: state.settings.openseaApiKeyHealthy,
+    healthStatus: state.settings.openseaApiKeyHealthStatus
+  });
+
+  const alerts = [];
+
+  if (failingFeatures.length === 1) {
+    const [feature] = failingFeatures;
+    alerts.push({
+      severity: "warning",
+      title: `${feature.label} unavailable`,
+      detail: `The current ${feature.keyLabel} failed validation. Replace it with a working key to restore ${feature.label.toLowerCase()}.`
+    });
+  } else if (failingFeatures.length > 1) {
+    alerts.push({
+      severity: "warning",
+      title: "Features failing validation",
+      detail: `Replace the current keys to restore ${formatLabelList(
+        failingFeatures.map((feature) => feature.label)
+      )}.`
+    });
+  }
+
+  if (!missingFeatures.length) {
+    return alerts;
+  }
+
+  if (missingFeatures.length === 1) {
+    const [feature] = missingFeatures;
+    alerts.push({
+      severity: "warning",
+      title: `${feature.label} unavailable`,
+      detail: `Add the ${feature.keyLabel} in Settings to enable ${feature.label.toLowerCase()}.`
+    });
+    return alerts;
+  }
+
+  alerts.push({
+    severity: "warning",
+    title: "Features unavailable",
+    detail: `Configure the missing keys in Settings to enable ${formatLabelList(
+      missingFeatures.map((feature) => feature.label)
+    )}.`
+  });
+
+  return alerts;
 }
 
 function buildSystemAlerts(telemetry) {
@@ -5276,7 +5335,15 @@ function renderRpcNodes() {
   });
 }
 
-function setApiKeyStatus({ input, statusNode, source, message = null, pendingValue = "", pendingValidated = false }) {
+function setApiKeyStatus({
+  input,
+  statusNode,
+  source,
+  healthStatus = "missing",
+  message = null,
+  pendingValue = "",
+  pendingValidated = false
+}) {
   let status = "empty";
   let text = "Not configured";
 
@@ -5297,6 +5364,9 @@ function setApiKeyStatus({ input, statusNode, source, message = null, pendingVal
   } else if (pendingValue) {
     text = pendingValidated ? "Verified key hidden until you save" : "Pending key hidden until you test it";
     status = "draft";
+  } else if (source && apiKeyHealthHasError(healthStatus)) {
+    text = `${apiKeySourceLabel(source)} key failed validation`;
+    status = "error";
   } else if (source === "saved") {
     text = "Saved key available";
     status = "saved";
@@ -5313,6 +5383,7 @@ function syncApiKeyControls({
   input,
   deleteButton,
   source,
+  healthStatus = "missing",
   placeholders,
   deleteLabel,
   pendingValue = "",
@@ -5331,9 +5402,13 @@ function syncApiKeyControls({
   }
 
   if (source === "saved") {
-    input.placeholder = placeholders.saved;
+    input.placeholder = apiKeyHealthHasError(healthStatus)
+      ? "Saved key failed validation. Enter a new key to replace it."
+      : placeholders.saved;
   } else if (source === "env") {
-    input.placeholder = placeholders.env;
+    input.placeholder = apiKeyHealthHasError(healthStatus)
+      ? "Loaded from .env, but the key failed validation. Enter a new key to override it."
+      : placeholders.env;
   } else {
     input.placeholder = placeholders.empty;
   }
@@ -5348,6 +5423,7 @@ function setExplorerKeyStatus(message = null) {
     input: explorerApiKeyInput,
     statusNode: explorerConfigStatus,
     source: state.settings.explorerApiKeySource,
+    healthStatus: state.settings.explorerApiKeyHealthStatus,
     message,
     pendingValue: getApiKeyDraft("explorer").value,
     pendingValidated: isApiKeyDraftValidated("explorer")
@@ -5359,6 +5435,7 @@ function syncExplorerKeyControls() {
     input: explorerApiKeyInput,
     deleteButton: deleteExplorerKeyButton,
     source: state.settings.explorerApiKeySource,
+    healthStatus: state.settings.explorerApiKeyHealthStatus,
     placeholders: {
       saved: "Saved on server. Enter a new key to replace it.",
       env: "Loaded from .env. Enter a new key to override it.",
@@ -5375,6 +5452,7 @@ function setOpenaiKeyStatus(message = null) {
     input: openaiApiKeyInput,
     statusNode: openaiConfigStatus,
     source: state.settings.openaiApiKeySource,
+    healthStatus: state.settings.openaiApiKeyHealthStatus,
     message,
     pendingValue: getApiKeyDraft("openai").value,
     pendingValidated: isApiKeyDraftValidated("openai")
@@ -5386,6 +5464,7 @@ function syncOpenaiKeyControls() {
     input: openaiApiKeyInput,
     deleteButton: deleteOpenaiKeyButton,
     source: state.settings.openaiApiKeySource,
+    healthStatus: state.settings.openaiApiKeyHealthStatus,
     placeholders: {
       saved: "Saved on server. Enter a new key to replace it.",
       env: "Loaded from .env. Enter a new key to override it.",
@@ -5402,6 +5481,7 @@ function setAlchemyKeyStatus(message = null) {
     input: alchemyApiKeyInput,
     statusNode: alchemyConfigStatus,
     source: state.settings.alchemyApiKeySource,
+    healthStatus: state.settings.alchemyApiKeyHealthStatus,
     message,
     pendingValue: getApiKeyDraft("alchemy").value,
     pendingValidated: isApiKeyDraftValidated("alchemy")
@@ -5413,6 +5493,7 @@ function syncAlchemyKeyControls() {
     input: alchemyApiKeyInput,
     deleteButton: deleteAlchemyKeyButton,
     source: state.settings.alchemyApiKeySource,
+    healthStatus: state.settings.alchemyApiKeyHealthStatus,
     placeholders: {
       saved: "Saved on server. Enter a new key to replace it.",
       env: "Loaded from .env. Enter a new key to override it.",
@@ -5429,6 +5510,7 @@ function setDrpcKeyStatus(message = null) {
     input: drpcApiKeyInput,
     statusNode: drpcConfigStatus,
     source: state.settings.drpcApiKeySource,
+    healthStatus: state.settings.drpcApiKeyHealthStatus,
     message,
     pendingValue: getApiKeyDraft("drpc").value,
     pendingValidated: isApiKeyDraftValidated("drpc")
@@ -5440,6 +5522,7 @@ function syncDrpcKeyControls() {
     input: drpcApiKeyInput,
     deleteButton: deleteDrpcKeyButton,
     source: state.settings.drpcApiKeySource,
+    healthStatus: state.settings.drpcApiKeyHealthStatus,
     placeholders: {
       saved: "Saved on server. Enter a new key to replace it.",
       env: "Loaded from .env. Enter a new key to override it.",
@@ -5456,6 +5539,7 @@ function setOpenseaKeyStatus(message = null) {
     input: openseaApiKeyInput,
     statusNode: openseaConfigStatus,
     source: state.settings.openseaApiKeySource,
+    healthStatus: state.settings.openseaApiKeyHealthStatus,
     message,
     pendingValue: getApiKeyDraft("opensea").value,
     pendingValidated: isApiKeyDraftValidated("opensea")
@@ -5467,6 +5551,7 @@ function syncOpenseaKeyControls() {
     input: openseaApiKeyInput,
     deleteButton: deleteOpenseaKeyButton,
     source: state.settings.openseaApiKeySource,
+    healthStatus: state.settings.openseaApiKeyHealthStatus,
     placeholders: {
       saved: "Saved on server. Enter a new key to replace it.",
       env: "Loaded from .env. Enter a new key to override it.",
@@ -5564,6 +5649,10 @@ async function runApiKeyTest({
       quiet: summaryMode
     });
 
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
+
     if (usingDraft) {
       stageApiKeyDraft(draftKey, apiKeyValue, { validated: true });
     }
@@ -5594,6 +5683,8 @@ async function runApiKeyTest({
     if (usingDraft) {
       clearApiKeyDraft(draftKey);
       input.value = "";
+    } else {
+      await loadState().catch(() => {});
     }
 
     syncControls();
@@ -5635,8 +5726,6 @@ function withButtonBusyState(button, busyLabel, work) {
 }
 
 function renderSettings() {
-  clearAllApiKeyInputs();
-
   syncExplorerKeyControls();
   setExplorerKeyStatus();
   syncOpenaiKeyControls();

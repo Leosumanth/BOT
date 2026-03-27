@@ -200,6 +200,7 @@ let database = null;
 let initialized = false;
 let appState = null;
 let integrationSecrets = {};
+let integrationHealthState = createDefaultIntegrationHealthState();
 const localTaskRuns = new Map();
 let liveLogs = [];
 let queueCoordinator = null;
@@ -239,6 +240,36 @@ const nativeUsdPriceFetchTimeoutMs = Math.max(
 const nativeUsdPriceUrl =
   process.env.NATIVE_USD_PRICE_URL ||
   "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin&vs_currencies=usd";
+
+function createIntegrationHealthEntry(status = "missing", details = {}) {
+  return {
+    status,
+    healthy: status === "healthy",
+    checkedAt: details.checkedAt || "",
+    error: details.error || ""
+  };
+}
+
+function createDefaultIntegrationHealthState() {
+  return Object.keys(secretStorageKeys).reduce((state, secretName) => {
+    state[secretName] = createIntegrationHealthEntry("missing");
+    return state;
+  }, {});
+}
+
+function setIntegrationHealth(secretName, status, details = {}) {
+  integrationHealthState = {
+    ...integrationHealthState,
+    [secretName]: createIntegrationHealthEntry(status, {
+      ...details,
+      checkedAt: details.checkedAt || new Date().toISOString()
+    })
+  };
+}
+
+function integrationHealthStatus(secretName) {
+  return String(integrationHealthState?.[secretName]?.status || "").trim().toLowerCase();
+}
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1462,6 +1493,9 @@ async function requestRpcAdvisorBrief({ focusChainKey = "", operatorPrompt = "" 
   if (!apiKey) {
     throw new Error("Set an OpenAI API key in Settings or OPENAI_API_KEY in .env to enable the AI RPC advisor.");
   }
+  if (integrationHealthStatus("openaiApiKey") === "error") {
+    throw new Error("The current OpenAI API key failed validation. Replace it in Settings before using the AI RPC advisor.");
+  }
 
   const model = String(process.env.OPENAI_RPC_ADVISOR_MODEL || "gpt-5-mini-2025-08-07").trim();
   const context = buildRpcAdvisorContext(focusChainKey);
@@ -2501,6 +2535,9 @@ async function requestOperatorAssistantReply({ message, previousResponseId = "" 
   const apiKey = String(integrationSecrets.openaiApiKey || "").trim();
   if (!apiKey) {
     throw new Error("Save an OpenAI API key in Settings to enable the AI operator.");
+  }
+  if (integrationHealthStatus("openaiApiKey") === "error") {
+    throw new Error("The saved OpenAI API key failed validation. Replace it in Settings to re-enable the AI operator.");
   }
 
   const instructions = [
@@ -5564,7 +5601,7 @@ async function reloadIntegrationSecrets() {
 
 function buildPublicSettings() {
   return {
-    ...buildClientSettings(appState?.settings, integrationSecrets),
+    ...buildClientSettings(appState?.settings, integrationSecrets, integrationHealthState),
     operatorAssistantModel
   };
 }
@@ -5808,6 +5845,7 @@ async function initializeServer() {
   await migrateLegacyStateIfNeeded();
   await ensureAdminUser();
   await reloadAppState();
+  await refreshIntegrationHealthState();
   await initializeQueueMode();
   initialized = true;
   ensureScheduledTaskLoop();
@@ -7260,37 +7298,40 @@ async function handleWalletImport(request, response) {
     }
 
     const knownAddresses = new Set(appState.wallets.map((wallet) => wallet.address.toLowerCase()));
-    const storedWallets = await database.listWallets();
     let imported = 0;
     let skipped = 0;
 
-    for (const privateKey of privateKeys) {
-      const normalizedPrivateKey = validateResolvedPrivateKey(privateKey);
-      const address = deriveAddress(normalizedPrivateKey);
-      if (knownAddresses.has(address.toLowerCase())) {
-        skipped += 1;
-        continue;
+    await database.withTransaction(async (tx) => {
+      const storedWallets = await tx.listWallets();
+
+      for (const privateKey of privateKeys) {
+        const normalizedPrivateKey = validateResolvedPrivateKey(privateKey);
+        const address = deriveAddress(normalizedPrivateKey);
+        if (knownAddresses.has(address.toLowerCase())) {
+          skipped += 1;
+          continue;
+        }
+
+        const nextIndex = storedWallets.length + imported + 1;
+        const label = payload.group ? `${payload.group} ${nextIndex}` : `Wallet ${nextIndex}`;
+
+        await tx.insertWallet({
+          id: createId("wallet"),
+          label,
+          address,
+          addressShort: truncateMiddle(address),
+          secretCiphertext: encryptSecret(normalizedPrivateKey),
+          group: payload.group || "Imported",
+          status: "ready",
+          source: "stored",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+
+        knownAddresses.add(address.toLowerCase());
+        imported += 1;
       }
-
-      const nextIndex = storedWallets.length + imported + 1;
-      const label = payload.group ? `${payload.group} ${nextIndex}` : `Wallet ${nextIndex}`;
-
-      await database.insertWallet({
-        id: createId("wallet"),
-        label,
-        address,
-        addressShort: truncateMiddle(address),
-        secretCiphertext: encryptSecret(normalizedPrivateKey),
-        group: payload.group || "Imported",
-        status: "ready",
-        source: "stored",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
-
-      knownAddresses.add(address.toLowerCase());
-      imported += 1;
-    }
+    });
 
     await reloadAppState();
     emitState();
@@ -8228,122 +8269,244 @@ async function verifyOpenSeaApiKey(apiKey) {
   };
 }
 
+function integrationVerifier(secretName) {
+  switch (secretName) {
+    case "explorerApiKey":
+      return verifyExplorerApiKey;
+    case "openaiApiKey":
+      return verifyOpenAiApiKey;
+    case "alchemyApiKey":
+      return verifyAlchemyApiKey;
+    case "drpcApiKey":
+      return verifyDrpcApiKey;
+    case "openseaApiKey":
+      return verifyOpenSeaApiKey;
+    default:
+      return null;
+  }
+}
+
+async function refreshIntegrationHealthState(options = {}) {
+  const { secretNames = Object.keys(secretStorageKeys) } = options;
+  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+
+  const nextEntries = await Promise.all(
+    secretNames.map(async (secretName) => {
+      const apiKey = String(resolvedSecrets[secretName] || "").trim();
+      if (!apiKey) {
+        return [
+          secretName,
+          createIntegrationHealthEntry("missing", {
+            checkedAt: new Date().toISOString()
+          })
+        ];
+      }
+
+      const verify = integrationVerifier(secretName);
+      if (!verify) {
+        return [
+          secretName,
+          createIntegrationHealthEntry("unknown", {
+            checkedAt: new Date().toISOString()
+          })
+        ];
+      }
+
+      try {
+        await verify(apiKey);
+        return [
+          secretName,
+          createIntegrationHealthEntry("healthy", {
+            checkedAt: new Date().toISOString()
+          })
+        ];
+      } catch (error) {
+        return [
+          secretName,
+          createIntegrationHealthEntry("error", {
+            checkedAt: new Date().toISOString(),
+            error: formatError(error)
+          })
+        ];
+      }
+    })
+  );
+
+  const nextState = {
+    ...integrationHealthState
+  };
+  nextEntries.forEach(([secretName, entry]) => {
+    nextState[secretName] = entry;
+  });
+  integrationHealthState = nextState;
+  return integrationHealthState;
+}
+
+function resolvedKeySource(inputKey, savedKey) {
+  return inputKey ? "input" : savedKey ? "saved" : "env";
+}
+
+function updateIntegrationHealthFromKeyTest(secretName, inputKey, apiKey, error = null) {
+  if (inputKey) {
+    return;
+  }
+
+  if (!apiKey) {
+    setIntegrationHealth(secretName, "missing");
+    return;
+  }
+
+  if (error) {
+    setIntegrationHealth(secretName, "error", {
+      error: formatError(error)
+    });
+    return;
+  }
+
+  setIntegrationHealth(secretName, "healthy");
+}
+
 async function handleExplorerKeyTest(request, response) {
+  let inputKey = "";
+  let apiKey = "";
   try {
     const payload = await readJsonBody(request);
-    const inputKey = String(payload.explorerApiKey || "").trim();
+    inputKey = String(payload.explorerApiKey || "").trim();
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
     const savedKey = String(integrationSecrets.explorerApiKey || "").trim();
-    const apiKey = inputKey || resolvedSecrets.explorerApiKey;
+    apiKey = inputKey || resolvedSecrets.explorerApiKey;
 
     if (!apiKey) {
       throw new Error("Add an Etherscan V2 API key first.");
     }
 
     const result = await verifyExplorerApiKey(apiKey);
+    updateIntegrationHealthFromKeyTest("explorerApiKey", inputKey, apiKey);
 
     sendJson(response, 200, {
       ok: true,
-      source: inputKey ? "input" : savedKey ? "saved" : "env",
-      ...result
+      source: resolvedKeySource(inputKey, savedKey),
+      ...result,
+      settings: buildPublicSettings()
     });
   } catch (error) {
+    updateIntegrationHealthFromKeyTest("explorerApiKey", inputKey, apiKey, error);
     sendJson(response, 400, { error: formatError(error) });
   }
 }
 
 async function handleOpenAiKeyTest(request, response) {
+  let inputKey = "";
+  let apiKey = "";
   try {
     const payload = await readJsonBody(request);
-    const inputKey = String(payload.openaiApiKey || "").trim();
+    inputKey = String(payload.openaiApiKey || "").trim();
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
     const savedKey = String(integrationSecrets.openaiApiKey || "").trim();
-    const apiKey = inputKey || resolvedSecrets.openaiApiKey;
+    apiKey = inputKey || resolvedSecrets.openaiApiKey;
 
     if (!apiKey) {
       throw new Error("Add an OpenAI API key first.");
     }
 
     const result = await verifyOpenAiApiKey(apiKey);
+    updateIntegrationHealthFromKeyTest("openaiApiKey", inputKey, apiKey);
 
     sendJson(response, 200, {
       ok: true,
-      source: inputKey ? "input" : savedKey ? "saved" : "env",
-      ...result
+      source: resolvedKeySource(inputKey, savedKey),
+      ...result,
+      settings: buildPublicSettings()
     });
   } catch (error) {
+    updateIntegrationHealthFromKeyTest("openaiApiKey", inputKey, apiKey, error);
     sendJson(response, 400, { error: formatError(error) });
   }
 }
 
 async function handleAlchemyKeyTest(request, response) {
+  let inputKey = "";
+  let apiKey = "";
   try {
     const payload = await readJsonBody(request);
-    const inputKey = String(payload.alchemyApiKey || "").trim();
+    inputKey = String(payload.alchemyApiKey || "").trim();
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
     const savedKey = String(integrationSecrets.alchemyApiKey || "").trim();
-    const apiKey = inputKey || resolvedSecrets.alchemyApiKey;
+    apiKey = inputKey || resolvedSecrets.alchemyApiKey;
 
     if (!apiKey) {
       throw new Error("Add an Alchemy API key first.");
     }
 
     const result = await verifyAlchemyApiKey(apiKey);
+    updateIntegrationHealthFromKeyTest("alchemyApiKey", inputKey, apiKey);
 
     sendJson(response, 200, {
       ok: true,
-      source: inputKey ? "input" : savedKey ? "saved" : "env",
-      ...result
+      source: resolvedKeySource(inputKey, savedKey),
+      ...result,
+      settings: buildPublicSettings()
     });
   } catch (error) {
+    updateIntegrationHealthFromKeyTest("alchemyApiKey", inputKey, apiKey, error);
     sendJson(response, 400, { error: formatError(error) });
   }
 }
 
 async function handleDrpcKeyTest(request, response) {
+  let inputKey = "";
+  let apiKey = "";
   try {
     const payload = await readJsonBody(request);
-    const inputKey = String(payload.drpcApiKey || "").trim();
+    inputKey = String(payload.drpcApiKey || "").trim();
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
     const savedKey = String(integrationSecrets.drpcApiKey || "").trim();
-    const apiKey = inputKey || resolvedSecrets.drpcApiKey;
+    apiKey = inputKey || resolvedSecrets.drpcApiKey;
 
     if (!apiKey) {
       throw new Error("Add a dRPC API key first.");
     }
 
     const result = await verifyDrpcApiKey(apiKey);
+    updateIntegrationHealthFromKeyTest("drpcApiKey", inputKey, apiKey);
 
     sendJson(response, 200, {
       ok: true,
-      source: inputKey ? "input" : savedKey ? "saved" : "env",
-      ...result
+      source: resolvedKeySource(inputKey, savedKey),
+      ...result,
+      settings: buildPublicSettings()
     });
   } catch (error) {
+    updateIntegrationHealthFromKeyTest("drpcApiKey", inputKey, apiKey, error);
     sendJson(response, 400, { error: formatError(error) });
   }
 }
 
 async function handleOpenSeaKeyTest(request, response) {
+  let inputKey = "";
+  let apiKey = "";
   try {
     const payload = await readJsonBody(request);
-    const inputKey = String(payload.openseaApiKey || "").trim();
+    inputKey = String(payload.openseaApiKey || "").trim();
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
     const savedKey = String(integrationSecrets.openseaApiKey || "").trim();
-    const apiKey = inputKey || resolvedSecrets.openseaApiKey;
+    apiKey = inputKey || resolvedSecrets.openseaApiKey;
 
     if (!apiKey) {
       throw new Error("Add an OpenSea API key first.");
     }
 
     const result = await verifyOpenSeaApiKey(apiKey);
+    updateIntegrationHealthFromKeyTest("openseaApiKey", inputKey, apiKey);
 
     sendJson(response, 200, {
       ok: true,
-      source: inputKey ? "input" : savedKey ? "saved" : "env",
-      ...result
+      source: resolvedKeySource(inputKey, savedKey),
+      ...result,
+      settings: buildPublicSettings()
     });
   } catch (error) {
+    updateIntegrationHealthFromKeyTest("openseaApiKey", inputKey, apiKey, error);
     sendJson(response, 400, { error: formatError(error) });
   }
 }
@@ -8352,6 +8515,7 @@ async function handleExplorerKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.explorerApiKey);
     delete integrationSecrets.explorerApiKey;
+    setIntegrationHealth("explorerApiKey", "missing");
     emitState();
     sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
@@ -8363,6 +8527,7 @@ async function handleOpenAiKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.openaiApiKey);
     delete integrationSecrets.openaiApiKey;
+    setIntegrationHealth("openaiApiKey", "missing");
     emitState();
     sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
@@ -8374,6 +8539,7 @@ async function handleAlchemyKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.alchemyApiKey);
     delete integrationSecrets.alchemyApiKey;
+    setIntegrationHealth("alchemyApiKey", "missing");
     emitState();
     sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
@@ -8385,6 +8551,7 @@ async function handleDrpcKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.drpcApiKey);
     delete integrationSecrets.drpcApiKey;
+    setIntegrationHealth("drpcApiKey", "missing");
     emitState();
     sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
@@ -8396,6 +8563,7 @@ async function handleOpenSeaKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.openseaApiKey);
     delete integrationSecrets.openseaApiKey;
+    setIntegrationHealth("openseaApiKey", "missing");
     emitState();
     sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
@@ -8455,6 +8623,7 @@ async function handleSettingsSave(request, response) {
 
       await database.upsertSecret(secretStorageKeys[secretName], encryptSecret(value));
       integrationSecrets[secretName] = value;
+      setIntegrationHealth(secretName, "healthy");
     }
 
     emitState();

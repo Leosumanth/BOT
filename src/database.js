@@ -105,6 +105,84 @@ function createDatabase() {
     return pool.query(text, params);
   }
 
+  async function withTransaction(work) {
+    const client = await pool.connect();
+    const txQuery = (text, params = []) => client.query(text, params);
+    const tx = {
+      async listWallets() {
+        const result = await txQuery(
+          `
+            select id, label, address, address_short, wallet_group, status, source, secret_ciphertext, created_at, updated_at
+            from wallets
+            order by created_at asc
+          `
+        );
+
+        return result.rows.map(mapWalletRow);
+      },
+
+      async findWalletByAddress(address) {
+        const result = await txQuery(
+          `
+            select id, label, address, address_short, wallet_group, status, source, secret_ciphertext, created_at, updated_at
+            from wallets
+            where lower(address) = lower($1)
+            limit 1
+          `,
+          [address]
+        );
+
+        return result.rows[0] ? mapWalletRow(result.rows[0]) : null;
+      },
+
+      async insertWallet(wallet) {
+        await txQuery(
+          `
+            insert into wallets (
+              id,
+              label,
+              address,
+              address_short,
+              secret_ciphertext,
+              wallet_group,
+              status,
+              source,
+              created_at,
+              updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz)
+          `,
+          [
+            wallet.id,
+            wallet.label,
+            wallet.address,
+            wallet.addressShort,
+            wallet.secretCiphertext,
+            wallet.group,
+            wallet.status,
+            wallet.source,
+            wallet.createdAt,
+            wallet.updatedAt
+          ]
+        );
+      }
+    };
+
+    try {
+      await client.query("begin");
+      const result = await work(tx);
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      try {
+        await client.query("rollback");
+      } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async function ensureSchema() {
     await query(`
       create table if not exists app_state (
@@ -668,7 +746,8 @@ function createDatabase() {
     upsertTaskRuntime,
     upsertSecret,
     deleteSecret,
-    upsertUser
+    upsertUser,
+    withTransaction
   };
 }
 

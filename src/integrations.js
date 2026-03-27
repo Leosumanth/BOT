@@ -79,7 +79,7 @@ function resolveIntegrationSecrets(storedSecrets = {}) {
   }, {});
 }
 
-function buildClientSettings(settings, storedSecrets = {}) {
+function buildClientSettings(settings, storedSecrets = {}, integrationHealth = {}) {
   const normalized = normalizeDashboardSettings(settings);
   const resolved = resolveIntegrationSecrets(storedSecrets);
   const storedExplorerApiKey = trimValue(storedSecrets.explorerApiKey, "");
@@ -97,19 +97,59 @@ function buildClientSettings(settings, storedSecrets = {}) {
   const storedOpenSeaApiKey = trimValue(storedSecrets.openseaApiKey, "");
   const envOpenSeaApiKey = trimValue(process.env[secretEnvNames.openseaApiKey], "");
   const openseaApiKeySource = storedOpenSeaApiKey ? "saved" : envOpenSeaApiKey ? "env" : "";
+  const explorerHealth = integrationHealth.explorerApiKey || {};
+  const openaiHealth = integrationHealth.openaiApiKey || {};
+  const alchemyHealth = integrationHealth.alchemyApiKey || {};
+  const drpcHealth = integrationHealth.drpcApiKey || {};
+  const openseaHealth = integrationHealth.openseaApiKey || {};
 
   return {
     ...normalized,
     explorerApiKeyConfigured: Boolean(resolved.explorerApiKey),
     explorerApiKeySource,
+    explorerApiKeyHealthy: explorerHealth.status === "healthy",
+    explorerApiKeyHealthStatus: trimValue(
+      explorerApiKeySource ? explorerHealth.status : "missing",
+      explorerApiKeySource ? "unknown" : "missing"
+    ),
+    explorerApiKeyError: trimValue(explorerHealth.error, ""),
+    explorerApiKeyCheckedAt: trimValue(explorerHealth.checkedAt, ""),
     openaiApiKeyConfigured: Boolean(resolved.openaiApiKey),
     openaiApiKeySource,
+    openaiApiKeyHealthy: openaiHealth.status === "healthy",
+    openaiApiKeyHealthStatus: trimValue(
+      openaiApiKeySource ? openaiHealth.status : "missing",
+      openaiApiKeySource ? "unknown" : "missing"
+    ),
+    openaiApiKeyError: trimValue(openaiHealth.error, ""),
+    openaiApiKeyCheckedAt: trimValue(openaiHealth.checkedAt, ""),
     alchemyApiKeyConfigured: Boolean(resolved.alchemyApiKey),
     alchemyApiKeySource,
+    alchemyApiKeyHealthy: alchemyHealth.status === "healthy",
+    alchemyApiKeyHealthStatus: trimValue(
+      alchemyApiKeySource ? alchemyHealth.status : "missing",
+      alchemyApiKeySource ? "unknown" : "missing"
+    ),
+    alchemyApiKeyError: trimValue(alchemyHealth.error, ""),
+    alchemyApiKeyCheckedAt: trimValue(alchemyHealth.checkedAt, ""),
     drpcApiKeyConfigured: Boolean(resolved.drpcApiKey),
     drpcApiKeySource,
+    drpcApiKeyHealthy: drpcHealth.status === "healthy",
+    drpcApiKeyHealthStatus: trimValue(
+      drpcApiKeySource ? drpcHealth.status : "missing",
+      drpcApiKeySource ? "unknown" : "missing"
+    ),
+    drpcApiKeyError: trimValue(drpcHealth.error, ""),
+    drpcApiKeyCheckedAt: trimValue(drpcHealth.checkedAt, ""),
     openseaApiKeyConfigured: Boolean(resolved.openseaApiKey),
     openseaApiKeySource,
+    openseaApiKeyHealthy: openseaHealth.status === "healthy",
+    openseaApiKeyHealthStatus: trimValue(
+      openseaApiKeySource ? openseaHealth.status : "missing",
+      openseaApiKeySource ? "unknown" : "missing"
+    ),
+    openseaApiKeyError: trimValue(openseaHealth.error, ""),
+    openseaApiKeyCheckedAt: trimValue(openseaHealth.checkedAt, ""),
     openaiRpcAdvisorModel: trimValue(process.env.OPENAI_RPC_ADVISOR_MODEL, "gpt-5-mini-2025-08-07")
   };
 }
