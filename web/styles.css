@@ -1383,6 +1383,37 @@ body[data-current-view="tasks"] .header-input::placeholder {
   align-items: flex-start;
 }
 
+.rpc-builder-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rpc-builder-title-row h3 {
+  margin: 0;
+}
+
+.rpc-lab-alert-badge {
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.rpc-lab-alert-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.92;
+}
+
+.rpc-lab-alert-badge.idle {
+  color: #bdd0e2;
+  border-color: rgba(124, 223, 255, 0.14);
+  background: rgba(255, 255, 255, 0.045);
+}
+
 .rpc-ops-shell {
   gap: 18px;
 }

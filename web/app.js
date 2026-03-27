@@ -121,6 +121,7 @@ const walletBalanceSyncStatus = document.getElementById("wallet-balance-sync-sta
 const rpcForm = document.getElementById("rpc-form");
 const rpcFormTitle = document.getElementById("rpc-form-title");
 const rpcFormSubtitle = document.getElementById("rpc-form-subtitle");
+const rpcLabAlertBadge = document.getElementById("rpc-lab-alert-badge");
 const rpcFormBadge = document.getElementById("rpc-form-badge");
 const rpcCancelButton = document.getElementById("rpc-cancel-button");
 const rpcSubmitButton = document.getElementById("rpc-submit-button");
@@ -4646,6 +4647,82 @@ function buildRpcHealthAlerts(rpcNodes = state.rpcNodes) {
   return alerts;
 }
 
+function buildRpcLabAlertState(rpcNodes = state.rpcNodes) {
+  const enabledNodes = (rpcNodes || []).filter((node) => node.enabled !== false);
+  const downNodes = enabledNodes.filter((node) => node.lastHealth?.status === "error");
+  const slowNodes = enabledNodes.filter(
+    (node) => node.lastHealth?.status === "healthy" && rpcHealthAlertSeverity(node)
+  );
+  const healthyNodes = enabledNodes.filter(
+    (node) => node.lastHealth?.status === "healthy" && !rpcHealthAlertSeverity(node)
+  );
+  const checkedNodes = enabledNodes.filter((node) => node.lastHealth?.checkedAt);
+  const alerts = buildRpcHealthAlerts(enabledNodes);
+
+  if (enabledNodes.length === 0) {
+    return {
+      tone: "idle",
+      label: "No RPCs yet",
+      detail: "Add an RPC endpoint to start live failure and latency monitoring."
+    };
+  }
+
+  if (downNodes.length > 0 || slowNodes.length > 0) {
+    const summaryParts = [];
+    if (downNodes.length > 0) {
+      summaryParts.push(pluralize(downNodes.length, "RPC down", "RPCs down"));
+    }
+    if (slowNodes.length > 0) {
+      summaryParts.push(pluralize(slowNodes.length, "slow RPC", "slow RPCs"));
+    }
+
+    return {
+      tone:
+        downNodes.length > 0 || slowNodes.some((node) => rpcHealthAlertSeverity(node) === "critical")
+          ? "blocked"
+          : "warming",
+      label: summaryParts.join(" · "),
+      detail: alerts.length
+        ? alerts.map((alert) => `${alert.title}: ${alert.detail}`).join(" ")
+        : `Some enabled RPC endpoints are above ${rpcHealthWarningLatencyMs}ms or failing health checks.`
+    };
+  }
+
+  if (healthyNodes.length > 0) {
+    return {
+      tone: "armed",
+      label: "Mesh healthy",
+      detail: `${healthyNodes.length}/${enabledNodes.length} enabled RPC endpoint${enabledNodes.length === 1 ? "" : "s"} are healthy and under ${rpcHealthWarningLatencyMs}ms.`
+    };
+  }
+
+  if (checkedNodes.length > 0) {
+    return {
+      tone: "idle",
+      label: "Health pending",
+      detail: "RPC checks have started, but no healthy endpoint has reported back yet."
+    };
+  }
+
+  return {
+    tone: "idle",
+    label: "Awaiting pulse",
+    detail: "Click Refresh to probe live RPC latency and surface failing endpoints."
+  };
+}
+
+function renderRpcLabAlert(rpcNodes = state.rpcNodes) {
+  if (!rpcLabAlertBadge) {
+    return;
+  }
+
+  const alertState = buildRpcLabAlertState(rpcNodes);
+  rpcLabAlertBadge.className = `queue-chip rpc-lab-alert-badge ${alertState.tone}`;
+  rpcLabAlertBadge.textContent = alertState.label;
+  rpcLabAlertBadge.title = alertState.detail;
+  rpcLabAlertBadge.setAttribute("aria-label", `${alertState.label}. ${alertState.detail}`);
+}
+
 function rpcVisualTone(node) {
   if (node?.lastHealth?.status === "error") {
     return "error";
@@ -5186,6 +5263,7 @@ function renderRpcNodes() {
   }
 
   syncRpcImportButtons();
+  renderRpcLabAlert();
 
   const chainGroups = buildRpcChainGroups();
   renderRpcOperationsOverview(chainGroups);
