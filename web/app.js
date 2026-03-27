@@ -107,6 +107,12 @@ const rpcConfirmSource = document.getElementById("rpc-confirm-source");
 const rpcConfirmLatency = document.getElementById("rpc-confirm-latency");
 const rpcConfirmUrl = document.getElementById("rpc-confirm-url");
 const rpcConfirmNote = document.getElementById("rpc-confirm-note");
+const walletDeleteModal = document.getElementById("wallet-delete-modal");
+const walletDeleteCloseButton = document.getElementById("wallet-delete-close-button");
+const walletDeleteCancelButton = document.getElementById("wallet-delete-cancel-button");
+const walletDeleteSubmitButton = document.getElementById("wallet-delete-submit-button");
+const walletDeleteName = document.getElementById("wallet-delete-name");
+const walletDeleteAddress = document.getElementById("wallet-delete-address");
 const settingsForm = document.getElementById("settings-form");
 const saveSettingsButton = document.getElementById("save-settings-button");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
@@ -266,6 +272,8 @@ let rpcChainlistScan = {
   loading: false,
   summary: null
 };
+let walletDeleteTargetId = "";
+let walletDeletePending = false;
 let currentMintStartDetection = {
   enabled: false,
   config: null
@@ -2432,13 +2440,75 @@ function renderWallets() {
   });
 
   walletList.querySelectorAll("[data-wallet-delete]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        await request(`/api/wallets/${button.dataset.walletDelete}`, { method: "DELETE" });
-        showToast("Wallet removed from local storage.", "success", "Wallet Deleted");
-      } catch {}
+    button.addEventListener("click", () => {
+      openWalletDeleteModal(button.dataset.walletDelete);
     });
   });
+}
+
+function closeWalletDeleteModal() {
+  if (!walletDeleteModal || walletDeletePending) {
+    return;
+  }
+
+  walletDeleteTargetId = "";
+  walletDeleteSubmitButton.disabled = false;
+  walletDeleteCancelButton.disabled = false;
+  walletDeleteCloseButton.disabled = false;
+  walletDeleteSubmitButton.textContent = "Yes, Delete";
+  walletDeleteModal.classList.add("hidden");
+}
+
+function openWalletDeleteModal(walletId) {
+  if (!walletDeleteModal) {
+    return;
+  }
+
+  const wallet = state.wallets.find((entry) => entry.id === walletId);
+  if (!wallet || wallet.source === "env") {
+    return;
+  }
+
+  walletDeleteTargetId = wallet.id;
+  walletDeleteName.textContent = wallet.label || "Saved wallet";
+  walletDeleteAddress.textContent = wallet.address || wallet.addressShort || "-";
+  walletDeleteSubmitButton.disabled = false;
+  walletDeleteCancelButton.disabled = false;
+  walletDeleteCloseButton.disabled = false;
+  walletDeleteSubmitButton.textContent = "Yes, Delete";
+  walletDeleteModal.classList.remove("hidden");
+  initializeMotionSurfaces(walletDeleteModal);
+}
+
+async function submitWalletDelete() {
+  if (!walletDeleteTargetId || walletDeletePending) {
+    return;
+  }
+
+  const wallet = state.wallets.find((entry) => entry.id === walletDeleteTargetId);
+  if (!wallet) {
+    closeWalletDeleteModal();
+    return;
+  }
+
+  walletDeletePending = true;
+  walletDeleteSubmitButton.disabled = true;
+  walletDeleteCancelButton.disabled = true;
+  walletDeleteCloseButton.disabled = true;
+  walletDeleteSubmitButton.textContent = "Deleting...";
+
+  try {
+    await request(`/api/wallets/${wallet.id}`, { method: "DELETE" });
+    walletDeletePending = false;
+    closeWalletDeleteModal();
+    showToast(`${wallet.label || "Wallet"} removed from local storage.`, "success", "Wallet Deleted");
+  } catch {
+    walletDeletePending = false;
+    walletDeleteSubmitButton.disabled = false;
+    walletDeleteCancelButton.disabled = false;
+    walletDeleteCloseButton.disabled = false;
+    walletDeleteSubmitButton.textContent = "Yes, Delete";
+  }
 }
 
 function selectedInspectedWallet() {
@@ -5857,6 +5927,18 @@ rpcConfirmSubmitButton.addEventListener("click", async () => {
 rpcConfirmModal.addEventListener("click", (event) => {
   if (event.target.dataset.closeRpcConfirmModal === "true") {
     closeRpcConfirmModal();
+  }
+});
+
+walletDeleteCloseButton.addEventListener("click", closeWalletDeleteModal);
+walletDeleteCancelButton.addEventListener("click", closeWalletDeleteModal);
+walletDeleteSubmitButton.addEventListener("click", async () => {
+  await submitWalletDelete();
+});
+
+walletDeleteModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeWalletDeleteModal === "true") {
+    closeWalletDeleteModal();
   }
 });
 

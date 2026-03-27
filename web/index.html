@@ -1097,6 +1097,41 @@
       </div>
     </div>
 
+    <div id="wallet-delete-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-wallet-delete-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete Wallet</h3>
+            <p class="muted-copy">
+              Remove this wallet from local storage only after you confirm.
+            </p>
+          </div>
+          <button id="wallet-delete-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Wallet Name</span>
+            <strong id="wallet-delete-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>Address</span>
+            <strong id="wallet-delete-address">-</strong>
+          </div>
+        </div>
+
+        <p class="helper-copy">
+          This helps prevent accidental wallet removal. Tasks using this wallet will also lose that wallet assignment.
+        </p>
+
+        <div class="modal-actions">
+          <button id="wallet-delete-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="wallet-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+
     <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
     <script src="/app.js"></script>
