@@ -2516,9 +2516,6 @@ function renderWalletAssets() {
     statusParts.push(`${pluralize(allAssets.length, "chain")} checked`);
     statusParts.push(nonZeroCount > 0 ? `${pluralize(nonZeroCount, "balance")} above zero` : "No balances above zero");
   }
-  if (walletAssetInspector.generatedAt) {
-    statusParts.push(`updated ${relativeTime(walletAssetInspector.generatedAt)}`);
-  }
   if (assetSummaryLabel) {
     statusParts.unshift(`Total ${assetSummaryLabel}`);
   }
@@ -2546,7 +2543,7 @@ function renderWalletAssets() {
         <div class="list-row">
           <div>
             <strong>${escapeHtml(asset.chainLabel || asset.chainKey || "Unknown chain")}</strong>
-            <p class="muted-copy">${escapeHtml(asset.assetName || asset.assetSymbol || "Native coin")} | via ${escapeHtml(asset.rpcLabel || "RPC")}</p>
+            <p class="muted-copy">${escapeHtml(asset.assetName || asset.assetSymbol || "Native coin")}</p>
           </div>
           <div class="wallet-assets-value">
             <strong class="wallet-assets-balance">${escapeHtml(asset.balanceFormatted || "0")} ${escapeHtml(asset.assetSymbol || "")}</strong>
@@ -2554,17 +2551,6 @@ function renderWalletAssets() {
               ${
                 Number.isFinite(Number(asset.usdValue))
                   ? `<span class="wallet-chip">${escapeHtml(formatUsdBalance(asset.usdValue))}</span>`
-                  : ""
-              }
-              <span class="wallet-chip">${escapeHtml(asset.transportLabel || "RPC")}</span>
-              ${
-                asset.latencyMs !== null && asset.latencyMs !== undefined
-                  ? `<span class="queue-chip">${escapeHtml(`${asset.latencyMs}ms`)}</span>`
-                  : ""
-              }
-              ${
-                asset.checkedAt
-                  ? `<span class="queue-chip">${escapeHtml(relativeTime(asset.checkedAt))}</span>`
                   : ""
               }
             </div>
