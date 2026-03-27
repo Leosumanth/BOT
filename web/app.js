@@ -3658,9 +3658,9 @@ async function loadRpcDiscoveryCandidates(providerKey, options = {}) {
       body: JSON.stringify({
         chainKey: localMatch?.chain?.key || "",
         query,
-        transportFilter,
-        limit: transportFilter === "ws" ? 6 : 8,
-        probeBudget: transportFilter === "ws" ? 8 : 12,
+        transportFilter: "all",
+        limit: 10,
+        probeBudget: 20,
         forceRefresh
       }),
       quiet: true
@@ -4764,7 +4764,7 @@ function syncRpcImportButtons() {
   if (rpcImportChainlistButton) {
     rpcImportChainlistButton.disabled = isEditing || rpcDiscoveryState.loading || !hasQuery;
     rpcImportChainlistButton.title = hasQuery
-      ? `Import healthy ${transportLabel} Chainlist RPCs for the typed chain.`
+      ? `Load healthy Chainlist RPCs for the typed chain. Use the tabs to switch between ${transportLabel === "websocket" ? "websocket and normal" : "normal and websocket"} results without importing again.`
       : "Type an EVM chain name first.";
   }
 
@@ -4778,7 +4778,7 @@ function syncRpcImportButtons() {
     ? "Type an EVM chain name first."
     : !configured
       ? "Save an Alchemy API key in Settings first."
-      : `Import healthy ${transportLabel} Alchemy RPCs for the typed chain.`;
+      : "Load healthy Alchemy RPCs for the typed chain. Use the tabs to switch between normal and websocket results without importing again.";
 
   if (!rpcImportDrpcButton) {
     return;
@@ -4790,7 +4790,7 @@ function syncRpcImportButtons() {
     ? "Type an EVM chain name first."
     : !drpcConfigured
       ? "Save a dRPC API key in Settings first."
-      : `Import healthy ${transportLabel} dRPC endpoints for the typed chain.`;
+      : "Load healthy dRPC endpoints for the typed chain. Use the tabs to switch between normal and websocket results without importing again.";
 }
 
 async function importChainlistRpcs() {
@@ -6799,6 +6799,19 @@ if (rpcTransportTabs) {
       rpcDiscoveryState.transportFilter = nextFilter;
       renderRpcTransportTabs();
       syncRpcImportButtons();
+      const currentQuery = normalizeChainSearchValue(rpcChainSearchInput.value);
+      const loadedQuery = normalizeChainSearchValue(rpcDiscoveryState.query);
+      if (rpcDiscoveryState.providerKey && rpcDiscoveryState.summary && currentQuery && currentQuery === loadedQuery) {
+        const providerLabel = rpcDiscoveryState.providerLabel || "provider";
+        const transportLabel = nextFilter === "ws" ? "websocket" : "normal";
+        setRpcDetectMessage(
+          `${rpcDiscoveryState.chain?.label || "This chain"} ${providerLabel} results are loaded. Showing ${transportLabel} RPCs from the current import.`
+        );
+        renderRpcDiscoverySummary();
+        renderRpcDiscoveryCandidates();
+        return;
+      }
+
       applyRpcDiscoveryQueryState();
     });
   });

@@ -751,8 +751,8 @@ body[data-current-view="tasks"] .header-input::placeholder {
 
 .settings-shell {
   display: grid;
-  gap: 18px;
-  padding: 18px;
+  gap: 14px;
+  padding: 14px;
 }
 
 .settings-layout {
@@ -760,44 +760,46 @@ body[data-current-view="tasks"] .header-input::placeholder {
 }
 
 .settings-panel {
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+  gap: 14px;
 }
 
 .settings-card {
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 14px;
 }
 
 .settings-card-header {
   align-items: flex-start;
-  gap: 14px;
+  gap: 12px;
 }
 
 .settings-card-header > div {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .settings-card h4 {
-  font-size: 24px;
+  font-size: 21px;
   line-height: 1.12;
   letter-spacing: 0.01em;
 }
 
 .settings-card .helper-copy {
-  font-size: 15px;
-  line-height: 1.58;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .settings-field {
-  gap: 10px;
+  gap: 8px;
 }
 
 .settings-field input {
-  min-height: 54px;
-  padding: 13px 16px;
-  font-size: 16px;
+  min-height: 48px;
+  padding: 11px 14px;
+  font-size: 15px;
   border-color: rgba(124, 223, 255, 0.18);
 }
 
@@ -806,20 +808,20 @@ body[data-current-view="tasks"] .header-input::placeholder {
 }
 
 .settings-field-note {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .settings-status-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 0 12px;
   border-radius: 999px;
   border: 1px solid rgba(124, 223, 255, 0.16);
   background: rgba(255, 255, 255, 0.04);
   color: #c4d8eb;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -856,20 +858,21 @@ body[data-current-view="tasks"] .header-input::placeholder {
 }
 
 .settings-card .settings-actions {
-  padding-top: 2px;
+  padding-top: 0;
 }
 
 .settings-actions .ghost-button,
 .settings-actions .primary-button {
-  min-height: 48px;
-  padding: 0 18px;
-  font-size: 14px;
+  min-height: 42px;
+  padding: 0 16px;
+  font-size: 13px;
   font-weight: 700;
 }
 
 .settings-footer {
   display: flex;
   justify-content: flex-end;
+  grid-column: 1 / -1;
   padding-top: 4px;
 }
 
