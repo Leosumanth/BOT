@@ -351,6 +351,69 @@ function formatUsdBalance(value, fallback = "$--") {
   }).format(normalized);
 }
 
+function formatTokenBalance(value) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return "0";
+  }
+
+  if (normalized === 0) {
+    return "0";
+  }
+
+  if (Math.abs(normalized) >= 1000) {
+    return new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    }).format(normalized);
+  }
+
+  if (Math.abs(normalized) >= 1) {
+    return new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 4
+    }).format(normalized);
+  }
+
+  if (Math.abs(normalized) >= 0.0001) {
+    return new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 6
+    }).format(normalized);
+  }
+
+  return normalized.toExponential(2);
+}
+
+function summarizeWalletAssets(assets = [], options = {}) {
+  const maxItems = Math.max(1, Number(options.maxItems || 2));
+  const totals = new Map();
+
+  assets.forEach((asset) => {
+    const symbol = String(asset?.assetSymbol || "").trim();
+    const balance = Number(asset?.balanceFloat || 0);
+    if (!symbol || !Number.isFinite(balance) || balance <= 0) {
+      return;
+    }
+
+    totals.set(symbol, (totals.get(symbol) || 0) + balance);
+  });
+
+  const entries = [...totals.entries()]
+    .map(([symbol, amount]) => ({ symbol, amount }))
+    .sort((left, right) => right.amount - left.amount);
+
+  if (entries.length === 0) {
+    return "";
+  }
+
+  const visible = entries
+    .slice(0, maxItems)
+    .map((entry) => `${formatTokenBalance(entry.amount)} ${entry.symbol}`);
+
+  return entries.length > maxItems ? `${visible.join(" + ")} + ${entries.length - maxItems} more` : visible.join(" + ");
+}
+
 function normalizeGasStrategyValue(value) {
   const normalized = String(value || "normal").trim().toLowerCase();
 
@@ -548,6 +611,12 @@ function walletDisplayBalance(wallet, options = {}) {
     return options.loadingLabel || "Loading...";
   }
 
+  const assetLabel = String(wallet?.balanceAssetLabel || "").trim();
+  const usdValue = Number(wallet?.balanceUsd);
+  if (assetLabel && (!Number.isFinite(usdValue) || Math.abs(usdValue) < 0.01)) {
+    return assetLabel;
+  }
+
   return formatUsdBalance(wallet?.balanceUsd, options.fallback || "$--");
 }
 
@@ -557,6 +626,7 @@ function mergeWalletBalanceState(wallets = []) {
       wallet.id,
       {
         balanceUsd: wallet.balanceUsd,
+        balanceAssetLabel: wallet.balanceAssetLabel,
         balanceLoading: wallet.balanceLoading,
         balanceError: wallet.balanceError,
         balanceUpdatedAt: wallet.balanceUpdatedAt
@@ -2440,6 +2510,7 @@ function renderWalletAssets() {
   const assets = allAssets.filter((asset) => Number(asset.balanceFloat || 0) > 0);
   const warnings = Array.isArray(walletAssetInspector.warnings) ? walletAssetInspector.warnings : [];
   const nonZeroCount = assets.length;
+  const assetSummaryLabel = summarizeWalletAssets(assets, { maxItems: 3 });
   const statusParts = [];
   if (allAssets.length > 0) {
     statusParts.push(`${pluralize(allAssets.length, "chain")} checked`);
@@ -2448,7 +2519,12 @@ function renderWalletAssets() {
   if (walletAssetInspector.generatedAt) {
     statusParts.push(`updated ${relativeTime(walletAssetInspector.generatedAt)}`);
   }
-  if (Number.isFinite(Number(walletAssetInspector.summary?.totalUsd))) {
+  if (assetSummaryLabel) {
+    statusParts.unshift(`Total ${assetSummaryLabel}`);
+  }
+  if (Number.isFinite(Number(walletAssetInspector.summary?.totalUsd)) && Math.abs(Number(walletAssetInspector.summary.totalUsd)) >= 0.01) {
+    statusParts.unshift(`Approx ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
+  } else if (!assetSummaryLabel && Number.isFinite(Number(walletAssetInspector.summary?.totalUsd))) {
     statusParts.unshift(`Total ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
   }
   walletAssetsStatus.classList.toggle("hidden", statusParts.length === 0);
@@ -2535,8 +2611,10 @@ async function loadWalletAssets(walletId) {
     renderWalletAssets();
 
     const payload = await request(`/api/wallets/${walletId}/assets`);
+    const balanceAssetLabel = summarizeWalletAssets(payload.assets || [], { maxItems: 2 });
     patchWalletBalance(walletId, {
       balanceUsd: Number.isFinite(Number(payload.summary?.totalUsd)) ? Number(payload.summary.totalUsd) : wallet.balanceUsd,
+      balanceAssetLabel: balanceAssetLabel || "",
       balanceLoading: false,
       balanceError: "",
       balanceUpdatedAt: payload.generatedAt || new Date().toISOString()
