@@ -124,6 +124,17 @@ const chainCatalog = [
   { key: "shape", label: "Shape", chainId: 360 },
   { key: "plasma", label: "Plasma", chainId: 9745 }
 ];
+const alchemyRpcImportCatalog = [
+  { chainKey: "ethereum", endpointKey: "eth-mainnet", label: "Ethereum Mainnet" },
+  { chainKey: "bsc", endpointKey: "bnb-mainnet", label: "BNB Smart Chain Mainnet" },
+  { chainKey: "sepolia", endpointKey: "eth-sepolia", label: "Ethereum Sepolia" },
+  { chainKey: "base", endpointKey: "base-mainnet", label: "Base Mainnet" },
+  { chainKey: "base_sepolia", endpointKey: "base-sepolia", label: "Base Sepolia" },
+  { chainKey: "arbitrum", endpointKey: "arb-mainnet", label: "Arbitrum Mainnet" },
+  { chainKey: "blast", endpointKey: "blast-mainnet", label: "Blast Mainnet" },
+  { chainKey: "shape", endpointKey: "shape-mainnet", label: "Shape Mainnet" },
+  { chainKey: "plasma", endpointKey: "plasma-mainnet", label: "Plasma Mainnet" }
+];
 const rpcProviderNamePatterns = [
   { pattern: /alchemy/i, label: "Alchemy" },
   { pattern: /infura/i, label: "Infura" },
@@ -5416,6 +5427,11 @@ function mergeRpcInventories(storedRpcNodes, envRpcNodes) {
   return merged;
 }
 
+function buildAlchemyRpcUrl(endpointKey, apiKey, transport = "http") {
+  const protocol = transport === "ws" ? "wss" : "https";
+  return `${protocol}://${endpointKey}.g.alchemy.com/v2/${encodeURIComponent(apiKey)}`;
+}
+
 function mapTaskRuntimeEntries(entries = []) {
   return entries.reduce((map, entry) => {
     map[entry.taskId] = entry;
@@ -7360,6 +7376,117 @@ async function handleChainlistRpcCandidates(request, response) {
   }
 }
 
+async function collectAlchemyRpcCandidates(apiKey, options = {}) {
+  const { includeWebSockets = true, timeoutMs = 8000 } = options;
+  const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
+  const candidates = [];
+  let skippedExistingCount = 0;
+
+  alchemyRpcImportCatalog.forEach((entry) => {
+    const chain = findAvailableChainByKey(entry.chainKey);
+    if (!chain) {
+      return;
+    }
+
+    const transports = includeWebSockets ? ["http", "ws"] : ["http"];
+    transports.forEach((transport) => {
+      const url = buildAlchemyRpcUrl(entry.endpointKey, apiKey, transport);
+      if (existingUrls.has(url)) {
+        skippedExistingCount += 1;
+        return;
+      }
+
+      candidates.push({
+        id: createId("rpc_probe"),
+        name: transport === "ws" ? `Alchemy ${entry.label} WS` : `Alchemy ${entry.label}`,
+        url,
+        chainKey: chain.key,
+        chainId: chain.chainId,
+        chainLabel: chain.label,
+        enabled: true,
+        group: "Alchemy",
+        source: "preview",
+        lastHealth: null
+      });
+    });
+  });
+
+  await Promise.all(
+    candidates.map(async (candidate) => {
+      await testRpcNodeHealth(candidate, timeoutMs);
+      return candidate;
+    })
+  );
+
+  const healthyCandidates = rankRpcNodesByLatency(
+    candidates.filter((candidate) => candidate.lastHealth?.status === "healthy")
+  );
+
+  return {
+    totalCount: candidates.length,
+    skippedExistingCount,
+    healthyCount: healthyCandidates.length,
+    healthySocketCount: healthyCandidates.filter((candidate) => isSocketRpcUrl(candidate.url)).length,
+    candidates: healthyCandidates
+  };
+}
+
+async function handleAlchemyRpcImport(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const apiKey = String(resolvedSecrets.alchemyApiKey || "").trim();
+
+    if (!apiKey) {
+      throw new Error("Save an Alchemy API key in Settings or ALCHEMY_API_KEY in .env first.");
+    }
+
+    const preview = await collectAlchemyRpcCandidates(apiKey, {
+      includeWebSockets: payload.includeWebSockets !== false
+    });
+
+    if (preview.candidates.length === 0) {
+      throw new Error("No healthy Alchemy RPC endpoints were available to import.");
+    }
+
+    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
+    const nodesToPersist = [];
+
+    preview.candidates.forEach((candidate) => {
+      const desiredName = candidate.name || `Alchemy ${candidate.chainLabel}`;
+      const name = buildUniqueRpcNodeName(desiredName, [...storedNodes, ...nodesToPersist]);
+      nodesToPersist.push({
+        id: createId("rpc"),
+        name,
+        url: candidate.url,
+        chainKey: candidate.chainKey,
+        chainId: candidate.chainId,
+        chainLabel: candidate.chainLabel,
+        enabled: true,
+        group: "Alchemy",
+        source: "stored",
+        lastHealth: candidate.lastHealth
+      });
+    });
+
+    appState.rpcNodes = mergeRpcInventories([...nodesToPersist, ...storedNodes], buildEnvRpcNodes());
+    appState.chains = getAvailableChains();
+    await persistAppState();
+    emitState();
+
+    sendJson(response, 200, {
+      ok: true,
+      imported: nodesToPersist.length,
+      skippedExisting: preview.skippedExistingCount,
+      healthySocketCount: preview.healthySocketCount,
+      chains: [...new Set(nodesToPersist.map((node) => node.chainLabel))],
+      rpcNodes: nodesToPersist
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function testRpcNodeHealth(rpcNode, timeoutMs = 10000) {
   const started = Date.now();
   let provider = null;
@@ -8285,6 +8412,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/rpc-nodes/import-chainlist") {
       await handleChainlistRpcImport(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/import-alchemy") {
+      await handleAlchemyRpcImport(request, response);
       return;
     }
 

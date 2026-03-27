@@ -122,6 +122,7 @@ const rpcFormBadge = document.getElementById("rpc-form-badge");
 const rpcCancelButton = document.getElementById("rpc-cancel-button");
 const rpcSubmitButton = document.getElementById("rpc-submit-button");
 const rpcImportChainlistButton = document.getElementById("rpc-import-chainlist-button");
+const rpcImportAlchemyButton = document.getElementById("rpc-import-alchemy-button");
 const rpcChainSearchField = document.getElementById("rpc-chain-search-field");
 const rpcChainSearchInput = document.getElementById("rpc-chain-search-input");
 const rpcTransportTabs = document.getElementById("rpc-transport-tabs");
@@ -4654,10 +4655,47 @@ async function pulseRpcMesh() {
   );
 }
 
+function syncAlchemyRpcImportButton() {
+  if (!rpcImportAlchemyButton) {
+    return;
+  }
+
+  const configured = Boolean(state.settings.alchemyApiKeyConfigured);
+  rpcImportAlchemyButton.disabled = !configured;
+  rpcImportAlchemyButton.title = configured
+    ? "Probe and import healthy Alchemy HTTP and WebSocket endpoints for the supported chains in this dashboard."
+    : "Save an Alchemy API key in Settings first.";
+}
+
+async function importAlchemyRpcs() {
+  const payload = await request("/api/rpc-nodes/import-alchemy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      includeWebSockets: true
+    })
+  });
+
+  await loadState();
+
+  const imported = Number(payload.imported || 0);
+  const chainCount = Array.isArray(payload.chains) ? payload.chains.length : 0;
+  const healthySocketCount = Number(payload.healthySocketCount || 0);
+  const skippedExisting = Number(payload.skippedExisting || 0);
+
+  showToast(
+    `${pluralize(imported, "Alchemy RPC")} imported across ${pluralize(chainCount, "chain")}. ${healthySocketCount} websocket endpoint${healthySocketCount === 1 ? "" : "s"} ready${skippedExisting > 0 ? `, ${skippedExisting} already saved` : ""}.`,
+    "success",
+    "Alchemy Import"
+  );
+}
+
 function renderRpcNodes() {
   if (activeRpcEditId && !state.rpcNodes.some((node) => node.id === activeRpcEditId)) {
     resetRpcForm();
   }
+
+  syncAlchemyRpcImportButton();
 
   const chainGroups = buildRpcChainGroups();
   renderRpcOperationsOverview(chainGroups);
@@ -6341,6 +6379,14 @@ rpcPulseButton?.addEventListener("click", async () => {
 rpcPagePulseButton.addEventListener("click", async () => {
   try {
     await pulseRpcMesh();
+  } catch {}
+});
+
+rpcImportAlchemyButton?.addEventListener("click", async () => {
+  try {
+    await withButtonBusyState(rpcImportAlchemyButton, "Importing...", async () => {
+      await importAlchemyRpcs();
+    });
   } catch {}
 });
 
