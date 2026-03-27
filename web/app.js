@@ -1238,10 +1238,14 @@ const rpcChainAliases = {
   ethereum: ["ethereum", "eth", "mainnet", "mainnet eth", "eth mainnet"],
   bsc: ["bsc", "bnb", "bnb chain", "binance smart chain", "bnb smart chain"],
   sepolia: ["sepolia", "eth sepolia", "ethereum sepolia"],
+  optimism: ["optimism", "op", "optimism mainnet"],
+  polygon: ["polygon", "matic", "polygon mainnet"],
   base: ["base", "base mainnet"],
   base_sepolia: ["base sepolia", "base testnet"],
   arbitrum: ["arbitrum", "arb", "arbitrum one"],
   blast: ["blast"],
+  scroll: ["scroll", "scroll mainnet"],
+  zora: ["zora", "zora mainnet"],
   shape: ["shape"],
   plasma: ["plasma"]
 };
@@ -3220,14 +3224,14 @@ function updateRpcSubmitButton() {
   if (isRpcEditMode()) {
     rpcSubmitButton.textContent = "Update RPC Node";
     rpcSubmitButton.disabled = false;
-    rpcImportChainlistButton.disabled = false;
+    syncRpcImportButtons();
     return;
   }
 
   const selectedCount = selectedRpcDiscoveryCandidates().length;
   rpcSubmitButton.textContent = selectedCount > 0 ? `Add ${pluralize(selectedCount, "RPC Node")}` : "Add Selected RPCs";
   rpcSubmitButton.disabled = selectedCount === 0 || rpcDiscoveryState.loading;
-  rpcImportChainlistButton.disabled = rpcDiscoveryState.loading || !rpcChainSearchInput.value.trim();
+  syncRpcImportButtons();
 }
 
 function renderRpcDiscoveryMatch(match = rpcDiscoveryState.match) {
@@ -3737,7 +3741,7 @@ function resetRpcForm(options = {}) {
   rpcFormBadge.classList.add("hidden");
   rpcCancelButton.classList.add("hidden");
   rpcImportChainlistButton.classList.remove("hidden");
-  rpcImportChainlistButton.textContent = "Deep Scan Chainlist";
+  rpcImportChainlistButton.textContent = "Import From Chainlist";
   rpcChainSearchField.classList.remove("hidden");
   rpcManualFields.classList.add("hidden");
   rpcInlineSummary.classList.remove("hidden");
@@ -4655,36 +4659,96 @@ async function pulseRpcMesh() {
   );
 }
 
-function syncAlchemyRpcImportButton() {
+function currentRpcImportRequestPayload() {
+  return {
+    chainKey: String(rpcDiscoveryState.chain?.key || "").trim(),
+    query: String(rpcChainSearchInput?.value || rpcDiscoveryState.query || "").trim(),
+    transportFilter: String(rpcDiscoveryState.transportFilter || "http")
+  };
+}
+
+function syncRpcImportButtons() {
+  const isEditing = isRpcEditMode();
+  const { query, transportFilter } = currentRpcImportRequestPayload();
+  const hasQuery = Boolean(query);
+  const transportLabel = transportFilter === "ws" ? "websocket" : "normal";
+
+  if (rpcImportChainlistButton) {
+    rpcImportChainlistButton.disabled = isEditing || rpcDiscoveryState.loading || !hasQuery;
+    rpcImportChainlistButton.title = hasQuery
+      ? `Import healthy ${transportLabel} Chainlist RPCs for the typed chain.`
+      : "Type an EVM chain name first.";
+  }
+
   if (!rpcImportAlchemyButton) {
     return;
   }
 
   const configured = Boolean(state.settings.alchemyApiKeyConfigured);
-  rpcImportAlchemyButton.disabled = !configured;
-  rpcImportAlchemyButton.title = configured
-    ? "Probe and import healthy Alchemy HTTP and WebSocket endpoints for the supported chains in this dashboard."
-    : "Save an Alchemy API key in Settings first.";
+  rpcImportAlchemyButton.disabled = isEditing || rpcDiscoveryState.loading || !hasQuery || !configured;
+  rpcImportAlchemyButton.title = !hasQuery
+    ? "Type an EVM chain name first."
+    : !configured
+      ? "Save an Alchemy API key in Settings first."
+      : `Import healthy ${transportLabel} Alchemy RPCs for the typed chain.`;
 }
 
-async function importAlchemyRpcs() {
-  const payload = await request("/api/rpc-nodes/import-alchemy", {
+async function importChainlistRpcs() {
+  const payload = currentRpcImportRequestPayload();
+  if (!payload.query && !payload.chainKey) {
+    throw new Error("Type an EVM chain name before importing Chainlist RPCs.");
+  }
+
+  const response = await request("/api/rpc-nodes/import-chainlist", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      includeWebSockets: true
+      chainKey: payload.chainKey,
+      query: payload.query,
+      transportFilter: payload.transportFilter,
+      limit: payload.transportFilter === "ws" ? 4 : 6,
+      forceRefresh: true
     })
   });
 
   await loadState();
 
-  const imported = Number(payload.imported || 0);
-  const chainCount = Array.isArray(payload.chains) ? payload.chains.length : 0;
-  const healthySocketCount = Number(payload.healthySocketCount || 0);
-  const skippedExisting = Number(payload.skippedExisting || 0);
+  const imported = Number(response.imported || 0);
+  const chainLabelCopy = response.chain?.label || payload.query || "selected chain";
+  const transportLabel = payload.transportFilter === "ws" ? "websocket" : "normal";
+  showToast(
+    `${pluralize(imported, "Chainlist RPC")} imported for ${chainLabelCopy} (${transportLabel}).`,
+    "success",
+    "Chainlist Import"
+  );
+}
+
+async function importAlchemyRpcs() {
+  const payload = currentRpcImportRequestPayload();
+  if (!payload.query && !payload.chainKey) {
+    throw new Error("Type an EVM chain name before importing Alchemy RPCs.");
+  }
+
+  const response = await request("/api/rpc-nodes/import-alchemy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chainKey: payload.chainKey,
+      query: payload.query,
+      transportFilter: payload.transportFilter
+    })
+  });
+
+  await loadState();
+
+  const imported = Number(response.imported || 0);
+  const chainLabelCopy = response.chain?.label || payload.query || "selected chain";
+  const healthySocketCount = Number(response.healthySocketCount || 0);
+  const skippedExisting = Number(response.skippedExisting || 0);
+  const transportLabel = payload.transportFilter === "ws" ? "websocket" : "normal";
 
   showToast(
-    `${pluralize(imported, "Alchemy RPC")} imported across ${pluralize(chainCount, "chain")}. ${healthySocketCount} websocket endpoint${healthySocketCount === 1 ? "" : "s"} ready${skippedExisting > 0 ? `, ${skippedExisting} already saved` : ""}.`,
+    `${pluralize(imported, "Alchemy RPC")} imported for ${chainLabelCopy} (${transportLabel}).${healthySocketCount > 0 ? ` ${healthySocketCount} websocket endpoint${healthySocketCount === 1 ? "" : "s"} ready.` : ""}${skippedExisting > 0 ? ` ${skippedExisting} already saved.` : ""}`,
     "success",
     "Alchemy Import"
   );
@@ -4695,7 +4759,7 @@ function renderRpcNodes() {
     resetRpcForm();
   }
 
-  syncAlchemyRpcImportButton();
+  syncRpcImportButtons();
 
   const chainGroups = buildRpcChainGroups();
   renderRpcOperationsOverview(chainGroups);
@@ -6522,7 +6586,11 @@ rpcImportChainlistButton.addEventListener("click", async () => {
     return;
   }
 
-  await runRpcDiscoveryScan({ forceRefresh: true });
+  try {
+    await withButtonBusyState(rpcImportChainlistButton, "Importing...", async () => {
+      await importChainlistRpcs();
+    });
+  } catch {}
 });
 
 rpcChainlistCloseButton.addEventListener("click", closeRpcChainlistModal);
@@ -6597,6 +6665,7 @@ rpcChainSearchInput.addEventListener("input", () => {
     return;
   }
 
+  syncRpcImportButtons();
   scheduleRpcDiscoveryScan();
 });
 
@@ -6638,6 +6707,7 @@ if (rpcTransportTabs) {
 
       rpcDiscoveryState.transportFilter = nextFilter;
       renderRpcTransportTabs();
+      syncRpcImportButtons();
       if (rpcChainSearchInput.value.trim()) {
         void runRpcDiscoveryScan();
         return;

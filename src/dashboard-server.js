@@ -117,23 +117,31 @@ const chainCatalog = [
   { key: "ethereum", label: "Ethereum", chainId: 1 },
   { key: "bsc", label: "BNB Smart Chain", chainId: 56 },
   { key: "sepolia", label: "Sepolia", chainId: 11155111 },
+  { key: "optimism", label: "Optimism", chainId: 10 },
+  { key: "polygon", label: "Polygon", chainId: 137 },
   { key: "base", label: "Base", chainId: 8453 },
   { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
   { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
   { key: "blast", label: "Blast", chainId: 81457 },
+  { key: "scroll", label: "Scroll", chainId: 534352 },
+  { key: "zora", label: "Zora", chainId: 7777777 },
   { key: "shape", label: "Shape", chainId: 360 },
   { key: "plasma", label: "Plasma", chainId: 9745 }
 ];
 const alchemyRpcImportCatalog = [
-  { chainKey: "ethereum", endpointKey: "eth-mainnet", label: "Ethereum Mainnet" },
-  { chainKey: "bsc", endpointKey: "bnb-mainnet", label: "BNB Smart Chain Mainnet" },
-  { chainKey: "sepolia", endpointKey: "eth-sepolia", label: "Ethereum Sepolia" },
-  { chainKey: "base", endpointKey: "base-mainnet", label: "Base Mainnet" },
-  { chainKey: "base_sepolia", endpointKey: "base-sepolia", label: "Base Sepolia" },
-  { chainKey: "arbitrum", endpointKey: "arb-mainnet", label: "Arbitrum Mainnet" },
-  { chainKey: "blast", endpointKey: "blast-mainnet", label: "Blast Mainnet" },
-  { chainKey: "shape", endpointKey: "shape-mainnet", label: "Shape Mainnet" },
-  { chainKey: "plasma", endpointKey: "plasma-mainnet", label: "Plasma Mainnet" }
+  { chainKey: "ethereum", chainId: 1, endpointKey: "eth-mainnet", label: "Ethereum Mainnet" },
+  { chainKey: "bsc", chainId: 56, endpointKey: "bnb-mainnet", label: "BNB Smart Chain Mainnet" },
+  { chainKey: "sepolia", chainId: 11155111, endpointKey: "eth-sepolia", label: "Ethereum Sepolia" },
+  { chainKey: "optimism", chainId: 10, endpointKey: "opt-mainnet", label: "Optimism Mainnet" },
+  { chainKey: "polygon", chainId: 137, endpointKey: "polygon-mainnet", label: "Polygon Mainnet" },
+  { chainKey: "base", chainId: 8453, endpointKey: "base-mainnet", label: "Base Mainnet" },
+  { chainKey: "base_sepolia", chainId: 84532, endpointKey: "base-sepolia", label: "Base Sepolia" },
+  { chainKey: "arbitrum", chainId: 42161, endpointKey: "arb-mainnet", label: "Arbitrum Mainnet" },
+  { chainKey: "blast", chainId: 81457, endpointKey: "blast-mainnet", label: "Blast Mainnet" },
+  { chainKey: "scroll", chainId: 534352, endpointKey: "scroll-mainnet", label: "Scroll Mainnet" },
+  { chainKey: "zora", chainId: 7777777, endpointKey: "zora-mainnet", label: "Zora Mainnet" },
+  { chainKey: "shape", chainId: 360, endpointKey: "shape-mainnet", label: "Shape Mainnet" },
+  { chainKey: "plasma", chainId: 9745, endpointKey: "plasma-mainnet", label: "Plasma Mainnet" }
 ];
 const rpcProviderNamePatterns = [
   { pattern: /alchemy/i, label: "Alchemy" },
@@ -5432,6 +5440,38 @@ function buildAlchemyRpcUrl(endpointKey, apiKey, transport = "http") {
   return `${protocol}://${endpointKey}.g.alchemy.com/v2/${encodeURIComponent(apiKey)}`;
 }
 
+function findAlchemyRpcImportEntry(chain) {
+  if (!chain) {
+    return null;
+  }
+
+  const normalizedChainId = Number(chain.chainId);
+  if (Number.isFinite(normalizedChainId)) {
+    const byChainId = alchemyRpcImportCatalog.find((entry) => Number(entry.chainId) === normalizedChainId);
+    if (byChainId) {
+      return byChainId;
+    }
+  }
+
+  const normalizedKey = String(chain.key || "").trim();
+  if (normalizedKey) {
+    const byKey = alchemyRpcImportCatalog.find((entry) => String(entry.chainKey || "").trim() === normalizedKey);
+    if (byKey) {
+      return byKey;
+    }
+  }
+
+  const normalizedTerms = new Set(
+    [chain.key, chain.label].map((value) => normalizeChainSearchQuery(value)).filter(Boolean)
+  );
+  return (
+    alchemyRpcImportCatalog.find((entry) =>
+      normalizedTerms.has(normalizeChainSearchQuery(entry.chainKey)) ||
+      normalizedTerms.has(normalizeChainSearchQuery(entry.label))
+    ) || null
+  );
+}
+
 function mapTaskRuntimeEntries(entries = []) {
   return entries.reduce((map, entry) => {
     map[entry.taskId] = entry;
@@ -7287,10 +7327,17 @@ async function handleChainlistRpcImport(request, response) {
       chainlistCatalog: resolvedChain.chainlistCatalog,
       chainlistEntry: resolvedChain.chainlistEntry
     });
+    const transportLabel = preview.transportFilter === "ws" ? "websocket" : "normal";
+    if (preview.transportUnavailable) {
+      throw new Error(`Chainlist does not currently publish ${transportLabel} RPC URLs for ${chain.label}.`);
+    }
+    if (preview.allConfigured) {
+      throw new Error(`All published Chainlist ${transportLabel} RPCs for ${chain.label} are already configured.`);
+    }
     const importableNodes = preview.candidates.filter((node) => node.lastHealth?.status === "healthy");
 
     if (importableNodes.length === 0) {
-      throw new Error(`Chainlist RPCs for ${chain.label} did not pass the health probe`);
+      throw new Error(`No healthy Chainlist ${transportLabel} RPCs were ready for ${chain.label}.`);
     }
 
     const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
@@ -7377,39 +7424,57 @@ async function handleChainlistRpcCandidates(request, response) {
 }
 
 async function collectAlchemyRpcCandidates(apiKey, options = {}) {
-  const { includeWebSockets = true, timeoutMs = 8000 } = options;
+  const { chain = null, timeoutMs = 8000 } = options;
+  if (!chain?.chainId) {
+    throw new Error("Choose a chain before importing Alchemy RPCs.");
+  }
+
+  const importEntry = findAlchemyRpcImportEntry(chain);
+  if (!importEntry) {
+    throw new Error(`Alchemy RPC import is not configured for ${chain.label} yet.`);
+  }
+
+  const transportFilter = normalizeRpcTransportFilter(options.transportFilter);
+  const transports =
+    transportFilter === "ws" ? ["ws"] : transportFilter === "all" ? ["http", "ws"] : ["http"];
   const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
   const candidates = [];
   let skippedExistingCount = 0;
 
-  alchemyRpcImportCatalog.forEach((entry) => {
-    const chain = findAvailableChainByKey(entry.chainKey);
-    if (!chain) {
+  transports.forEach((transport) => {
+    const url = buildAlchemyRpcUrl(importEntry.endpointKey, apiKey, transport);
+    if (existingUrls.has(url)) {
+      skippedExistingCount += 1;
       return;
     }
 
-    const transports = includeWebSockets ? ["http", "ws"] : ["http"];
-    transports.forEach((transport) => {
-      const url = buildAlchemyRpcUrl(entry.endpointKey, apiKey, transport);
-      if (existingUrls.has(url)) {
-        skippedExistingCount += 1;
-        return;
-      }
-
-      candidates.push({
-        id: createId("rpc_probe"),
-        name: transport === "ws" ? `Alchemy ${entry.label} WS` : `Alchemy ${entry.label}`,
-        url,
-        chainKey: chain.key,
-        chainId: chain.chainId,
-        chainLabel: chain.label,
-        enabled: true,
-        group: "Alchemy",
-        source: "preview",
-        lastHealth: null
-      });
+    candidates.push({
+      id: createId("rpc_probe"),
+      name: transport === "ws" ? `Alchemy ${chain.label} WS` : `Alchemy ${chain.label}`,
+      url,
+      chainKey: chain.key,
+      chainId: chain.chainId,
+      chainLabel: chain.label,
+      enabled: true,
+      group: "Alchemy",
+      source: "preview",
+      lastHealth: null
     });
   });
+
+  if (candidates.length === 0) {
+    return {
+      chain,
+      importEntry,
+      transportFilter,
+      totalCount: 0,
+      skippedExistingCount,
+      allConfigured: skippedExistingCount > 0,
+      healthyCount: 0,
+      healthySocketCount: 0,
+      candidates: []
+    };
+  }
 
   await Promise.all(
     candidates.map(async (candidate) => {
@@ -7423,8 +7488,12 @@ async function collectAlchemyRpcCandidates(apiKey, options = {}) {
   );
 
   return {
+    chain,
+    importEntry,
+    transportFilter,
     totalCount: candidates.length,
     skippedExistingCount,
+    allConfigured: false,
     healthyCount: healthyCandidates.length,
     healthySocketCount: healthyCandidates.filter((candidate) => isSocketRpcUrl(candidate.url)).length,
     candidates: healthyCandidates
@@ -7434,6 +7503,8 @@ async function collectAlchemyRpcCandidates(apiKey, options = {}) {
 async function handleAlchemyRpcImport(request, response) {
   try {
     const payload = await readJsonBody(request);
+    const resolvedChain = await resolveChainlistRequestChain(payload);
+    const chain = resolvedChain.chain;
     const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
     const apiKey = String(resolvedSecrets.alchemyApiKey || "").trim();
 
@@ -7442,11 +7513,17 @@ async function handleAlchemyRpcImport(request, response) {
     }
 
     const preview = await collectAlchemyRpcCandidates(apiKey, {
-      includeWebSockets: payload.includeWebSockets !== false
+      chain,
+      transportFilter: payload.transportFilter
     });
+    const transportLabel = preview.transportFilter === "ws" ? "websocket" : "normal";
+
+    if (preview.allConfigured) {
+      throw new Error(`Alchemy ${transportLabel} RPCs for ${chain.label} are already configured.`);
+    }
 
     if (preview.candidates.length === 0) {
-      throw new Error("No healthy Alchemy RPC endpoints were available to import.");
+      throw new Error(`No healthy Alchemy ${transportLabel} RPCs were available for ${chain.label}.`);
     }
 
     const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
@@ -7477,9 +7554,14 @@ async function handleAlchemyRpcImport(request, response) {
     sendJson(response, 200, {
       ok: true,
       imported: nodesToPersist.length,
+      chain: {
+        key: chain.key,
+        label: chain.label,
+        chainId: chain.chainId
+      },
+      transportFilter: preview.transportFilter,
       skippedExisting: preview.skippedExistingCount,
       healthySocketCount: preview.healthySocketCount,
-      chains: [...new Set(nodesToPersist.map((node) => node.chainLabel))],
       rpcNodes: nodesToPersist
     });
   } catch (error) {
