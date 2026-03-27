@@ -5606,6 +5606,10 @@ async function runApiKeyTest({
 }
 
 function clearPendingApiKeyUi({ draftKey, input, label, syncControls, statusSetter }) {
+  if (!window.confirm(`Discard the pending ${label} API key?`)) {
+    return;
+  }
+
   clearApiKeyDraft(draftKey);
   input.value = "";
   syncControls();
