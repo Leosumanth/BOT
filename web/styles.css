@@ -298,6 +298,12 @@ body[data-auth-state="locked"] .scanline-layer {
   gap: 12px;
 }
 
+.sidebar-pulse > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .sidebar-pulse strong,
 .time-card strong,
 .telemetry-card strong,
@@ -862,6 +868,7 @@ body[data-current-view="tasks"] .header-input::placeholder {
 }
 
 .settings-actions .ghost-button,
+.settings-actions .danger-button,
 .settings-actions .primary-button {
   min-height: 42px;
   padding: 0 16px;
@@ -882,6 +889,7 @@ body[data-current-view="tasks"] .header-input::placeholder {
 }
 
 .settings-footer-actions .ghost-button,
+.settings-footer-actions .danger-button,
 .settings-footer-actions .primary-button {
   min-height: 50px;
   padding: 0 20px;

@@ -170,6 +170,13 @@ const rpcConfirmLatency = document.getElementById("rpc-confirm-latency");
 const rpcConfirmUrl = document.getElementById("rpc-confirm-url");
 const rpcConfirmNote = document.getElementById("rpc-confirm-note");
 const rpcConfirmProgress = getOperationProgressRefs("rpc-confirm-progress");
+const rpcDeleteModal = document.getElementById("rpc-delete-modal");
+const rpcDeleteCloseButton = document.getElementById("rpc-delete-close-button");
+const rpcDeleteCancelButton = document.getElementById("rpc-delete-cancel-button");
+const rpcDeleteSubmitButton = document.getElementById("rpc-delete-submit-button");
+const rpcDeleteName = document.getElementById("rpc-delete-name");
+const rpcDeleteChain = document.getElementById("rpc-delete-chain");
+const rpcDeleteUrl = document.getElementById("rpc-delete-url");
 const walletDeleteModal = document.getElementById("wallet-delete-modal");
 const walletDeleteCloseButton = document.getElementById("wallet-delete-close-button");
 const walletDeleteCancelButton = document.getElementById("wallet-delete-cancel-button");
@@ -443,6 +450,8 @@ let rpcChainlistScan = {
   loading: false,
   summary: null
 };
+let rpcDeleteTargetId = "";
+let rpcDeletePending = false;
 let walletDeleteTargetId = "";
 let walletDeletePending = false;
 let currentMintStartDetection = {
@@ -4523,6 +4532,75 @@ async function submitConfirmedRpcSave() {
   rpcConfirmSubmitButton.textContent = buttonLabel;
 }
 
+function closeRpcDeleteModal() {
+  if (!rpcDeleteModal || rpcDeletePending) {
+    return;
+  }
+
+  rpcDeleteTargetId = "";
+  rpcDeleteSubmitButton.disabled = false;
+  rpcDeleteCancelButton.disabled = false;
+  rpcDeleteCloseButton.disabled = false;
+  rpcDeleteSubmitButton.textContent = "Yes, Delete";
+  rpcDeleteModal.classList.add("hidden");
+}
+
+function openRpcDeleteModal(rpcId) {
+  if (!rpcDeleteModal) {
+    return;
+  }
+
+  const node = state.rpcNodes.find((entry) => entry.id === rpcId);
+  if (!node || node.source === "env") {
+    return;
+  }
+
+  rpcDeleteTargetId = node.id;
+  rpcDeleteName.textContent = node.name || "Saved RPC";
+  rpcDeleteChain.textContent = node.chainLabel || chainLabel(node.chainKey) || "Unknown chain";
+  rpcDeleteUrl.textContent = node.url || "-";
+  rpcDeleteSubmitButton.disabled = false;
+  rpcDeleteCancelButton.disabled = false;
+  rpcDeleteCloseButton.disabled = false;
+  rpcDeleteSubmitButton.textContent = "Yes, Delete";
+  rpcDeleteModal.classList.remove("hidden");
+  initializeMotionSurfaces(rpcDeleteModal);
+}
+
+async function submitRpcDelete() {
+  if (!rpcDeleteTargetId || rpcDeletePending) {
+    return;
+  }
+
+  const node = state.rpcNodes.find((entry) => entry.id === rpcDeleteTargetId);
+  if (!node) {
+    closeRpcDeleteModal();
+    return;
+  }
+
+  rpcDeletePending = true;
+  rpcDeleteSubmitButton.disabled = true;
+  rpcDeleteCancelButton.disabled = true;
+  rpcDeleteCloseButton.disabled = true;
+  rpcDeleteSubmitButton.textContent = "Deleting...";
+
+  try {
+    await request(`/api/rpc-nodes/${node.id}`, { method: "DELETE" });
+    if (activeRpcEditId === node.id) {
+      resetRpcForm();
+    }
+    rpcDeletePending = false;
+    closeRpcDeleteModal();
+    showToast(`${node.name || "RPC node"} removed from the mesh.`, "success", "RPC Deleted");
+  } catch {
+    rpcDeletePending = false;
+    rpcDeleteSubmitButton.disabled = false;
+    rpcDeleteCancelButton.disabled = false;
+    rpcDeleteCloseButton.disabled = false;
+    rpcDeleteSubmitButton.textContent = "Yes, Delete";
+  }
+}
+
 async function inspectRpcUrl(url, options = {}) {
   const { immediate = false } = options;
   const normalizedUrl = String(url || "").trim();
@@ -5691,14 +5769,8 @@ function renderRpcNodes() {
   });
 
   rpcList.querySelectorAll("[data-rpc-delete]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        await request(`/api/rpc-nodes/${button.dataset.rpcDelete}`, { method: "DELETE" });
-        if (activeRpcEditId === button.dataset.rpcDelete) {
-          resetRpcForm();
-        }
-        showToast("RPC node removed from the mesh.", "success", "RPC Deleted");
-      } catch {}
+    button.addEventListener("click", () => {
+      openRpcDeleteModal(button.dataset.rpcDelete);
     });
   });
 
@@ -7842,6 +7914,18 @@ rpcConfirmSubmitButton.addEventListener("click", async () => {
 rpcConfirmModal.addEventListener("click", (event) => {
   if (event.target.dataset.closeRpcConfirmModal === "true") {
     closeRpcConfirmModal();
+  }
+});
+
+rpcDeleteCloseButton.addEventListener("click", closeRpcDeleteModal);
+rpcDeleteCancelButton.addEventListener("click", closeRpcDeleteModal);
+rpcDeleteSubmitButton.addEventListener("click", async () => {
+  await submitRpcDelete();
+});
+
+rpcDeleteModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeRpcDeleteModal === "true") {
+    closeRpcDeleteModal();
   }
 });
 

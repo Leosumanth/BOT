@@ -63,7 +63,7 @@
         </div>
 
         <div class="sidebar-footer">
-          <button id="logout-button" class="ghost-button fx-button" type="button">Sign Out</button>
+          <button id="logout-button" class="danger-button fx-button" type="button">Sign Out</button>
         </div>
       </aside>
 
@@ -166,9 +166,6 @@
                   <div class="operation-progress-meta">
                     <span id="wallet-import-progress-label" class="helper-copy">Preparing wallet import...</span>
                     <strong id="wallet-import-progress-value">0%</strong>
-                  </div>
-                  <div class="progress-track">
-                    <span id="wallet-import-progress-bar" class="progress-bar" style="width: 0%"></span>
                   </div>
                 </div>
               </form>
@@ -323,9 +320,6 @@
                       <span id="rpc-operation-progress-label" class="helper-copy">Preparing RPC import...</span>
                       <strong id="rpc-operation-progress-value">0%</strong>
                     </div>
-                    <div class="progress-track">
-                      <span id="rpc-operation-progress-bar" class="progress-bar" style="width: 0%"></span>
-                    </div>
                   </div>
                 </form>
               </section>
@@ -381,16 +375,13 @@
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
                   <div class="settings-actions">
-                    <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="delete-explorer-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                   <div id="explorer-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
                     <div class="operation-progress-meta">
                       <span id="explorer-key-progress-label" class="helper-copy">Checking Explorer API key...</span>
                       <strong id="explorer-key-progress-value">0%</strong>
-                    </div>
-                    <div class="progress-track">
-                      <span id="explorer-key-progress-bar" class="progress-bar" style="width: 0%"></span>
                     </div>
                   </div>
                 </section>
@@ -408,16 +399,13 @@
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw OpenAI API key only. Do not paste a link, curl command, or URL.</p>
                   <div class="settings-actions">
-                    <button id="delete-openai-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="delete-openai-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                   <div id="openai-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
                     <div class="operation-progress-meta">
                       <span id="openai-key-progress-label" class="helper-copy">Checking OpenAI API key...</span>
                       <strong id="openai-key-progress-value">0%</strong>
-                    </div>
-                    <div class="progress-track">
-                      <span id="openai-key-progress-bar" class="progress-bar" style="width: 0%"></span>
                     </div>
                   </div>
                 </section>
@@ -435,16 +423,13 @@
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw Alchemy API key only. Do not paste a link, curl command, or full RPC URL.</p>
                   <div class="settings-actions">
-                    <button id="delete-alchemy-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="delete-alchemy-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-alchemy-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                   <div id="alchemy-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
                     <div class="operation-progress-meta">
                       <span id="alchemy-key-progress-label" class="helper-copy">Checking Alchemy API key...</span>
                       <strong id="alchemy-key-progress-value">0%</strong>
-                    </div>
-                    <div class="progress-track">
-                      <span id="alchemy-key-progress-bar" class="progress-bar" style="width: 0%"></span>
                     </div>
                   </div>
                 </section>
@@ -462,16 +447,13 @@
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw dRPC API key only. Do not paste a link, command, or full RPC URL.</p>
                   <div class="settings-actions">
-                    <button id="delete-drpc-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="delete-drpc-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-drpc-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                   <div id="drpc-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
                     <div class="operation-progress-meta">
                       <span id="drpc-key-progress-label" class="helper-copy">Checking dRPC API key...</span>
                       <strong id="drpc-key-progress-value">0%</strong>
-                    </div>
-                    <div class="progress-track">
-                      <span id="drpc-key-progress-bar" class="progress-bar" style="width: 0%"></span>
                     </div>
                   </div>
                 </section>
@@ -489,16 +471,13 @@
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw OpenSea API key only. Do not paste a link, curl command, or header.</p>
                   <div class="settings-actions">
-                    <button id="delete-opensea-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="delete-opensea-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-opensea-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                   <div id="opensea-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
                     <div class="operation-progress-meta">
                       <span id="opensea-key-progress-label" class="helper-copy">Checking OpenSea API key...</span>
                       <strong id="opensea-key-progress-value">0%</strong>
-                    </div>
-                    <div class="progress-track">
-                      <span id="opensea-key-progress-bar" class="progress-bar" style="width: 0%"></span>
                     </div>
                   </div>
                 </section>
@@ -1182,14 +1161,50 @@
             <span id="rpc-confirm-progress-label" class="helper-copy">Validating RPC endpoint...</span>
             <strong id="rpc-confirm-progress-value">0%</strong>
           </div>
-          <div class="progress-track">
-            <span id="rpc-confirm-progress-bar" class="progress-bar" style="width: 0%"></span>
-          </div>
         </div>
 
         <div class="modal-actions">
           <button id="rpc-confirm-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
           <button id="rpc-confirm-submit-button" class="primary-button fx-button" type="button">Confirm and Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="rpc-delete-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-rpc-delete-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete RPC Node</h3>
+            <p class="muted-copy">
+              Remove this RPC endpoint from the local mesh only after you confirm.
+            </p>
+          </div>
+          <button id="rpc-delete-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Name</span>
+            <strong id="rpc-delete-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Chain</span>
+            <strong id="rpc-delete-chain">-</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>URL</span>
+            <strong id="rpc-delete-url">-</strong>
+          </div>
+        </div>
+
+        <p class="helper-copy">
+          This helps prevent accidental RPC removal. Tasks using this chain may lose failover coverage until another endpoint is added.
+        </p>
+
+        <div class="modal-actions">
+          <button id="rpc-delete-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="rpc-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
         </div>
       </div>
     </div>
