@@ -7467,6 +7467,54 @@ async function handleRpcSave(request, response) {
   }
 }
 
+async function handleRpcFix(rpcId, response) {
+  try {
+    const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+    if (!rpcNode) {
+      sendJson(response, 404, { error: "RPC node not found" });
+      return;
+    }
+
+    if (rpcNode.source === "env") {
+      sendJson(response, 400, { error: "Env RPC nodes are managed through environment variables" });
+      return;
+    }
+
+    const inspection = await inspectRpcEndpoint(rpcNode.url);
+    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
+    const existingIndex = storedNodes.findIndex((node) => node.id === rpcId);
+    if (existingIndex === -1) {
+      throw new Error("Stored RPC node could not be found for repair");
+    }
+
+    storedNodes[existingIndex] = {
+      ...rpcNode,
+      url: inspection.url,
+      chainKey: inspection.chainKey,
+      chainId: inspection.chainId,
+      chainLabel: inspection.chainLabel,
+      lastHealth: {
+        status: "healthy",
+        latencyMs: inspection.latencyMs,
+        blockNumber: inspection.blockNumber,
+        checkedAt: inspection.checkedAt || new Date().toISOString()
+      }
+    };
+
+    appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
+    appState.chains = getAvailableChains();
+    await persistAppState();
+    emitState();
+    sendJson(response, 200, {
+      ok: true,
+      rpcNode: storedNodes[existingIndex],
+      inspection
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleChainlistRpcImport(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -9042,6 +9090,16 @@ const server = http.createServer(async (request, response) => {
       route[3] === "test"
     ) {
       await handleRpcTest(route[2], response);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      route[0] === "api" &&
+      route[1] === "rpc-nodes" &&
+      route[3] === "fix"
+    ) {
+      await handleRpcFix(route[2], response);
       return;
     }
 
