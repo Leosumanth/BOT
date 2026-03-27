@@ -34,6 +34,7 @@ const liveClock = document.getElementById("live-clock");
 const logOutput = document.getElementById("log-output");
 const resultsOutput = document.getElementById("results-output");
 const runtimeOutput = document.getElementById("runtime-output");
+const clearLogsButton = document.getElementById("clear-logs-button");
 const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
 const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
