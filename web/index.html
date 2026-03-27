@@ -246,30 +246,30 @@
             <section class="surface" data-tilt>
               <div class="surface-header">
                 <div>
-                  <h3>Import Wallets</h3>
-                  <p class="helper-copy">Add private keys into local groups for targeted routing.</p>
+                  <h3>Import Wallet</h3>
+                  <p class="helper-copy">Add a wallet name and paste a private key to save it locally.</p>
                 </div>
               </div>
               <form id="wallet-import-form" class="stack-form">
                 <label>
-                  <span>Group Name</span>
-                  <input id="wallet-group-input" type="text" placeholder="Team Alpha" />
+                  <span>Wallet Name</span>
+                  <input id="wallet-group-input" type="text" placeholder="Main Wallet" />
                 </label>
                 <label>
-                  <span>Private Keys</span>
-                  <textarea id="wallet-keys-input" rows="8" placeholder="One private key per line"></textarea>
+                  <span>Private Key</span>
+                  <textarea id="wallet-keys-input" rows="8" placeholder="Paste private key"></textarea>
                 </label>
-                <button class="primary-button fx-button" type="submit">Import Wallets</button>
+                <button class="primary-button fx-button" type="submit">Import Wallet</button>
               </form>
             </section>
 
             <div class="content-grid wallets-detail-grid">
               <section class="surface" data-tilt>
                 <div class="surface-header">
-                  <div>
-                    <h3>Saved Wallets</h3>
-                    <p class="helper-copy">Local operator fleet and grouped addresses.</p>
-                  </div>
+                <div>
+                  <h3>Saved Wallets</h3>
+                  <p class="helper-copy">Saved wallet names and addresses.</p>
+                </div>
                   <span id="wallet-count" class="muted-copy"></span>
                 </div>
                 <div id="wallet-list" class="stack-list"></div>
