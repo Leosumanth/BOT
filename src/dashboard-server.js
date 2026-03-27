@@ -22,7 +22,9 @@ const {
 const {
   buildClientSettings,
   fetchAbiFromExplorer,
+  fetchOpenSeaCollectionBySlug,
   normalizeDashboardSettings,
+  OPENSEA_KEY_TEST_COLLECTION_SLUG,
   resolveIntegrationSecrets,
   secretStorageKeys
 } = require("./integrations");
@@ -1522,6 +1524,7 @@ function buildAssistantStateSnapshot() {
     settings: {
       explorerApiKeyConfigured: Boolean(settings.explorerApiKeyConfigured),
       openaiApiKeyConfigured: Boolean(settings.openaiApiKeyConfigured),
+      openseaApiKeyConfigured: Boolean(settings.openseaApiKeyConfigured),
       queueMode: queueModeEnabled() ? "redis" : "local",
       operatorAssistantModel
     },
@@ -7676,6 +7679,27 @@ async function verifyOpenAiApiKey(apiKey) {
   }
 }
 
+async function verifyOpenSeaApiKey(apiKey) {
+  if (/^https?:\/\//i.test(apiKey) || /x-api-key/i.test(apiKey) || /^curl\b/i.test(apiKey)) {
+    throw new Error("Paste the raw OpenSea API key only, not a link, command, or header.");
+  }
+
+  if (/\s/.test(apiKey)) {
+    throw new Error("OpenSea API key must be a single token with no spaces.");
+  }
+
+  const payload = await fetchOpenSeaCollectionBySlug({
+    slug: OPENSEA_KEY_TEST_COLLECTION_SLUG,
+    apiKey
+  });
+
+  return {
+    collection: payload?.collection || payload?.name || OPENSEA_KEY_TEST_COLLECTION_SLUG,
+    hasFees: Boolean(payload?.fees),
+    slug: payload?.collection || OPENSEA_KEY_TEST_COLLECTION_SLUG
+  };
+}
+
 async function handleExplorerKeyTest(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -7724,6 +7748,30 @@ async function handleOpenAiKeyTest(request, response) {
   }
 }
 
+async function handleOpenSeaKeyTest(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const inputKey = String(payload.openseaApiKey || "").trim();
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const savedKey = String(integrationSecrets.openseaApiKey || "").trim();
+    const apiKey = inputKey || resolvedSecrets.openseaApiKey;
+
+    if (!apiKey) {
+      throw new Error("Add an OpenSea API key first.");
+    }
+
+    const result = await verifyOpenSeaApiKey(apiKey);
+
+    sendJson(response, 200, {
+      ok: true,
+      source: inputKey ? "input" : savedKey ? "saved" : "env",
+      ...result
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleExplorerKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.explorerApiKey);
@@ -7739,6 +7787,17 @@ async function handleOpenAiKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.openaiApiKey);
     delete integrationSecrets.openaiApiKey;
+    emitState();
+    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleOpenSeaKeyDelete(response) {
+  try {
+    await database.deleteSecret(secretStorageKeys.openseaApiKey);
+    delete integrationSecrets.openseaApiKey;
     emitState();
     sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
   } catch (error) {
@@ -7765,7 +7824,8 @@ async function handleSettingsSave(request, response) {
     });
     const secretInputs = {
       explorerApiKey: String(payload.explorerApiKey || "").trim(),
-      openaiApiKey: String(payload.openaiApiKey || "").trim()
+      openaiApiKey: String(payload.openaiApiKey || "").trim(),
+      openseaApiKey: String(payload.openseaApiKey || "").trim()
     };
 
     if (secretInputs.explorerApiKey) {
@@ -7773,6 +7833,9 @@ async function handleSettingsSave(request, response) {
     }
     if (secretInputs.openaiApiKey) {
       await verifyOpenAiApiKey(secretInputs.openaiApiKey);
+    }
+    if (secretInputs.openseaApiKey) {
+      await verifyOpenSeaApiKey(secretInputs.openseaApiKey);
     }
 
     appState.settings = nextSettings;
@@ -8117,6 +8180,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/control/test-opensea-key") {
+      await handleOpenSeaKeyTest(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/control/snapshot") {
       handleSnapshot(response);
       return;
@@ -8194,6 +8262,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "DELETE" && url.pathname === "/api/settings/openai-key") {
       await handleOpenAiKeyDelete(response);
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/settings/opensea-key") {
+      await handleOpenSeaKeyDelete(response);
       return;
     }
 

@@ -1,15 +1,19 @@
 const { ethers } = require("ethers");
 
 const EXPLORER_BASE_URL = "https://api.etherscan.io/v2/api";
+const OPENSEA_API_BASE_URL = "https://api.opensea.io";
+const OPENSEA_KEY_TEST_COLLECTION_SLUG = "cryptopunks";
 
 const secretEnvNames = {
   explorerApiKey: "ETHERSCAN_API_KEY",
-  openaiApiKey: "OPENAI_API_KEY"
+  openaiApiKey: "OPENAI_API_KEY",
+  openseaApiKey: "OPENSEA_API_KEY"
 };
 
 const secretStorageKeys = {
   explorerApiKey: "explorer_api_key",
-  openaiApiKey: "openai_api_key"
+  openaiApiKey: "openai_api_key",
+  openseaApiKey: "opensea_api_key"
 };
 
 function createDefaultDashboardSettings() {
@@ -78,6 +82,9 @@ function buildClientSettings(settings, storedSecrets = {}) {
   const storedOpenAiApiKey = trimValue(storedSecrets.openaiApiKey, "");
   const envOpenAiApiKey = trimValue(process.env[secretEnvNames.openaiApiKey], "");
   const openaiApiKeySource = storedOpenAiApiKey ? "saved" : envOpenAiApiKey ? "env" : "";
+  const storedOpenSeaApiKey = trimValue(storedSecrets.openseaApiKey, "");
+  const envOpenSeaApiKey = trimValue(process.env[secretEnvNames.openseaApiKey], "");
+  const openseaApiKeySource = storedOpenSeaApiKey ? "saved" : envOpenSeaApiKey ? "env" : "";
 
   return {
     ...normalized,
@@ -85,6 +92,8 @@ function buildClientSettings(settings, storedSecrets = {}) {
     explorerApiKeySource,
     openaiApiKeyConfigured: Boolean(resolved.openaiApiKey),
     openaiApiKeySource,
+    openseaApiKeyConfigured: Boolean(resolved.openseaApiKey),
+    openseaApiKeySource,
     openaiRpcAdvisorModel: trimValue(process.env.OPENAI_RPC_ADVISOR_MODEL, "gpt-5-mini-2025-08-07")
   };
 }
@@ -179,11 +188,38 @@ async function fetchAbiFromExplorer({ chainId, address, apiKey }) {
   };
 }
 
+async function fetchOpenSeaCollectionBySlug({ slug, apiKey }) {
+  if (!apiKey) {
+    throw new Error("OpenSea API key is not configured");
+  }
+
+  const normalizedSlug = trimValue(slug);
+  if (!normalizedSlug) {
+    throw new Error("OpenSea collection slug is required");
+  }
+
+  const requestUrl = new URL(
+    `/api/v2/collections/${encodeURIComponent(normalizedSlug)}`,
+    OPENSEA_API_BASE_URL
+  );
+
+  const payload = await fetchJson(requestUrl, {
+    method: "GET",
+    headers: {
+      "x-api-key": apiKey
+    }
+  });
+
+  return payload;
+}
+
 module.exports = {
   buildClientSettings,
   createDefaultDashboardSettings,
   fetchAbiFromExplorer,
+  fetchOpenSeaCollectionBySlug,
   normalizeDashboardSettings,
+  OPENSEA_KEY_TEST_COLLECTION_SLUG,
   resolveIntegrationSecrets,
   secretEnvNames,
   secretStorageKeys

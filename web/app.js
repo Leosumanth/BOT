@@ -176,6 +176,10 @@ const openaiApiKeyInput = document.getElementById("openai-api-key-input");
 const openaiConfigStatus = document.getElementById("openai-config-status");
 const deleteOpenaiKeyButton = document.getElementById("delete-openai-key-button");
 const testOpenaiKeyButton = document.getElementById("test-openai-key-button");
+const openseaApiKeyInput = document.getElementById("opensea-api-key-input");
+const openseaConfigStatus = document.getElementById("opensea-config-status");
+const deleteOpenseaKeyButton = document.getElementById("delete-opensea-key-button");
+const testOpenseaKeyButton = document.getElementById("test-opensea-key-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const globalStopButton = document.getElementById("global-stop-button");
@@ -4888,6 +4892,29 @@ function syncOpenaiKeyControls() {
   });
 }
 
+function setOpenseaKeyStatus(message = null) {
+  setApiKeyStatus({
+    input: openseaApiKeyInput,
+    statusNode: openseaConfigStatus,
+    source: state.settings.openseaApiKeySource,
+    message
+  });
+}
+
+function syncOpenseaKeyControls() {
+  syncApiKeyControls({
+    input: openseaApiKeyInput,
+    deleteButton: deleteOpenseaKeyButton,
+    source: state.settings.openseaApiKeySource,
+    placeholders: {
+      saved: "Saved on server. Enter a new key to replace it.",
+      env: "Loaded from .env. Enter a new key to override it.",
+      empty: "OpenSea API key"
+    },
+    deleteLabel: "Delete the saved OpenSea API key"
+  });
+}
+
 function withButtonBusyState(button, busyLabel, work) {
   if (!button) {
     return Promise.resolve().then(work);
@@ -4908,11 +4935,14 @@ function withButtonBusyState(button, busyLabel, work) {
 function renderSettings() {
   explorerApiKeyInput.value = "";
   openaiApiKeyInput.value = "";
+  openseaApiKeyInput.value = "";
 
   syncExplorerKeyControls();
   setExplorerKeyStatus();
   syncOpenaiKeyControls();
   setOpenaiKeyStatus();
+  syncOpenseaKeyControls();
+  setOpenseaKeyStatus();
 }
 
 function renderRuntime() {
@@ -6547,8 +6577,9 @@ settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const explorerApiKeyValue = explorerApiKeyInput.value.trim();
   const openaiApiKeyValue = openaiApiKeyInput.value.trim();
+  const openseaApiKeyValue = openseaApiKeyInput.value.trim();
 
-  if (!explorerApiKeyValue && !openaiApiKeyValue) {
+  if (!explorerApiKeyValue && !openaiApiKeyValue && !openseaApiKeyValue) {
     showToast("Enter a new API key before saving settings.", "info", "No Changes");
     return;
   }
@@ -6560,6 +6591,9 @@ settingsForm.addEventListener("submit", async (event) => {
   if (openaiApiKeyValue) {
     updatedKeys.push("OpenAI");
   }
+  if (openseaApiKeyValue) {
+    updatedKeys.push("OpenSea");
+  }
 
   const saveButton = saveSettingsButton || settingsForm.querySelector('button[type="submit"]');
 
@@ -6570,7 +6604,8 @@ settingsForm.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           explorerApiKey: explorerApiKeyValue,
-          openaiApiKey: openaiApiKeyValue
+          openaiApiKey: openaiApiKeyValue,
+          openseaApiKey: openseaApiKeyValue
         })
       });
       if (payload.settings) {
@@ -6578,6 +6613,7 @@ settingsForm.addEventListener("submit", async (event) => {
       }
       explorerApiKeyInput.value = "";
       openaiApiKeyInput.value = "";
+      openseaApiKeyInput.value = "";
       showToast(
         `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`,
         "success",
@@ -6587,10 +6623,13 @@ settingsForm.addEventListener("submit", async (event) => {
       setExplorerKeyStatus();
       syncOpenaiKeyControls();
       setOpenaiKeyStatus();
+      syncOpenseaKeyControls();
+      setOpenseaKeyStatus();
     });
   } catch {} finally {
     syncExplorerKeyControls();
     syncOpenaiKeyControls();
+    syncOpenseaKeyControls();
   }
 });
 
@@ -6600,6 +6639,10 @@ explorerApiKeyInput.addEventListener("input", () => {
 
 openaiApiKeyInput.addEventListener("input", () => {
   setOpenaiKeyStatus();
+});
+
+openseaApiKeyInput.addEventListener("input", () => {
+  setOpenseaKeyStatus();
 });
 
 deleteExplorerKeyButton.addEventListener("click", async () => {
@@ -6671,6 +6714,42 @@ deleteOpenaiKeyButton.addEventListener("click", async () => {
   } finally {
     deleteOpenaiKeyButton.textContent = buttonLabel;
     syncOpenaiKeyControls();
+  }
+});
+
+deleteOpenseaKeyButton.addEventListener("click", async () => {
+  if (state.settings.openseaApiKeySource !== "saved") {
+    showToast("There is no saved OpenSea dashboard key to delete.", "info", "No Saved Key");
+    return;
+  }
+
+  if (!window.confirm("Delete the saved OpenSea API key?")) {
+    return;
+  }
+
+  const buttonLabel = deleteOpenseaKeyButton.textContent;
+  deleteOpenseaKeyButton.disabled = true;
+  deleteOpenseaKeyButton.textContent = "Deleting...";
+
+  try {
+    const payload = await request("/api/settings/opensea-key", {
+      method: "DELETE"
+    });
+
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
+
+    openseaApiKeyInput.value = "";
+    syncOpenseaKeyControls();
+    setOpenseaKeyStatus();
+    showToast("Saved OpenSea API key deleted.", "success", "OpenSea Key Deleted");
+  } catch {
+    syncOpenseaKeyControls();
+    setOpenseaKeyStatus();
+  } finally {
+    deleteOpenseaKeyButton.textContent = buttonLabel;
+    syncOpenseaKeyControls();
   }
 });
 
@@ -6763,6 +6842,52 @@ testOpenaiKeyButton.addEventListener("click", async () => {
   } finally {
     testOpenaiKeyButton.disabled = false;
     testOpenaiKeyButton.textContent = buttonLabel;
+  }
+});
+
+testOpenseaKeyButton.addEventListener("click", async () => {
+  const buttonLabel = testOpenseaKeyButton.textContent;
+  const openseaApiKeyValue = openseaApiKeyInput.value.trim();
+
+  if (!openseaApiKeyValue && !state.settings.openseaApiKeyConfigured) {
+    setOpenseaKeyStatus("No key to test");
+    showToast("Paste an OpenSea key first, or save one before testing.", "info", "OpenSea Key Required");
+    return;
+  }
+
+  testOpenseaKeyButton.disabled = true;
+  testOpenseaKeyButton.textContent = "Testing...";
+
+  try {
+    const payload = await request("/api/control/test-opensea-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        openseaApiKey: openseaApiKeyValue
+      })
+    });
+
+    const statusMessage =
+      payload.source === "input"
+        ? "Typed key verified"
+        : payload.source === "env"
+          ? "Environment key verified"
+          : "Saved key verified";
+    setOpenseaKeyStatus(statusMessage);
+    showToast(
+      payload.source === "input"
+        ? "OpenSea API key is valid. Save settings to replace the current key."
+        : payload.source === "env"
+          ? "Environment OpenSea API key is valid. Save a new key if you want to override it in the dashboard."
+          : "Saved OpenSea API key is valid.",
+      "success",
+      "OpenSea Key Valid"
+    );
+  } catch {
+    setOpenseaKeyStatus("Key test failed");
+  } finally {
+    testOpenseaKeyButton.disabled = false;
+    testOpenseaKeyButton.textContent = buttonLabel;
   }
 });
 
