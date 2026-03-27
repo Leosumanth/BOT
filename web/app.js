@@ -29,6 +29,9 @@ const walletGroupBreakdown = document.getElementById("wallet-group-breakdown");
 const runInsights = document.getElementById("run-insights");
 const tasksSubtitle = document.getElementById("tasks-subtitle");
 const taskGrid = document.getElementById("task-grid");
+const tasksSummaryCopy = document.getElementById("tasks-summary-copy");
+const taskOverviewGrid = document.getElementById("task-overview-grid");
+const taskStatusLegend = document.getElementById("task-status-legend");
 const telemetrySummary = document.getElementById("telemetry-summary");
 const systemAlerts = document.getElementById("system-alerts");
 const priorityQueue = document.getElementById("priority-queue");
@@ -42,6 +45,7 @@ const liveClock = document.getElementById("live-clock");
 const logOutput = document.getElementById("log-output");
 const resultsOutput = document.getElementById("results-output");
 const runtimeOutput = document.getElementById("runtime-output");
+const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
 const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
 const runPriorityButton = document.getElementById("run-priority-button");
@@ -789,6 +793,104 @@ function activeTaskIds() {
   return state.runState.activeTaskId ? [state.runState.activeTaskId] : [];
 }
 
+const TASK_STATUS_ORDER = ["running", "queued", "ready", "draft", "completed", "failed", "stopped", "done"];
+
+const TASK_STATUS_META = {
+  running: {
+    label: "Running",
+    tone: "running",
+    detail: "Live execution in progress"
+  },
+  queued: {
+    label: "Queued",
+    tone: "queued",
+    detail: "Waiting in the launch queue"
+  },
+  ready: {
+    label: "Ready",
+    tone: "ready",
+    detail: "Primed for the next launch window"
+  },
+  draft: {
+    label: "Draft",
+    tone: "draft",
+    detail: "Preset saved and waiting for operator action"
+  },
+  completed: {
+    label: "Completed",
+    tone: "completed",
+    detail: "Finished successfully"
+  },
+  failed: {
+    label: "Failed",
+    tone: "failed",
+    detail: "Needs operator review"
+  },
+  stopped: {
+    label: "Stopped",
+    tone: "stopped",
+    detail: "Stopped by the operator"
+  },
+  done: {
+    label: "Done",
+    tone: "done",
+    detail: "Closed out and archived"
+  }
+};
+
+function taskStatusMeta(status) {
+  const key = String(status || "draft").toLowerCase();
+  if (key === "all") {
+    return {
+      key,
+      label: "All Statuses",
+      tone: "all",
+      detail: "View every task session"
+    };
+  }
+
+  const meta = TASK_STATUS_META[key];
+  if (meta) {
+    return { key, ...meta };
+  }
+
+  return {
+    key,
+    label: key ? `${key[0].toUpperCase()}${key.slice(1)}` : "Draft",
+    tone: "draft",
+    detail: "Task state available"
+  };
+}
+
+function taskVisualStatus(task, activeTaskIdSet = null) {
+  const activeIds = activeTaskIdSet || new Set(activeTaskIds());
+  if (activeIds.has(task.id) && state.runState.status === "running") {
+    return "running";
+  }
+
+  if (task.done) {
+    return "done";
+  }
+
+  const normalized = String(task.status || "draft").toLowerCase();
+  return TASK_STATUS_META[normalized] ? normalized : "draft";
+}
+
+function summarizeTaskStatuses(tasks, activeTaskIdSet = null) {
+  const activeIds = activeTaskIdSet || new Set(activeTaskIds());
+  const counts = TASK_STATUS_ORDER.reduce((map, status) => {
+    map[status] = 0;
+    return map;
+  }, {});
+
+  tasks.forEach((task) => {
+    const status = taskVisualStatus(task, activeIds);
+    counts[status] = (counts[status] || 0) + 1;
+  });
+
+  return counts;
+}
+
 function walletGroups() {
   return ["All", ...new Set(state.wallets.map((wallet) => wallet.group || "Imported"))];
 }
@@ -996,6 +1098,7 @@ function taskReadiness(task) {
 }
 
 function filteredTasks() {
+  const activeTaskIdSet = new Set(activeTaskIds());
   return state.tasks.filter((task) => {
     const search = state.taskSearch.toLowerCase();
     const matchesSearch =
@@ -1006,7 +1109,7 @@ function filteredTasks() {
 
     const matchesStatus =
       state.taskStatusFilter === "all" ||
-      (state.taskStatusFilter === "done" ? Boolean(task.done) : task.status === state.taskStatusFilter);
+      taskVisualStatus(task, activeTaskIdSet) === state.taskStatusFilter;
 
     return matchesSearch && matchesStatus;
   });
@@ -2239,28 +2342,37 @@ function renderDashboard() {
     : `<div class="empty-state"><h3>No wallet groups yet</h3><p>Import wallets to see group analytics.</p></div>`;
 }
 
-function renderTaskCard(task) {
+function renderTaskCard(task, activeTaskIdSet = new Set()) {
   const summary = task.summary || {};
   const progress = task.progress || { phase: "Ready", percent: 0 };
+  const progressPercent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
   const latestHistory = task.history?.[0];
-  const active = activeTaskIds().includes(task.id) && state.runState.status === "running";
-  const queued = task.status === "queued";
-  const hashCount = summary.hashes?.length || 0;
+  const latestHistorySummary = latestHistory?.summary || {};
+  const statusKey = taskVisualStatus(task, activeTaskIdSet);
+  const statusMeta = taskStatusMeta(statusKey);
+  const active = statusKey === "running";
+  const queued = statusKey === "queued";
+  const hashCount = Array.isArray(summary.hashes) ? summary.hashes.length : 0;
+  const latestHashCount = Array.isArray(latestHistorySummary.hashes) ? latestHistorySummary.hashes.length : 0;
   const tags = [...(task.tags || [])];
+  const updatedLabel = active ? "Live now" : `Updated ${relativeTime(task.updatedAt)}`;
 
   if (task.multiRpcBroadcast) {
     tags.push("RPC Mesh");
   }
 
   return `
-    <article class="task-card ${escapeHtml(task.status)}" data-task-id="${escapeHtml(task.id)}" data-tilt>
+    <article class="task-card ${escapeHtml(statusMeta.tone)}" data-task-id="${escapeHtml(task.id)}" data-task-status="${escapeHtml(statusMeta.key)}" data-tilt>
       <div class="task-head">
         <div>
           <p class="eyebrow">${escapeHtml(chainLabel(task.chainKey))}</p>
-          <h3>${escapeHtml(task.name)}</h3>
-          <p class="muted-copy">${escapeHtml(task.platform)} · ${escapeHtml(humanizePriority(task.priority || "standard"))}</p>
+          <h3>${escapeHtml(task.name || "Untitled Task")}</h3>
+          <p class="muted-copy">${escapeHtml(task.platform || "Mint Flow")} / ${escapeHtml(humanizePriority(task.priority || "standard"))} priority / ${escapeHtml(statusMeta.detail)}</p>
         </div>
-        <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
+        <div class="task-head-side">
+          <span class="status-pill ${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.label)}</span>
+          <span class="task-head-timestamp">${escapeHtml(updatedLabel)}</span>
+        </div>
       </div>
 
       <div class="chip-row">
@@ -2271,24 +2383,24 @@ function renderTaskCard(task) {
       <div class="task-meta">
         <div class="meta-item"><label>Contract</label><strong>${escapeHtml(truncateMiddle(task.contractAddress || "Not set"))}</strong></div>
         <div class="meta-item"><label>Chain</label><strong>${escapeHtml(chainLabel(task.chainKey))}</strong></div>
-        <div class="meta-item"><label>Wallets</label><strong>${task.walletCount}</strong></div>
-        <div class="meta-item"><label>RPC</label><strong>${task.rpcCount}</strong></div>
-        <div class="meta-item"><label>Qty</label><strong>${task.quantityPerWallet}</strong></div>
+        <div class="meta-item"><label>Wallets</label><strong>${task.walletCount || 0}</strong></div>
+        <div class="meta-item"><label>RPC</label><strong>${task.rpcCount || 0}</strong></div>
+        <div class="meta-item"><label>Qty</label><strong>${task.quantityPerWallet || 0}</strong></div>
         <div class="meta-item"><label>Price</label><strong>${escapeHtml(task.priceEth || "Auto")}${task.priceEth ? " ETH" : ""}</strong></div>
       </div>
 
       <div class="task-stats">
-        <div class="stat-box"><label>Total</label><strong>${summary.total ?? task.walletCount}</strong></div>
+        <div class="stat-box"><label>Total</label><strong>${summary.total ?? task.walletCount ?? 0}</strong></div>
         <div class="stat-box success"><label>Success</label><strong>${summary.success ?? 0}</strong></div>
         <div class="stat-box failed"><label>Failed</label><strong>${summary.failed ?? 0}</strong></div>
         <div class="stat-box"><label>Hashes</label><strong>${hashCount}</strong></div>
       </div>
 
       <div class="task-progress-row">
-        <span class="muted-copy">${escapeHtml(progress.phase)} · ${progress.percent ?? 0}%</span>
-        <span class="wallet-chip">${active ? "Live task" : relativeTime(task.updatedAt)}</span>
+        <span class="muted-copy">${escapeHtml(progress.phase || "Ready")} / ${progressPercent}%</span>
+        <span class="task-signal-chip ${escapeHtml(statusMeta.tone)}">${escapeHtml(active ? "Live execution" : updatedLabel)}</span>
       </div>
-      <div class="progress-track"><div class="progress-bar" style="width:${Number(progress.percent || 0)}%"></div></div>
+      <div class="progress-track"><div class="progress-bar" style="width:${progressPercent}%"></div></div>
 
       ${task.notes ? `<p class="muted-copy">${escapeHtml(task.notes)}</p>` : ""}
 
@@ -2307,7 +2419,7 @@ function renderTaskCard(task) {
             ? `
               <div class="history-item">
                 <strong>Last run: ${new Date(latestHistory.ranAt).toLocaleString()}</strong>
-                <p class="muted-copy">${latestHistory.summary.success} success · ${latestHistory.summary.failed} failed · ${latestHistory.summary.hashes.length} hashes</p>
+                <p class="muted-copy">${latestHistorySummary.success ?? 0} success / ${latestHistorySummary.failed ?? 0} failed / ${latestHashCount} hashes</p>
               </div>
             `
             : `<p class="muted-copy">No history recorded yet.</p>`
@@ -2318,12 +2430,123 @@ function renderTaskCard(task) {
 }
 
 function renderTasks() {
+  const activeTaskIdSet = new Set(activeTaskIds());
   const tasks = filteredTasks();
-  tasksSubtitle.textContent = `${pluralize(tasks.length, "task")} shown`;
+  const allStatusCounts = summarizeTaskStatuses(state.tasks, activeTaskIdSet);
+  const totalTasks = state.tasks.length;
+  const activeSearch = state.taskSearch.trim();
+  const activeFilterMeta = taskStatusMeta(state.taskStatusFilter);
+  const overviewCards = [
+    {
+      tone: "all",
+      label: "Tracked",
+      value: totalTasks,
+      detail: `${pluralize(tasks.length, "task")} in the current view`
+    },
+    {
+      tone: "ready",
+      label: "Ready",
+      value: allStatusCounts.ready,
+      detail: allStatusCounts.ready ? "Primed for launch timing" : "No launch-ready tasks"
+    },
+    {
+      tone: "running",
+      label: "Running",
+      value: allStatusCounts.running,
+      detail: allStatusCounts.running ? "Live execution is active" : "No tasks are live right now"
+    },
+    {
+      tone: "queued",
+      label: "Queued",
+      value: allStatusCounts.queued,
+      detail: allStatusCounts.queued ? "Waiting for the next launch slot" : "Queue is clear"
+    },
+    {
+      tone: "completed",
+      label: "Completed",
+      value: allStatusCounts.completed + allStatusCounts.done,
+      detail: `${allStatusCounts.completed} completed / ${allStatusCounts.done} done`
+    },
+    {
+      tone: "failed",
+      label: "Attention",
+      value: allStatusCounts.failed + allStatusCounts.stopped,
+      detail: `${allStatusCounts.failed} failed / ${allStatusCounts.stopped} stopped`
+    }
+  ];
+
+  tasksSubtitle.textContent = `${pluralize(tasks.length, "task")} in view / ${pluralize(totalTasks, "tracked task")}`;
+
+  if (tasksSummaryCopy) {
+    let summaryText = `${pluralize(totalTasks, "task")} in the command center. `;
+    if (state.taskStatusFilter === "all") {
+      summaryText += `${pluralize(allStatusCounts.running, "task")} live, ${pluralize(allStatusCounts.queued, "task")} queued, and ${pluralize(allStatusCounts.ready, "task")} ready.`;
+    } else {
+      summaryText += `${pluralize(tasks.length, "task")} match ${activeFilterMeta.label.toLowerCase()}.`;
+    }
+    if (activeSearch) {
+      summaryText += ` Search focus: "${activeSearch}".`;
+    }
+    tasksSummaryCopy.textContent = summaryText;
+  }
+
+  if (taskOverviewGrid) {
+    taskOverviewGrid.innerHTML = overviewCards
+      .map(
+        (card) => `
+          <article class="stat-card task-overview-card ${escapeHtml(card.tone)}">
+            <span class="micro-label">${escapeHtml(card.label)}</span>
+            <strong>${card.value}</strong>
+            <p>${escapeHtml(card.detail)}</p>
+          </article>
+        `
+      )
+      .join("");
+  }
+
+  if (taskStatusLegend) {
+    const legendItems = [
+      {
+        count: totalTasks,
+        ...taskStatusMeta("all")
+      },
+      ...TASK_STATUS_ORDER.map((status) => ({
+        count: allStatusCounts[status] || 0,
+        ...taskStatusMeta(status)
+      }))
+    ];
+
+    taskStatusLegend.innerHTML = legendItems
+      .map(
+        (item) => `
+          <button type="button" class="task-status-chip ${escapeHtml(item.tone)}${state.taskStatusFilter === item.key ? " active" : ""}" data-task-status-chip="${escapeHtml(item.key)}">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${item.count}</strong>
+          </button>
+        `
+      )
+      .join("");
+
+    taskStatusLegend.querySelectorAll("[data-task-status-chip]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.taskStatusFilter = button.dataset.taskStatusChip;
+        taskStatusFilter.value = state.taskStatusFilter;
+        renderTasks();
+      });
+    });
+  }
+
+  const emptyTitle = totalTasks === 0 ? "No task sessions yet" : "No tasks match this view";
+  const emptyMessage =
+    totalTasks === 0
+      ? "Create a new task to start building your launch queue."
+      : activeSearch
+        ? `No tasks matched "${escapeHtml(activeSearch)}" inside ${escapeHtml(activeFilterMeta.label.toLowerCase())}. Adjust the search or status filter.`
+        : "Adjust the status filter or create a new task to expand the queue.";
 
   taskGrid.innerHTML = tasks.length
-    ? tasks.map(renderTaskCard).join("")
-    : `<div class="empty-state"><h3>No matching tasks</h3><p>Adjust the search or status filter, or create a new task.</p></div>`;
+    ? tasks.map((task) => renderTaskCard(task, activeTaskIdSet)).join("")
+    : `<div class="empty-state"><h3>${emptyTitle}</h3><p>${emptyMessage}</p></div>`;
 
   taskGrid.querySelectorAll("[data-task-action]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -5723,6 +5946,12 @@ taskSearchInput.addEventListener("input", () => {
 taskStatusFilter.addEventListener("change", () => {
   state.taskStatusFilter = taskStatusFilter.value;
   renderTasks();
+});
+
+dashboardRefreshButton?.addEventListener("click", () => {
+  loadState()
+    .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
+    .catch(() => {});
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());

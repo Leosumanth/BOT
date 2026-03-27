@@ -77,6 +77,7 @@
               <span class="micro-label">Local Time</span>
               <strong id="live-clock">--:--:--</strong>
             </div>
+            <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
             <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Launch Task Builder</button>
           </div>
         </header>
@@ -206,6 +207,7 @@
               <select id="task-status-filter" class="header-select">
                 <option value="all">All Statuses</option>
                 <option value="draft">Draft</option>
+                <option value="ready">Ready</option>
                 <option value="running">Running</option>
                 <option value="queued">Queued</option>
                 <option value="completed">Completed</option>
@@ -217,7 +219,19 @@
             </div>
           </div>
 
-          <div id="task-grid" class="task-grid"></div>
+          <section class="surface tasks-command-surface" data-tilt>
+            <div class="surface-header tasks-command-header">
+              <div>
+                <p class="eyebrow">Task Command Center</p>
+                <h3>Execution Overview</h3>
+                <p id="tasks-summary-copy" class="helper-copy">Live telemetry, status flow, and operator visibility for every task session.</p>
+              </div>
+              <div id="task-status-legend" class="task-status-legend"></div>
+            </div>
+            <div id="task-overview-grid" class="task-overview-grid"></div>
+          </section>
+
+          <div id="task-grid" class="task-grid advanced-task-grid"></div>
         </section>
 
         <section class="view" data-view-panel="wallets">
