@@ -83,115 +83,32 @@
         </header>
 
         <section class="view active" data-view-panel="dashboard">
-          <div class="hero-grid">
-            <section class="surface hero-surface" data-tilt>
-              <div class="hero-copy">
-                <p class="eyebrow">Realtime Operations Matrix</p>
-                <h2>Neural Command Dashboard</h2>
-                <p class="view-subtitle">
-                  A high-tech control room for orchestrating mint tasks, wallet fleets, and RPC
-                  failover with richer telemetry and faster operator actions.
-                </p>
-              </div>
+          <div class="view-header dashboard-view-header">
+            <div>
+              <h2>Dashboard</h2>
+            </div>
+          </div>
 
-              <div class="hero-action-row">
-                <button id="run-priority-button" class="primary-button fx-button" type="button">Run Priority Task</button>
-                <button id="rpc-pulse-button" class="ghost-button fx-button" type="button">Pulse RPC Mesh</button>
-                <button id="snapshot-button" class="ghost-button fx-button" type="button">Capture Snapshot</button>
-              </div>
-
-              <div id="telemetry-summary" class="telemetry-summary-grid"></div>
-            </section>
-
-            <section class="surface hero-visual" data-tilt>
-              <div class="orbital-stage">
-                <div class="orbital-core">
-                  <span class="ring ring-a"></span>
-                  <span class="ring ring-b"></span>
-                  <span class="ring ring-c"></span>
-                  <span class="ring ring-d"></span>
-                  <div class="core-chip">
-                    <span class="micro-label">Readiness</span>
-                    <strong id="command-score">0%</strong>
-                  </div>
+          <div class="content-grid dashboard-focus-grid">
+            <section class="surface dashboard-history-surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Run History</h3>
+                  <p class="helper-copy">Currently running tasks and the latest task execution results.</p>
                 </div>
               </div>
+              <div id="dashboard-run-history" class="stack-list"></div>
+            </section>
 
+            <section class="surface dashboard-alert-surface" data-tilt>
               <div class="surface-header compact">
                 <div>
                   <h3>System Alerts</h3>
-                  <p class="helper-copy">Backend-derived signals, risks, and launch readiness notes.</p>
+                  <p class="helper-copy">RPC failures, blocked tasks, and system issues that need fixing.</p>
                 </div>
                 <span id="dashboard-health-pill" class="status-pill">Standby</span>
               </div>
               <div id="system-alerts" class="alert-stack"></div>
-            </section>
-          </div>
-
-          <div class="dashboard-cards" id="dashboard-stats"></div>
-          <div id="run-insights" class="dashboard-insights"></div>
-
-          <div class="content-grid command-grid">
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Command Center</h3>
-                  <p class="helper-copy">Priority queue, launch posture, and actionable run controls.</p>
-                </div>
-              </div>
-              <div id="priority-queue" class="stack-list"></div>
-            </section>
-
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Recent Tasks</h3>
-                  <p class="helper-copy">Latest presets and task-level operator changes.</p>
-                </div>
-              </div>
-              <div id="dashboard-recent-tasks" class="stack-list"></div>
-            </section>
-          </div>
-
-          <div class="content-grid overview-grid">
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Chain Breakdown</h3>
-                  <p class="helper-copy">Where the configured execution load is currently mapped.</p>
-                </div>
-              </div>
-              <div id="chain-breakdown" class="stack-list"></div>
-            </section>
-
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>RPC Mesh Health</h3>
-                  <p class="helper-copy">Latency, availability, and per-node status across the pool.</p>
-                </div>
-              </div>
-              <div id="rpc-health-grid" class="stack-list"></div>
-            </section>
-          </div>
-
-          <div class="content-grid">
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <h3>Live Activity</h3>
-                <button id="clear-logs-button" class="ghost-button fx-button" type="button">Clear Feed</button>
-              </div>
-              <pre id="log-output" class="terminal-panel"></pre>
-            </section>
-
-            <section class="surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Top Wallet Groups</h3>
-                  <p class="helper-copy">Grouped fleet visibility for faster task routing.</p>
-                </div>
-              </div>
-              <div id="wallet-group-breakdown" class="stack-list"></div>
             </section>
           </div>
         </section>
@@ -200,21 +117,8 @@
           <div class="view-header">
             <div>
               <h2>Tasks</h2>
-              <p id="tasks-subtitle" class="view-subtitle">Manage task presets, launch runs, and monitor progress.</p>
             </div>
             <div class="header-actions">
-              <input id="task-search-input" class="header-input" type="text" placeholder="Search tasks" />
-              <select id="task-status-filter" class="header-select">
-                <option value="all">All Statuses</option>
-                <option value="draft">Draft</option>
-                <option value="ready">Ready</option>
-                <option value="running">Running</option>
-                <option value="queued">Queued</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
-                <option value="done">Done</option>
-                <option value="stopped">Stopped</option>
-              </select>
               <button id="new-task-button" class="primary-button fx-button" type="button">New Task</button>
             </div>
           </div>
@@ -228,7 +132,6 @@
               </div>
               <div id="task-status-legend" class="task-status-legend"></div>
             </div>
-            <div id="task-overview-grid" class="task-overview-grid"></div>
           </section>
 
           <div id="task-grid" class="task-grid advanced-task-grid"></div>

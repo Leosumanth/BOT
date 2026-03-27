@@ -1502,6 +1502,11 @@ function assistantConversationKey(user) {
 function buildAssistantStateSnapshot() {
   const settings = buildPublicSettings();
   const telemetry = buildTelemetry();
+  const chains = getAvailableChains();
+  const defaultWallet = selectAssistantDefaultWallet();
+  const defaultRpcByChain = new Map(
+    chains.map((chain) => [chain.key, selectAssistantDefaultRpcNodes(chain.key)[0] || null])
+  );
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1511,10 +1516,28 @@ function buildAssistantStateSnapshot() {
       queueMode: queueModeEnabled() ? "redis" : "local",
       operatorAssistantModel
     },
-    chains: getAvailableChains().map((chain) => ({
+    defaults: {
+      walletId: defaultWallet?.id || null,
+      walletLabel: defaultWallet ? assistantWalletLabel(defaultWallet) : null,
+      rpcByChain: chains.map((chain) => {
+        const defaultRpc = defaultRpcByChain.get(chain.key) || null;
+        return {
+          chainKey: chain.key,
+          chainLabel: chain.label,
+          rpcId: defaultRpc?.id || null,
+          rpcName: defaultRpc?.name || null,
+          latencyMs: Number.isFinite(Number(defaultRpc?.lastHealth?.latencyMs))
+            ? Number(defaultRpc.lastHealth.latencyMs)
+            : null
+        };
+      })
+    },
+    chains: chains.map((chain) => ({
       key: chain.key,
       label: chain.label,
-      chainId: chain.chainId
+      chainId: chain.chainId,
+      defaultRpcId: defaultRpcByChain.get(chain.key)?.id || null,
+      defaultRpcName: defaultRpcByChain.get(chain.key)?.name || null
     })),
     wallets: appState.wallets.map((wallet) => ({
       id: wallet.id,
@@ -1523,7 +1546,8 @@ function buildAssistantStateSnapshot() {
       addressShort: wallet.addressShort,
       group: wallet.group,
       status: wallet.status,
-      source: wallet.source
+      source: wallet.source,
+      defaultCandidate: wallet.id === defaultWallet?.id
     })),
     rpcNodes: appState.rpcNodes.map((node) => ({
       id: node.id,
@@ -1536,7 +1560,8 @@ function buildAssistantStateSnapshot() {
       url: node.url,
       health: node.lastHealth?.status || "unknown",
       latencyMs: node.lastHealth?.latencyMs || null,
-      checkedAt: node.lastHealth?.checkedAt || null
+      checkedAt: node.lastHealth?.checkedAt || null,
+      defaultCandidate: node.id === defaultRpcByChain.get(node.chainKey)?.id
     })),
     tasks: appState.tasks.map((task) => {
       const response = buildTaskResponse(task);
@@ -1584,6 +1609,171 @@ function normalizeAssistantRef(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function assistantWalletLabel(wallet) {
+  return wallet?.label || wallet?.addressShort || wallet?.address || wallet?.id || "Wallet";
+}
+
+function rankAssistantWallets(wallets = []) {
+  const scoreFor = (wallet) => {
+    const label = `${wallet?.label || ""} ${wallet?.group || ""}`.toLowerCase();
+    let score = 0;
+
+    if (wallet?.status === "ready") {
+      score += 50;
+    }
+
+    if (wallet?.source === "env") {
+      score += 30;
+    }
+
+    if (/\b(default|main|primary|operator)\b/.test(label)) {
+      score += 80;
+    }
+
+    if (/\benv\b/.test(label)) {
+      score += 10;
+    }
+
+    return score;
+  };
+
+  return [...wallets].sort((left, right) => {
+    const scoreDelta = scoreFor(right) - scoreFor(left);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+
+    const updatedDelta = new Date(right?.updatedAt || 0).getTime() - new Date(left?.updatedAt || 0).getTime();
+    if (updatedDelta !== 0) {
+      return updatedDelta;
+    }
+
+    return assistantWalletLabel(left).localeCompare(assistantWalletLabel(right));
+  });
+}
+
+function selectAssistantDefaultWallet() {
+  return rankAssistantWallets(appState.wallets || [])[0] || null;
+}
+
+function isAssistantDefaultWalletRef(normalized) {
+  return ["default", "default wallet", "main wallet", "primary wallet", "operator wallet"].includes(normalized);
+}
+
+function isAssistantAllWalletsRef(normalized) {
+  return ["all", "all wallet", "all wallets", "every wallet", "every wallets"].includes(normalized);
+}
+
+function isAssistantEnvWalletRef(normalized) {
+  return ["env", "env wallet", "env wallets", "environment wallet", "environment wallets"].includes(normalized);
+}
+
+function assistantRpcLabel(node) {
+  return node?.name || truncateMiddle(node?.url || "RPC node", 20, 14);
+}
+
+function eligibleAssistantRpcNodes(chainKey) {
+  return appState.rpcNodes.filter((node) => node.enabled !== false && node.chainKey === chainKey);
+}
+
+function selectAssistantDefaultRpcNodes(chainKey, options = {}) {
+  const { includeMultiple = false } = options;
+  const rankedNodes = rankRpcNodesByLatency(eligibleAssistantRpcNodes(chainKey));
+  const healthyNodes = rankedNodes.filter((node) => node.lastHealth?.status === "healthy");
+  const pool = healthyNodes.length ? healthyNodes : rankedNodes;
+  const limit = includeMultiple ? Math.min(Math.max(pool.length, 1), 3) : 1;
+  return pool.slice(0, limit);
+}
+
+function isAssistantDefaultRpcRef(normalized) {
+  return [
+    "default",
+    "default rpc",
+    "fastest",
+    "fastest rpc",
+    "best rpc",
+    "low latency",
+    "lowest latency",
+    "lowest latency rpc"
+  ].includes(normalized);
+}
+
+function isAssistantAllRpcRef(normalized) {
+  return ["all", "all rpc", "all rpcs", "every rpc", "all nodes", "all rpc nodes"].includes(normalized);
+}
+
+function isAssistantHealthyRpcRef(normalized) {
+  return ["healthy", "healthy rpc", "healthy rpcs", "healthy nodes"].includes(normalized);
+}
+
+function buildAssistantClaimTaskSettings(args = {}, existingTask = null) {
+  return {
+    claimIntegrationEnabled: Boolean(
+      args.claimIntegrationEnabled ?? existingTask?.claimIntegrationEnabled ?? false
+    ),
+    claimProjectKey: String(args.claimProjectKey ?? existingTask?.claimProjectKey ?? "").trim(),
+    walletClaimsJson: normalizeAssistantJsonString(
+      args.walletClaimsJson,
+      existingTask?.walletClaimsJson || ""
+    ),
+    claimFetchEnabled: Boolean(args.claimFetchEnabled ?? existingTask?.claimFetchEnabled ?? false),
+    claimFetchUrl: String(args.claimFetchUrl ?? existingTask?.claimFetchUrl ?? "").trim(),
+    claimFetchMethod:
+      String(args.claimFetchMethod ?? existingTask?.claimFetchMethod ?? "GET").trim().toUpperCase() || "GET",
+    claimFetchHeadersJson: normalizeAssistantJsonString(
+      args.claimFetchHeadersJson,
+      existingTask?.claimFetchHeadersJson || ""
+    ),
+    claimFetchCookiesJson: normalizeAssistantJsonString(
+      args.claimFetchCookiesJson,
+      existingTask?.claimFetchCookiesJson || ""
+    ),
+    claimFetchBodyJson: normalizeAssistantJsonString(
+      args.claimFetchBodyJson,
+      existingTask?.claimFetchBodyJson || ""
+    ),
+    claimResponseMappingJson: normalizeAssistantJsonString(
+      args.claimResponseMappingJson,
+      existingTask?.claimResponseMappingJson || ""
+    ),
+    claimResponseRoot: String(args.claimResponseRoot ?? existingTask?.claimResponseRoot ?? "").trim()
+  };
+}
+
+function buildAssistantTaskSummary(taskLike) {
+  const task = taskLike?.id ? getTaskById(taskLike.id) || taskLike : taskLike;
+  if (!task) {
+    return {};
+  }
+
+  const selectedWallets = appState.wallets.filter((wallet) => (task.walletIds || []).includes(wallet.id));
+  const selectedRpcNodes = appState.rpcNodes.filter((node) => (task.rpcNodeIds || []).includes(node.id));
+  const defaultWallet = selectAssistantDefaultWallet();
+  const defaultRpc = selectAssistantDefaultRpcNodes(task.chainKey)[0] || null;
+
+  return {
+    taskId: task.id || null,
+    taskName: task.name || null,
+    chainKey: task.chainKey || null,
+    chainLabel: chainLabel(task.chainKey),
+    walletLabels: selectedWallets.map((wallet) => assistantWalletLabel(wallet)),
+    rpcNames: selectedRpcNodes.map((node) => assistantRpcLabel(node)),
+    usedDefaultWallet:
+      Boolean(defaultWallet) &&
+      Array.isArray(task.walletIds) &&
+      task.walletIds.length === 1 &&
+      task.walletIds[0] === defaultWallet.id,
+    usedDefaultRpc:
+      Boolean(defaultRpc) &&
+      Array.isArray(task.rpcNodeIds) &&
+      task.rpcNodeIds.includes(defaultRpc.id),
+    useSchedule: Boolean(task.useSchedule),
+    waitUntilIso: task.waitUntilIso || "",
+    schedulePending: Boolean(task.schedulePending),
+    autoArmPending: Boolean(task.autoArmPending)
+  };
+}
+
 function resolveAssistantChainKey(requestedChain = "") {
   const chains = getAvailableChains();
   const normalized = normalizeAssistantRef(requestedChain);
@@ -1619,23 +1809,32 @@ function resolveAssistantWalletIds(walletRefs = []) {
     : [];
 
   if (refs.length === 0) {
-    if (appState.wallets.length === 1) {
-      return [appState.wallets[0].id];
-    }
-
     if (appState.wallets.length === 0) {
       throw new Error("No wallets are loaded. Import a wallet before asking me to mint.");
     }
 
-    throw new Error(
-      `Multiple wallets are loaded. Tell me which wallet(s) to use: ${appState.wallets
-        .map((wallet) => wallet.label || wallet.addressShort || wallet.address)
-        .join(", ")}.`
-    );
+    return [selectAssistantDefaultWallet().id];
   }
 
-  const resolvedIds = refs.map((ref) => {
+  const resolvedIds = refs.flatMap((ref) => {
     const normalized = normalizeAssistantRef(ref);
+
+    if (isAssistantAllWalletsRef(normalized)) {
+      return appState.wallets.map((wallet) => wallet.id);
+    }
+
+    if (isAssistantDefaultWalletRef(normalized)) {
+      return selectAssistantDefaultWallet()?.id || [];
+    }
+
+    if (isAssistantEnvWalletRef(normalized)) {
+      const envWallets = rankAssistantWallets(appState.wallets.filter((wallet) => wallet.source === "env"));
+      if (envWallets.length === 0) {
+        throw new Error("No environment-backed wallets are loaded.");
+      }
+      return envWallets.map((wallet) => wallet.id);
+    }
+
     const matches = appState.wallets.filter((wallet) => {
       return [wallet.id, wallet.label, wallet.address, wallet.addressShort]
         .filter(Boolean)
@@ -1663,21 +1862,56 @@ function resolveAssistantWalletIds(walletRefs = []) {
     throw new Error(`Wallet "${ref}" was not found.`);
   });
 
-  return [...new Set(resolvedIds)];
+  const uniqueIds = [...new Set(resolvedIds.filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    throw new Error("No matching wallet was found.");
+  }
+
+  return uniqueIds;
 }
 
-function resolveAssistantRpcNodeIds(chainKey, rpcRefs = []) {
+function resolveAssistantRpcNodeIds(chainKey, rpcRefs = [], options = {}) {
+  const { includeMultiple = false } = options;
   const refs = Array.isArray(rpcRefs)
     ? rpcRefs.map((entry) => String(entry || "").trim()).filter(Boolean)
     : [];
-  const eligibleNodes = appState.rpcNodes.filter((node) => node.enabled !== false && node.chainKey === chainKey);
+  const eligibleNodes = eligibleAssistantRpcNodes(chainKey);
 
   if (refs.length === 0) {
-    return eligibleNodes.map((node) => node.id);
+    const defaults = selectAssistantDefaultRpcNodes(chainKey, { includeMultiple });
+    if (defaults.length === 0) {
+      throw new Error(`No enabled RPC nodes are configured for ${chainLabel(chainKey)}.`);
+    }
+    return defaults.map((node) => node.id);
   }
 
-  const resolvedIds = refs.map((ref) => {
+  const resolvedIds = refs.flatMap((ref) => {
     const normalized = normalizeAssistantRef(ref);
+
+    if (isAssistantAllRpcRef(normalized)) {
+      return eligibleNodes.map((node) => node.id);
+    }
+
+    if (isAssistantHealthyRpcRef(normalized)) {
+      const healthyNodes = rankRpcNodesByLatency(
+        eligibleNodes.filter((node) => node.lastHealth?.status === "healthy")
+      );
+      if (healthyNodes.length > 0) {
+        return healthyNodes.map((node) => node.id);
+      }
+
+      const fallbackNodes = selectAssistantDefaultRpcNodes(chainKey, { includeMultiple });
+      return fallbackNodes.map((node) => node.id);
+    }
+
+    if (isAssistantDefaultRpcRef(normalized)) {
+      const defaults = selectAssistantDefaultRpcNodes(chainKey, { includeMultiple });
+      if (defaults.length === 0) {
+        throw new Error(`No enabled RPC nodes are configured for ${chainLabel(chainKey)}.`);
+      }
+      return defaults.map((node) => node.id);
+    }
+
     const exact = eligibleNodes.filter((node) => {
       return [node.id, node.name, node.url]
         .filter(Boolean)
@@ -1705,7 +1939,12 @@ function resolveAssistantRpcNodeIds(chainKey, rpcRefs = []) {
     throw new Error(`RPC "${ref}" was not found on ${chainLabel(chainKey)}.`);
   });
 
-  return [...new Set(resolvedIds)];
+  const uniqueIds = [...new Set(resolvedIds.filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    throw new Error(`No matching RPC nodes were found on ${chainLabel(chainKey)}.`);
+  }
+
+  return uniqueIds;
 }
 
 function resolveAssistantTask(taskRef) {
@@ -1746,16 +1985,80 @@ function normalizeAssistantJsonString(value, fallback = "") {
   return JSON.stringify(value);
 }
 
-function buildAssistantTaskPayload(args = {}) {
+async function buildAssistantTaskPayload(args = {}) {
   const existingTask = args.taskRef ? resolveAssistantTask(args.taskRef) : null;
   const chainKey = resolveAssistantChainKey(args.chainKey || existingTask?.chainKey || "");
+  const quantityPerWallet = Math.max(
+    1,
+    Number(args.quantityPerWallet ?? existingTask?.quantityPerWallet ?? 1)
+  );
+  const multiRpcBroadcast = Boolean(args.multiRpcBroadcast ?? existingTask?.multiRpcBroadcast ?? false);
   const walletIds = resolveAssistantWalletIds(
     Array.isArray(args.walletRefs) && args.walletRefs.length > 0 ? args.walletRefs : existingTask?.walletIds || []
   );
   const rpcNodeIds = resolveAssistantRpcNodeIds(
     chainKey,
-    Array.isArray(args.rpcRefs) && args.rpcRefs.length > 0 ? args.rpcRefs : existingTask?.rpcNodeIds || []
+    Array.isArray(args.rpcRefs) && args.rpcRefs.length > 0 ? args.rpcRefs : existingTask?.rpcNodeIds || [],
+    { includeMultiple: multiRpcBroadcast }
   );
+  const claimTaskSettings = buildAssistantClaimTaskSettings(args, existingTask);
+  let priceEth = String(args.priceEth ?? existingTask?.priceEth ?? "").trim();
+  const abiJson = normalizeAssistantJsonString(args.abiJson, existingTask?.abiJson || "");
+  let platform =
+    String(args.platform || existingTask?.platform || "AI Operator").trim() || "AI Operator";
+  let mintFunction = String(args.mintFunction ?? existingTask?.mintFunction ?? "").trim();
+  let mintArgs = normalizeAssistantJsonString(args.mintArgs, existingTask?.mintArgs || "");
+  let mintStartDetectionEnabled = Boolean(
+    args.mintStartDetectionEnabled ?? existingTask?.mintStartDetectionEnabled ?? false
+  );
+  let mintStartDetectionConfig =
+    args.mintStartDetectionConfig && typeof args.mintStartDetectionConfig === "object"
+      ? args.mintStartDetectionConfig
+      : existingTask?.mintStartDetectionConfig && typeof existingTask.mintStartDetectionConfig === "object"
+        ? existingTask.mintStartDetectionConfig
+        : null;
+
+  if (abiJson) {
+    try {
+      const abiEntries = parseTaskAbiEntries(abiJson);
+      const autofill = await buildMintAutofill({
+        chainKey,
+        contractAddress: String(args.contractAddress || existingTask?.contractAddress || "").trim(),
+        abiEntries,
+        requestedFunction: mintFunction,
+        walletIds,
+        rpcNodeIds,
+        quantityPerWallet,
+        claimTaskSettings
+      });
+
+      if (!mintFunction && autofill.mintFunction) {
+        mintFunction = autofill.mintFunction;
+      }
+
+      if (!mintArgs && Array.isArray(autofill.mintArgs)) {
+        mintArgs = JSON.stringify(autofill.mintArgs);
+      }
+
+      if (!priceEth && autofill.priceEth) {
+        priceEth = autofill.priceEth;
+      }
+
+      if (
+        (!platform || platform === "AI Operator" || platform === "Generic EVM (auto-detect)") &&
+        autofill.platform
+      ) {
+        platform = autofill.platform;
+      }
+
+      if (autofill.mintStartDetection && typeof autofill.mintStartDetection === "object") {
+        mintStartDetectionEnabled = true;
+        mintStartDetectionConfig = autofill.mintStartDetection;
+      }
+    } catch {
+      // Let the normal task validation return the authoritative error later if needed.
+    }
+  }
 
   return {
     id: existingTask?.id,
@@ -1765,14 +2068,15 @@ function buildAssistantTaskPayload(args = {}) {
     tags: Array.isArray(args.tags) ? args.tags : existingTask?.tags || [],
     contractAddress: String(args.contractAddress || existingTask?.contractAddress || "").trim(),
     chainKey,
-    quantityPerWallet: Math.max(1, Number(args.quantityPerWallet || existingTask?.quantityPerWallet || 1)),
-    priceEth: String(args.priceEth ?? existingTask?.priceEth ?? "").trim(),
-    abiJson: normalizeAssistantJsonString(args.abiJson, existingTask?.abiJson || ""),
-    platform: String(args.platform || existingTask?.platform || "AI Operator").trim() || "AI Operator",
+    quantityPerWallet,
+    priceEth,
+    abiJson,
+    platform,
     walletIds,
     rpcNodeIds,
-    mintFunction: String(args.mintFunction ?? existingTask?.mintFunction ?? "").trim(),
-    mintArgs: normalizeAssistantJsonString(args.mintArgs, existingTask?.mintArgs || ""),
+    mintFunction,
+    mintArgs,
+    ...claimTaskSettings,
     autoGeneratePhaseTasks: Boolean(args.autoGeneratePhaseTasks),
     autoArm: Boolean(args.autoArm ?? existingTask?.autoArm ?? true),
     gasStrategy: String(args.gasStrategy || existingTask?.gasStrategy || "normal").trim() || "normal",
@@ -1782,10 +2086,12 @@ function buildAssistantTaskPayload(args = {}) {
     simulateTransaction: Boolean(args.simulateTransaction ?? existingTask?.simulateTransaction ?? true),
     dryRun: Boolean(args.dryRun ?? existingTask?.dryRun ?? false),
     warmupRpc: Boolean(args.warmupRpc ?? existingTask?.warmupRpc ?? true),
-    multiRpcBroadcast: Boolean(args.multiRpcBroadcast ?? existingTask?.multiRpcBroadcast ?? false),
+    multiRpcBroadcast,
     walletMode: String(args.walletMode || existingTask?.walletMode || "parallel").trim() || "parallel",
     useSchedule: Boolean(args.useSchedule ?? existingTask?.useSchedule ?? false),
     waitUntilIso: String(args.waitUntilIso ?? existingTask?.waitUntilIso ?? "").trim(),
+    mintStartDetectionEnabled,
+    mintStartDetectionConfig,
     pollIntervalMs: String(args.pollIntervalMs ?? existingTask?.pollIntervalMs ?? "1000").trim() || "1000",
     txTimeoutMs: String(args.txTimeoutMs ?? existingTask?.txTimeoutMs ?? "").trim(),
     maxRetries: String(args.maxRetries ?? existingTask?.maxRetries ?? "1").trim() || "1",
@@ -1834,7 +2140,7 @@ function buildAssistantToolDefinitions() {
     {
       type: "function",
       name: "get_dashboard_state",
-      description: "Read the live dashboard state including wallets, RPC nodes, tasks, alerts, and recent logs.",
+      description: "Read the live dashboard state including recommended default wallet, fastest RPC choices, tasks, alerts, and recent logs.",
       parameters: {
         type: "object",
         properties: {},
@@ -1844,7 +2150,7 @@ function buildAssistantToolDefinitions() {
     {
       type: "function",
       name: "save_task",
-      description: "Create or update a mint task. Use this when the user wants a task drafted, scheduled, or prepared to mint.",
+      description: "Create or update a mint task. Use this when the user wants a task drafted, scheduled, auto-armed, or prepared to mint. When ABI is provided, the app can auto-detect mint function, args, platform, and launch-watch settings.",
       parameters: {
         type: "object",
         properties: {
@@ -1894,7 +2200,6 @@ function buildAssistantToolDefinitions() {
           privateRelayHeadersJson: { type: "string" },
           privateRelayOnly: { type: "boolean" }
         },
-        required: ["contractAddress", "abiJson"],
         additionalProperties: false
       }
     },
@@ -2029,14 +2334,25 @@ async function executeAssistantToolCall(call) {
     }
 
     if (call.name === "save_task") {
-      const result = await saveTaskPayload(buildAssistantTaskPayload(parsedArgs));
+      const result = await saveTaskPayload(await buildAssistantTaskPayload(parsedArgs));
+      const savedTask =
+        (result.task?.id && getTaskById(result.task.id)) ||
+        (Array.isArray(result.tasks) && result.tasks[0]?.id ? getTaskById(result.tasks[0].id) : null) ||
+        result.task ||
+        result.tasks?.[0] ||
+        null;
       return {
         ok: true,
         changedState: true,
+        navigateTo: "tasks",
+        focusTaskId: savedTask?.id || null,
         action: result.autoGeneratedPhaseTasks
           ? `Created ${result.tasks?.length || 0} phase task(s)`
           : `Saved task ${result.task?.name || ""}`.trim(),
-        result
+        result: {
+          ...result,
+          ...buildAssistantTaskSummary(savedTask)
+        }
       };
     }
 
@@ -2046,6 +2362,8 @@ async function executeAssistantToolCall(call) {
       return {
         ok: true,
         changedState: true,
+        navigateTo: "tasks",
+        focusTaskId: task.id,
         action: `Run requested for ${task.name}`,
         result: {
           taskId: task.id,
@@ -2061,6 +2379,8 @@ async function executeAssistantToolCall(call) {
       return {
         ok: true,
         changedState: true,
+        navigateTo: "tasks",
+        focusTaskId: task.id,
         action: `Stop requested for ${task.name}`,
         result: {
           taskId: task.id,
@@ -2076,6 +2396,7 @@ async function executeAssistantToolCall(call) {
       return {
         ok: true,
         changedState: true,
+        navigateTo: "tasks",
         action: `Deleted task ${task.name}`,
         result: {
           taskId: task.id,
@@ -2123,6 +2444,8 @@ async function requestOperatorAssistantReply({ message, previousResponseId = "" 
   const tools = buildAssistantToolDefinitions();
   const actionLog = [];
   let changedState = false;
+  let navigateTo = "";
+  let focusTaskId = "";
   let responsePayload = await createOpenAiResponse({
     apiKey,
     instructions,
@@ -2149,6 +2472,8 @@ async function requestOperatorAssistantReply({ message, previousResponseId = "" 
         actionLog.push(result.action);
       }
       changedState = changedState || Boolean(result.changedState);
+      navigateTo = result.navigateTo || navigateTo;
+      focusTaskId = result.focusTaskId || focusTaskId;
       toolOutputs.push({
         type: "function_call_output",
         call_id: call.callId,
@@ -2173,7 +2498,9 @@ async function requestOperatorAssistantReply({ message, previousResponseId = "" 
     reply,
     responseId: responsePayload.id || previousResponseId,
     changedState,
-    actions: actionLog
+    actions: actionLog,
+    navigateTo,
+    focusTaskId
   };
 }
 
@@ -5470,80 +5797,17 @@ function taskReadiness(task) {
 function buildTelemetry() {
   const taskViews = appState.tasks.map(buildTaskResponse);
   const activeTask = findActiveTask() ? buildTaskResponse(findActiveTask()) : null;
-  const healthyRpcCount = appState.rpcNodes.filter(
-    (node) => node.lastHealth?.status === "healthy"
-  ).length;
   const unhealthyRpcCount = appState.rpcNodes.filter(
     (node) => node.lastHealth?.status === "error"
   ).length;
-  const walletGroupCount = new Set(
-    appState.wallets.map((wallet) => wallet.group || "Imported")
-  ).size;
-
-  const summaries = taskViews.map((task) => task.summary || {});
-  const totalAttempts = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
-  const successfulAttempts = summaries.reduce((sum, summary) => sum + (summary.success || 0), 0);
-  const successRate = totalAttempts ? Math.round((successfulAttempts / totalAttempts) * 100) : 0;
   const currentRunState = getRunState();
-
-  const priorityQueue = [...taskViews]
-    .filter((task) => !task.done)
-    .sort((left, right) => {
-      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
-      if (priorityDelta !== 0) {
-        return priorityDelta;
-      }
-
-      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
-    })
-    .slice(0, 5)
-    .map((task) => {
-      const readiness = taskReadiness(task);
-      return {
-        id: task.id,
-        name: task.name,
-        chainKey: task.chainKey,
-        chainLabel: chainLabel(task.chainKey),
-        priority: task.priority,
-        priorityLabel: humanizePriority(task.priority),
-        status: task.status,
-        statusLabel: task.status,
-        readinessScore: readiness.score,
-        health: readiness.health,
-        walletCount: Array.isArray(task.walletIds) ? task.walletIds.length : 0,
-        rpcCount: readiness.rpcCount,
-        issues: readiness.issues,
-        updatedAt: task.updatedAt
-      };
-    });
-
-  const readinessScore = priorityQueue.length
-    ? Math.round(priorityQueue.reduce((sum, task) => sum + task.readinessScore, 0) / priorityQueue.length)
-    : 0;
-
-  const chainLoad = Object.entries(
-    taskViews.reduce((map, task) => {
-      map[task.chainKey] = (map[task.chainKey] || 0) + 1;
-      return map;
-    }, {})
-  )
-    .map(([chainKey, count]) => ({
-      chainKey,
-      label: chainLabel(chainKey),
-      count,
-      share: taskViews.length ? Math.round((count / taskViews.length) * 100) : 0
-    }))
-    .sort((left, right) => right.count - left.count);
-
-  const latestRunTask = [...taskViews]
-    .filter((task) => task.lastRunAt)
-    .sort((left, right) => new Date(right.lastRunAt) - new Date(left.lastRunAt))[0];
+  const readyTaskCount = taskViews.filter((task) => taskReadiness(task).health === "armed").length;
 
   const alerts = [];
   if (appState.wallets.length === 0) {
     alerts.push({
       severity: "critical",
-      title: "No wallet fleet loaded",
+      title: "No wallets loaded",
       detail: "Import at least one wallet before attempting a run."
     });
   }
@@ -5561,7 +5825,7 @@ function buildTelemetry() {
       detail: `${unhealthyRpcCount} node${unhealthyRpcCount === 1 ? "" : "s"} reported an error on the last health check.`
     });
   }
-  if (priorityQueue.some((task) => task.health === "blocked")) {
+  if (taskViews.some((task) => taskReadiness(task).health === "blocked")) {
     alerts.push({
       severity: "warning",
       title: "Blocked tasks detected",
@@ -5588,31 +5852,9 @@ function buildTelemetry() {
 
   return {
     generatedAt: new Date().toISOString(),
-    readinessScore,
-    successRate,
-    healthyRpcCount,
-    unhealthyRpcCount,
-    walletGroupCount,
-    readyTaskCount: priorityQueue.filter((task) => task.health === "armed").length,
-    liveLogCount: liveLogs.length,
+    readyTaskCount,
     runDurationMs: currentRunState.startedAt ? Date.now() - new Date(currentRunState.startedAt).getTime() : 0,
-    activeTaskName: activeTask?.name || null,
-    topChainLabel: chainLoad[0]?.label || "No chain load",
-    lastRunTaskName: latestRunTask?.name || "No history",
-    lastRunAt: latestRunTask?.lastRunAt || null,
-    priorityQueue,
-    chainLoad,
-    alerts,
-    rpcMatrix: appState.rpcNodes.slice(0, 6).map((node) => ({
-      id: node.id,
-      name: node.name,
-      chainKey: node.chainKey,
-      chainLabel: chainLabel(node.chainKey),
-      status: node.lastHealth?.status || "unknown",
-      latencyMs: node.lastHealth?.latencyMs || null,
-      checkedAt: node.lastHealth?.checkedAt || null,
-      url: node.url
-    }))
+    alerts
   };
 }
 

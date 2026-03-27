@@ -590,64 +590,9 @@ body[data-current-view="tasks"] .header-input::placeholder {
   gap: 8px;
 }
 
-.task-overview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 14px;
-}
-
-.task-overview-card {
-  min-height: 148px;
-}
-
-.task-overview-card strong {
-  font-size: 38px;
-}
-
-.task-overview-card p {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.55;
-}
-
-.task-overview-card.ready {
-  border-color: rgba(113, 224, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(113, 224, 255, 0.08), rgba(113, 224, 255, 0.02)),
-    rgba(7, 13, 22, 0.6);
-}
-
-.task-overview-card.running {
-  border-color: rgba(98, 247, 167, 0.2);
-  background:
-    linear-gradient(180deg, rgba(98, 247, 167, 0.08), rgba(98, 247, 167, 0.02)),
-    rgba(7, 13, 22, 0.6);
-}
-
-.task-overview-card.queued {
-  border-color: rgba(255, 203, 112, 0.22);
-  background:
-    linear-gradient(180deg, rgba(255, 203, 112, 0.08), rgba(255, 203, 112, 0.02)),
-    rgba(7, 13, 22, 0.6);
-}
-
-.task-overview-card.completed {
-  border-color: rgba(113, 224, 255, 0.18);
-  background:
-    linear-gradient(180deg, rgba(113, 224, 255, 0.06), rgba(98, 247, 167, 0.02)),
-    rgba(7, 13, 22, 0.6);
-}
-
-.task-overview-card.failed {
-  border-color: rgba(255, 102, 120, 0.22);
-  background:
-    linear-gradient(180deg, rgba(255, 102, 120, 0.08), rgba(255, 102, 120, 0.02)),
-    rgba(7, 13, 22, 0.6);
-}
-
 .task-status-legend {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
@@ -724,6 +669,52 @@ body[data-current-view="tasks"] .header-input::placeholder {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.dashboard-view-header {
+  margin-bottom: 18px;
+}
+
+.dashboard-focus-grid {
+  align-items: start;
+}
+
+.dashboard-history-surface,
+.dashboard-alert-surface {
+  min-height: 100%;
+}
+
+.dashboard-history-group {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-history-group + .dashboard-history-group {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(124, 223, 255, 0.1);
+}
+
+.dashboard-history-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.dashboard-history-heading h4 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.dashboard-history-item.active {
+  border-color: rgba(98, 247, 167, 0.22);
+  background:
+    linear-gradient(180deg, rgba(98, 247, 167, 0.08), rgba(98, 247, 167, 0.02)),
+    rgba(7, 14, 24, 0.6);
+}
+
+.dashboard-history-row {
+  align-items: flex-start;
 }
 
 .header-input,
