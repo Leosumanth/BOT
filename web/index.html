@@ -1084,6 +1084,45 @@
       </div>
     </div>
 
+    <div id="task-delete-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-task-delete-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete Task</h3>
+            <p class="muted-copy">
+              Remove this task session only after you confirm.
+            </p>
+          </div>
+          <button id="task-delete-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Task Name</span>
+            <strong id="task-delete-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Chain</span>
+            <strong id="task-delete-chain">-</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>Contract</span>
+            <strong id="task-delete-contract">-</strong>
+          </div>
+        </div>
+
+        <p class="helper-copy">
+          This helps prevent accidental task removal. If the task is running, stop it before deleting it.
+        </p>
+
+        <div class="modal-actions">
+          <button id="task-delete-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="task-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+
     <div id="rpc-chainlist-modal" class="modal hidden">
       <div class="modal-backdrop" data-close-rpc-chainlist-modal="true"></div>
       <div class="modal-card rpc-chainlist-modal-card">

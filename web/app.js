@@ -312,9 +312,16 @@ function formatLabelList(labels) {
 }
 
 const taskModal = document.getElementById("task-modal");
+const taskDeleteModal = document.getElementById("task-delete-modal");
 const modalTitle = document.getElementById("modal-title");
 const closeModalButton = document.getElementById("close-modal-button");
 const cancelTaskButton = document.getElementById("cancel-task-button");
+const taskDeleteCloseButton = document.getElementById("task-delete-close-button");
+const taskDeleteCancelButton = document.getElementById("task-delete-cancel-button");
+const taskDeleteSubmitButton = document.getElementById("task-delete-submit-button");
+const taskDeleteName = document.getElementById("task-delete-name");
+const taskDeleteChain = document.getElementById("task-delete-chain");
+const taskDeleteContract = document.getElementById("task-delete-contract");
 const taskForm = document.getElementById("task-form");
 const taskSubmitButton = taskForm.querySelector('button[type="submit"]');
 const taskIdInput = document.getElementById("task-id-input");
@@ -450,6 +457,8 @@ let rpcChainlistScan = {
   loading: false,
   summary: null
 };
+let taskDeleteTargetId = "";
+let taskDeletePending = false;
 let rpcDeleteTargetId = "";
 let rpcDeletePending = false;
 let walletDeleteTargetId = "";
@@ -2868,8 +2877,7 @@ function renderTasks() {
         }
 
         if (action === "delete") {
-          await request(`/api/tasks/${taskId}`, { method: "DELETE" });
-          showToast(`${task?.name || "Task"} deleted.`, "success", "Task Removed");
+          openTaskDeleteModal(taskId);
           return;
         }
 
@@ -7524,6 +7532,72 @@ function closeTaskModal() {
   taskModal.classList.add("hidden");
 }
 
+function closeTaskDeleteModal() {
+  if (!taskDeleteModal || taskDeletePending) {
+    return;
+  }
+
+  taskDeleteTargetId = "";
+  taskDeleteSubmitButton.disabled = false;
+  taskDeleteCancelButton.disabled = false;
+  taskDeleteCloseButton.disabled = false;
+  taskDeleteSubmitButton.textContent = "Yes, Delete";
+  taskDeleteModal.classList.add("hidden");
+}
+
+function openTaskDeleteModal(taskId) {
+  if (!taskDeleteModal) {
+    return;
+  }
+
+  const task = state.tasks.find((entry) => entry.id === taskId);
+  if (!task) {
+    return;
+  }
+
+  taskDeleteTargetId = task.id;
+  taskDeleteName.textContent = task.name || "Untitled Task";
+  taskDeleteChain.textContent = chainLabel(task.chainKey) || task.chainKey || "-";
+  taskDeleteContract.textContent = task.contractAddress || "-";
+  taskDeleteSubmitButton.disabled = false;
+  taskDeleteCancelButton.disabled = false;
+  taskDeleteCloseButton.disabled = false;
+  taskDeleteSubmitButton.textContent = "Yes, Delete";
+  taskDeleteModal.classList.remove("hidden");
+  initializeMotionSurfaces(taskDeleteModal);
+}
+
+async function submitTaskDelete() {
+  if (!taskDeleteTargetId || taskDeletePending) {
+    return;
+  }
+
+  const task = state.tasks.find((entry) => entry.id === taskDeleteTargetId);
+  if (!task) {
+    closeTaskDeleteModal();
+    return;
+  }
+
+  taskDeletePending = true;
+  taskDeleteSubmitButton.disabled = true;
+  taskDeleteCancelButton.disabled = true;
+  taskDeleteCloseButton.disabled = true;
+  taskDeleteSubmitButton.textContent = "Deleting...";
+
+  try {
+    await request(`/api/tasks/${task.id}`, { method: "DELETE" });
+    taskDeletePending = false;
+    closeTaskDeleteModal();
+    showToast(`${task.name || "Task"} deleted.`, "success", "Task Removed");
+  } catch {
+    taskDeletePending = false;
+    taskDeleteSubmitButton.disabled = false;
+    taskDeleteCancelButton.disabled = false;
+    taskDeleteCloseButton.disabled = false;
+    taskDeleteSubmitButton.textContent = "Yes, Delete";
+  }
+}
+
 function buildClaimTaskSettings() {
   return {
     claimIntegrationEnabled: taskClaimIntegrationToggle.checked,
@@ -7770,6 +7844,18 @@ cancelTaskButton.addEventListener("click", closeTaskModal);
 taskModal.addEventListener("click", (event) => {
   if (event.target.dataset.closeModal === "true") {
     closeTaskModal();
+  }
+});
+
+taskDeleteCloseButton.addEventListener("click", closeTaskDeleteModal);
+taskDeleteCancelButton.addEventListener("click", closeTaskDeleteModal);
+taskDeleteSubmitButton.addEventListener("click", async () => {
+  await submitTaskDelete();
+});
+
+taskDeleteModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeTaskDeleteModal === "true") {
+    closeTaskDeleteModal();
   }
 });
 

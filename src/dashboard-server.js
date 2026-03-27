@@ -45,6 +45,18 @@ const webRoot = path.resolve(process.cwd(), "web");
 const legacyStatePath = path.resolve(process.cwd(), "dist", "dashboard-state.json");
 const sessionCookieName = process.env.SESSION_COOKIE_NAME || "mintbot_session";
 const sessionTtlHours = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 168));
+const loginRateLimitWindowMs = Math.max(
+  30_000,
+  Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000)
+);
+const loginRateLimitMaxAttempts = Math.max(
+  3,
+  Number(process.env.LOGIN_RATE_LIMIT_MAX_ATTEMPTS || 5)
+);
+const loginRateLimitBlockMs = Math.max(
+  loginRateLimitWindowMs,
+  Number(process.env.LOGIN_RATE_LIMIT_BLOCK_MS || 15 * 60 * 1000)
+);
 const scheduledTaskPollIntervalMs = Math.max(
   1000,
   Number(process.env.SCHEDULE_POLL_INTERVAL_MS || 1000)
@@ -117,6 +129,18 @@ const mintPhaseGasProfiles = {
     retryDelayMs: "500"
   }
 };
+const appContentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "connect-src 'self'"
+].join("; ");
 
 const clients = new Set();
 const chainCatalog = [
@@ -208,6 +232,7 @@ let distributedRunState = createIdleRunState(resolveQueueConfig());
 const distributedQueuedTaskIds = new Set();
 const distributedTaskPatches = new Map();
 const assistantConversations = new Map();
+const loginAttemptBuckets = new Map();
 let scheduledTaskLoop = null;
 let scheduledTaskScanInFlight = false;
 let shutdownPromise = null;
@@ -3100,8 +3125,25 @@ function hashForId(value) {
   return crypto.createHash("sha1").update(String(value)).digest("hex").slice(0, 12);
 }
 
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+function applySecurityHeaders(response) {
+  response.setHeader("Content-Security-Policy", appContentSecurityPolicy);
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  response.setHeader(
+    "Permissions-Policy",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+  );
+}
+
+function sendJson(response, statusCode, payload, headers = {}) {
+  response.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...headers
+  });
   response.end(JSON.stringify(payload));
 }
 
@@ -3195,6 +3237,43 @@ function parseCookies(request) {
   }, {});
 }
 
+function requestIsSecure(request) {
+  if (request?.socket?.encrypted) {
+    return true;
+  }
+
+  const forwardedProto = String(request?.headers?.["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (forwardedProto) {
+    return forwardedProto === "https";
+  }
+
+  const forwardedScheme = String(request?.headers?.["x-forwarded-scheme"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (forwardedScheme) {
+    return forwardedScheme === "https";
+  }
+
+  const forwardedSsl = String(request?.headers?.["x-forwarded-ssl"] || "").trim().toLowerCase();
+  if (forwardedSsl) {
+    return forwardedSsl === "on";
+  }
+
+  const origin = String(request?.headers?.origin || request?.headers?.referer || "").trim();
+  if (/^https:\/\//i.test(origin)) {
+    return true;
+  }
+  if (/^http:\/\//i.test(origin)) {
+    return false;
+  }
+
+  return false;
+}
+
 function shouldUseSecureCookie(request) {
   if (process.env.COOKIE_SECURE === "true") {
     return true;
@@ -3204,8 +3283,87 @@ function shouldUseSecureCookie(request) {
     return false;
   }
 
-  const host = String(request?.headers?.host || "");
-  return !/localhost|127\.0\.0\.1/i.test(host);
+  return requestIsSecure(request);
+}
+
+function getClientAddress(request) {
+  const forwardedFor = String(request?.headers?.["x-forwarded-for"] || "")
+    .split(",")[0]
+    .trim();
+  const rawAddress = forwardedFor || String(request?.socket?.remoteAddress || "").trim();
+  return rawAddress.replace(/^::ffff:/, "") || "unknown";
+}
+
+function pruneLoginAttemptBuckets(now = Date.now()) {
+  for (const [key, bucket] of loginAttemptBuckets) {
+    if ((bucket.blockedUntil || 0) > now) {
+      continue;
+    }
+
+    if (now - (bucket.lastAttemptAt || bucket.windowStartedAt || 0) <= loginRateLimitBlockMs) {
+      continue;
+    }
+
+    loginAttemptBuckets.delete(key);
+  }
+}
+
+function getLoginAttemptBucket(request) {
+  const now = Date.now();
+  const key = getClientAddress(request);
+  const existing = loginAttemptBuckets.get(key);
+
+  if (!existing || now - existing.windowStartedAt > loginRateLimitWindowMs) {
+    const bucket = {
+      count: 0,
+      windowStartedAt: now,
+      lastAttemptAt: 0,
+      blockedUntil: 0
+    };
+    loginAttemptBuckets.set(key, bucket);
+    return { key, bucket };
+  }
+
+  return { key, bucket: existing };
+}
+
+function buildLoginRateLimitError(blockedUntil) {
+  const retryAfterSeconds = Math.max(1, Math.ceil((blockedUntil - Date.now()) / 1000));
+  const error = createHttpError(
+    `Too many login attempts. Try again in ${retryAfterSeconds} second${retryAfterSeconds === 1 ? "" : "s"}.`,
+    429
+  );
+  error.retryAfterSeconds = retryAfterSeconds;
+  return error;
+}
+
+function ensureLoginAllowed(request) {
+  pruneLoginAttemptBuckets();
+  const key = getClientAddress(request);
+  const bucket = loginAttemptBuckets.get(key);
+  if (bucket?.blockedUntil && bucket.blockedUntil > Date.now()) {
+    throw buildLoginRateLimitError(bucket.blockedUntil);
+  }
+}
+
+function recordFailedLoginAttempt(request) {
+  pruneLoginAttemptBuckets();
+
+  const now = Date.now();
+  const { key, bucket } = getLoginAttemptBucket(request);
+  bucket.count += 1;
+  bucket.lastAttemptAt = now;
+
+  if (bucket.count >= loginRateLimitMaxAttempts) {
+    bucket.blockedUntil = now + loginRateLimitBlockMs;
+  }
+
+  loginAttemptBuckets.set(key, bucket);
+  return bucket;
+}
+
+function clearLoginAttempts(request) {
+  loginAttemptBuckets.delete(getClientAddress(request));
 }
 
 function appendSetCookie(response, value) {
@@ -9266,6 +9424,8 @@ async function handleLogin(request, response) {
   }
 
   try {
+    ensureLoginAllowed(request);
+
     const payload = await readJsonBody(request);
     const username = String(payload.username || "").trim();
     const password = String(payload.password || "");
@@ -9276,9 +9436,23 @@ async function handleLogin(request, response) {
 
     const user = await database.getUserByUsername(username);
     if (!user || !verifyPassword(password, user.passwordHash)) {
+      const attemptBucket = recordFailedLoginAttempt(request);
+      if (attemptBucket.blockedUntil && attemptBucket.blockedUntil > Date.now()) {
+        const rateLimitError = buildLoginRateLimitError(attemptBucket.blockedUntil);
+        sendJson(
+          response,
+          rateLimitError.statusCode || 429,
+          { error: rateLimitError.message },
+          { "Retry-After": String(rateLimitError.retryAfterSeconds || 1) }
+        );
+        return;
+      }
+
       sendJson(response, 401, { error: "Invalid username or password" });
       return;
     }
+
+    clearLoginAttempts(request);
 
     const token = generateSessionToken();
     await database.createSession({
@@ -9297,7 +9471,11 @@ async function handleLogin(request, response) {
       }
     });
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    const statusCode = error.statusCode || 400;
+    const headers = error.retryAfterSeconds
+      ? { "Retry-After": String(error.retryAfterSeconds) }
+      : undefined;
+    sendJson(response, statusCode, { error: formatError(error) }, headers);
   }
 }
 
@@ -9317,6 +9495,8 @@ function parseRoute(pathname) {
 
 const server = http.createServer(async (request, response) => {
   try {
+    applySecurityHeaders(response);
+
     const url = new URL(request.url, `http://${request.headers.host}`);
     const route = parseRoute(url.pathname);
     const isApiRoute = url.pathname.startsWith("/api/");
