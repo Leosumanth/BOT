@@ -318,6 +318,15 @@
                     <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
                     <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Add Selected RPCs</button>
                   </div>
+                  <div id="rpc-operation-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="rpc-operation-progress-label" class="helper-copy">Preparing RPC import...</span>
+                      <strong id="rpc-operation-progress-value">0%</strong>
+                    </div>
+                    <div class="progress-track">
+                      <span id="rpc-operation-progress-bar" class="progress-bar" style="width: 0%"></span>
+                    </div>
+                  </div>
                 </form>
               </section>
 
@@ -1167,6 +1176,16 @@
         <p id="rpc-confirm-note" class="helper-copy">
           A fresh endpoint inspection will run when you confirm this save.
         </p>
+
+        <div id="rpc-confirm-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+          <div class="operation-progress-meta">
+            <span id="rpc-confirm-progress-label" class="helper-copy">Validating RPC endpoint...</span>
+            <strong id="rpc-confirm-progress-value">0%</strong>
+          </div>
+          <div class="progress-track">
+            <span id="rpc-confirm-progress-bar" class="progress-bar" style="width: 0%"></span>
+          </div>
+        </div>
 
         <div class="modal-actions">
           <button id="rpc-confirm-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>

@@ -146,6 +146,7 @@ const rpcBroadcastAdvisor = document.getElementById("rpc-broadcast-advisor");
 const rpcHealthSyncStatus = document.getElementById("rpc-health-sync-status");
 const rpcAlertList = document.getElementById("rpc-alert-list");
 const rpcList = document.getElementById("rpc-list");
+const rpcOperationProgress = getOperationProgressRefs("rpc-operation-progress");
 const rpcChainlistModal = document.getElementById("rpc-chainlist-modal");
 const rpcChainlistModalTitle = document.getElementById("rpc-chainlist-modal-title");
 const rpcChainlistModalSubtitle = document.getElementById("rpc-chainlist-modal-subtitle");
@@ -168,6 +169,7 @@ const rpcConfirmSource = document.getElementById("rpc-confirm-source");
 const rpcConfirmLatency = document.getElementById("rpc-confirm-latency");
 const rpcConfirmUrl = document.getElementById("rpc-confirm-url");
 const rpcConfirmNote = document.getElementById("rpc-confirm-note");
+const rpcConfirmProgress = getOperationProgressRefs("rpc-confirm-progress");
 const walletDeleteModal = document.getElementById("wallet-delete-modal");
 const walletDeleteCloseButton = document.getElementById("wallet-delete-close-button");
 const walletDeleteCancelButton = document.getElementById("wallet-delete-cancel-button");
@@ -3990,11 +3992,26 @@ async function submitRpcDiscoverySelection() {
   const buttonLabel = rpcSubmitButton.textContent;
   rpcSubmitButton.disabled = true;
   rpcSubmitButton.textContent = "Adding RPCs...";
+  const progressIndicator = startOperationProgress(rpcOperationProgress, {
+    steps: [
+      `Preparing ${pluralize(selectedCandidates.length, "selected RPC")}...`,
+      "Saving RPC nodes into the mesh...",
+      "Refreshing the mesh view..."
+    ],
+    successLabel: "RPC add complete.",
+    errorLabel: "RPC add failed."
+  });
+  progressIndicator.update(12, `Preparing ${pluralize(selectedCandidates.length, "selected RPC")}...`);
 
   let savedCount = 0;
   const failures = [];
 
-  for (const candidate of selectedCandidates) {
+  for (const [index, candidate] of selectedCandidates.entries()) {
+    const progressPercent = 18 + Math.round(((index + 1) / Math.max(selectedCandidates.length, 1)) * 60);
+    progressIndicator.update(
+      progressPercent,
+      `Saving RPC ${index + 1} of ${selectedCandidates.length}: ${candidate.name || candidate.url || "endpoint"}`
+    );
     try {
       await request("/api/rpc-nodes", {
         method: "POST",
@@ -4013,6 +4030,8 @@ async function submitRpcDiscoverySelection() {
     }
   }
 
+  progressIndicator.update(90, "Refreshing RPC mesh state...");
+
   try {
     await loadState();
     populateChainSelectors();
@@ -4030,6 +4049,9 @@ async function submitRpcDiscoverySelection() {
 
   const providerLabel = rpcDiscoveryState.providerLabel || "RPC";
   if (savedCount > 0 && failures.length === 0) {
+    progressIndicator.complete(
+      `${savedCount} ${providerLabel} RPC node${savedCount === 1 ? "" : "s"} added successfully.`
+    );
     showToast(
       `${savedCount} ${providerLabel} RPC node${savedCount === 1 ? "" : "s"} added from the current selection.`,
       "success",
@@ -4039,6 +4061,7 @@ async function submitRpcDiscoverySelection() {
   }
 
   if (savedCount > 0) {
+    progressIndicator.fail(`${savedCount} saved, ${failures.length} failed.`);
     showToast(
       `${savedCount} saved, ${failures.length} failed. The remaining healthy RPCs are still listed below.`,
       "info",
@@ -4047,6 +4070,7 @@ async function submitRpcDiscoverySelection() {
     return;
   }
 
+  progressIndicator.fail("No RPC nodes were added.");
   showToast("No RPC nodes were added from the current selection.", "error", "RPC Save Failed");
 }
 
@@ -4056,6 +4080,10 @@ function resetRpcForm(options = {}) {
   rpcAutoSuggestedName = "";
   rpcFormGroup = "Custom";
   rpcSelectedChainlistCandidate = null;
+  resetOperationProgress(rpcOperationProgress, {
+    hide: true,
+    label: "Preparing RPC import..."
+  });
   rpcFormTitle.textContent = "Discovery Lab";
   rpcFormSubtitle.textContent = "Scan low-latency RPCs, stack healthy fallbacks, and deepen the mint mesh chain by chain.";
   rpcFormBadge.classList.add("hidden");
@@ -4400,6 +4428,10 @@ function closeRpcConfirmModal() {
     return;
   }
 
+  resetOperationProgress(rpcConfirmProgress, {
+    hide: true,
+    label: "Validating RPC endpoint..."
+  });
   rpcPendingSavePayload = null;
   rpcConfirmModal.classList.add("hidden");
 }
@@ -4434,6 +4466,10 @@ function openRpcConfirmModal(payload) {
     ? "A fresh inspection will run again on save so the stored node keeps an up-to-date latency snapshot."
     : "We will validate the RPC, auto-detect its chain, and save the latest latency snapshot.";
   rpcConfirmSubmitButton.textContent = activeRpcEditId ? "Confirm and Update" : "Confirm and Save";
+  resetOperationProgress(rpcConfirmProgress, {
+    hide: true,
+    label: "Validating RPC endpoint..."
+  });
   rpcConfirmModal.classList.remove("hidden");
   initializeMotionSurfaces(rpcConfirmModal);
 }
@@ -4448,6 +4484,16 @@ async function submitConfirmedRpcSave() {
   const buttonLabel = rpcConfirmSubmitButton.textContent;
   rpcConfirmSubmitButton.disabled = true;
   rpcConfirmSubmitButton.textContent = wasEditing ? "Updating..." : "Saving...";
+  const progressIndicator = startOperationProgress(rpcConfirmProgress, {
+    steps: [
+      "Inspecting RPC endpoint...",
+      "Detecting chain and latency...",
+      wasEditing ? "Updating RPC in the mesh..." : "Saving RPC into the mesh..."
+    ],
+    successLabel: wasEditing ? "RPC updated successfully." : "RPC saved successfully.",
+    errorLabel: wasEditing ? "RPC update failed." : "RPC save failed."
+  });
+  progressIndicator.update(16, "Inspecting RPC endpoint...");
 
   try {
     await request("/api/rpc-nodes", {
@@ -4455,6 +4501,9 @@ async function submitConfirmedRpcSave() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+    progressIndicator.update(88, wasEditing ? "Applying updated RPC settings..." : "Finalizing RPC save...");
+    progressIndicator.complete(wasEditing ? "RPC updated successfully." : "RPC saved successfully.");
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
 
     closeRpcConfirmModal();
     resetRpcForm();
@@ -4464,6 +4513,7 @@ async function submitConfirmedRpcSave() {
       wasEditing ? "RPC Updated" : "RPC Added"
     );
   } catch {
+    progressIndicator.fail(wasEditing ? "RPC update failed." : "RPC save failed.");
     rpcConfirmSubmitButton.disabled = false;
     rpcConfirmSubmitButton.textContent = buttonLabel;
     return;
@@ -5385,7 +5435,40 @@ async function importChainlistRpcs() {
     throw new Error("Type an EVM chain name before importing Chainlist RPCs.");
   }
 
-  await loadRpcDiscoveryCandidates("chainlist", { forceRefresh: true });
+  const providerLabel = rpcImportProviderLabel("chainlist");
+  const progressIndicator = startOperationProgress(rpcOperationProgress, {
+    steps: [
+      `Contacting ${providerLabel}...`,
+      `Getting RPC candidates from ${providerLabel}...`,
+      "Ranking healthy endpoints..."
+    ],
+    successLabel: `${providerLabel} RPCs ready.`,
+    errorLabel: `${providerLabel} import failed.`
+  });
+
+  progressIndicator.update(16, `Contacting ${providerLabel}...`);
+
+  try {
+    await loadRpcDiscoveryCandidates("chainlist", { forceRefresh: true });
+    const total = Array.isArray(rpcDiscoveryState.candidates) ? rpcDiscoveryState.candidates.length : 0;
+    const healthy = Array.isArray(rpcDiscoveryState.candidates)
+      ? rpcDiscoveryState.candidates.filter((candidate) => candidate.lastHealth?.status === "healthy").length
+      : 0;
+    progressIndicator.update(
+      82,
+      total
+        ? `Received ${pluralize(total, "candidate")} from ${providerLabel}.`
+        : `No RPC candidates returned from ${providerLabel}.`
+    );
+    progressIndicator.complete(
+      total
+        ? `${healthy}/${total} healthy endpoint${total === 1 ? "" : "s"} ready to add.`
+        : `No RPCs found from ${providerLabel}.`
+    );
+  } catch (error) {
+    progressIndicator.fail(`${providerLabel} import failed.`);
+    throw error;
+  }
 }
 
 async function importAlchemyRpcs() {
@@ -5394,7 +5477,40 @@ async function importAlchemyRpcs() {
     throw new Error("Type an EVM chain name before importing Alchemy RPCs.");
   }
 
-  await loadRpcDiscoveryCandidates("alchemy", { forceRefresh: true });
+  const providerLabel = rpcImportProviderLabel("alchemy");
+  const progressIndicator = startOperationProgress(rpcOperationProgress, {
+    steps: [
+      `Contacting ${providerLabel}...`,
+      `Getting RPC candidates from ${providerLabel}...`,
+      "Ranking healthy endpoints..."
+    ],
+    successLabel: `${providerLabel} RPCs ready.`,
+    errorLabel: `${providerLabel} import failed.`
+  });
+
+  progressIndicator.update(16, `Contacting ${providerLabel}...`);
+
+  try {
+    await loadRpcDiscoveryCandidates("alchemy", { forceRefresh: true });
+    const total = Array.isArray(rpcDiscoveryState.candidates) ? rpcDiscoveryState.candidates.length : 0;
+    const healthy = Array.isArray(rpcDiscoveryState.candidates)
+      ? rpcDiscoveryState.candidates.filter((candidate) => candidate.lastHealth?.status === "healthy").length
+      : 0;
+    progressIndicator.update(
+      82,
+      total
+        ? `Received ${pluralize(total, "candidate")} from ${providerLabel}.`
+        : `No RPC candidates returned from ${providerLabel}.`
+    );
+    progressIndicator.complete(
+      total
+        ? `${healthy}/${total} healthy endpoint${total === 1 ? "" : "s"} ready to add.`
+        : `No RPCs found from ${providerLabel}.`
+    );
+  } catch (error) {
+    progressIndicator.fail(`${providerLabel} import failed.`);
+    throw error;
+  }
 }
 
 async function importDrpcRpcs() {
@@ -5403,7 +5519,40 @@ async function importDrpcRpcs() {
     throw new Error("Type an EVM chain name before importing dRPC endpoints.");
   }
 
-  await loadRpcDiscoveryCandidates("drpc", { forceRefresh: true });
+  const providerLabel = rpcImportProviderLabel("drpc");
+  const progressIndicator = startOperationProgress(rpcOperationProgress, {
+    steps: [
+      `Contacting ${providerLabel}...`,
+      `Getting RPC candidates from ${providerLabel}...`,
+      "Ranking healthy endpoints..."
+    ],
+    successLabel: `${providerLabel} RPCs ready.`,
+    errorLabel: `${providerLabel} import failed.`
+  });
+
+  progressIndicator.update(16, `Contacting ${providerLabel}...`);
+
+  try {
+    await loadRpcDiscoveryCandidates("drpc", { forceRefresh: true });
+    const total = Array.isArray(rpcDiscoveryState.candidates) ? rpcDiscoveryState.candidates.length : 0;
+    const healthy = Array.isArray(rpcDiscoveryState.candidates)
+      ? rpcDiscoveryState.candidates.filter((candidate) => candidate.lastHealth?.status === "healthy").length
+      : 0;
+    progressIndicator.update(
+      82,
+      total
+        ? `Received ${pluralize(total, "candidate")} from ${providerLabel}.`
+        : `No RPC candidates returned from ${providerLabel}.`
+    );
+    progressIndicator.complete(
+      total
+        ? `${healthy}/${total} healthy endpoint${total === 1 ? "" : "s"} ready to add.`
+        : `No RPCs found from ${providerLabel}.`
+    );
+  } catch (error) {
+    progressIndicator.fail(`${providerLabel} import failed.`);
+    throw error;
+  }
 }
 
 function renderRpcNodes() {
@@ -6071,6 +6220,22 @@ function startOperationProgress(progressRefs, options = {}) {
   };
 
   return {
+    update(nextPercent, label = "", options = {}) {
+      if (finished) {
+        return;
+      }
+
+      if (Number.isFinite(Number(nextPercent))) {
+        percent = Math.max(percent, Math.min(99, Number(nextPercent)));
+      }
+      if (label && progressRefs.label) {
+        progressRefs.label.textContent = label;
+      }
+      if (options.state) {
+        progressRefs.container.dataset.state = options.state;
+      }
+      render();
+    },
     complete(label = options.successLabel || "Done.") {
       finish("success", label);
     },
@@ -6098,6 +6263,14 @@ function withButtonBusyState(button, busyLabel, work) {
       button.disabled = false;
       button.textContent = originalLabel;
     });
+}
+
+function rpcImportProviderLabel(providerKey = "") {
+  return providerKey === "alchemy"
+    ? "Alchemy"
+    : providerKey === "drpc"
+      ? "dRPC"
+      : "Chainlist";
 }
 
 function renderSettings() {
