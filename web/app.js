@@ -176,6 +176,10 @@ const openaiApiKeyInput = document.getElementById("openai-api-key-input");
 const openaiConfigStatus = document.getElementById("openai-config-status");
 const deleteOpenaiKeyButton = document.getElementById("delete-openai-key-button");
 const testOpenaiKeyButton = document.getElementById("test-openai-key-button");
+const alchemyApiKeyInput = document.getElementById("alchemy-api-key-input");
+const alchemyConfigStatus = document.getElementById("alchemy-config-status");
+const deleteAlchemyKeyButton = document.getElementById("delete-alchemy-key-button");
+const testAlchemyKeyButton = document.getElementById("test-alchemy-key-button");
 const openseaApiKeyInput = document.getElementById("opensea-api-key-input");
 const openseaConfigStatus = document.getElementById("opensea-config-status");
 const deleteOpenseaKeyButton = document.getElementById("delete-opensea-key-button");
@@ -4892,6 +4896,29 @@ function syncOpenaiKeyControls() {
   });
 }
 
+function setAlchemyKeyStatus(message = null) {
+  setApiKeyStatus({
+    input: alchemyApiKeyInput,
+    statusNode: alchemyConfigStatus,
+    source: state.settings.alchemyApiKeySource,
+    message
+  });
+}
+
+function syncAlchemyKeyControls() {
+  syncApiKeyControls({
+    input: alchemyApiKeyInput,
+    deleteButton: deleteAlchemyKeyButton,
+    source: state.settings.alchemyApiKeySource,
+    placeholders: {
+      saved: "Saved on server. Enter a new key to replace it.",
+      env: "Loaded from .env. Enter a new key to override it.",
+      empty: "Alchemy API key"
+    },
+    deleteLabel: "Delete the saved Alchemy API key"
+  });
+}
+
 function setOpenseaKeyStatus(message = null) {
   setApiKeyStatus({
     input: openseaApiKeyInput,
@@ -4935,12 +4962,15 @@ function withButtonBusyState(button, busyLabel, work) {
 function renderSettings() {
   explorerApiKeyInput.value = "";
   openaiApiKeyInput.value = "";
+  alchemyApiKeyInput.value = "";
   openseaApiKeyInput.value = "";
 
   syncExplorerKeyControls();
   setExplorerKeyStatus();
   syncOpenaiKeyControls();
   setOpenaiKeyStatus();
+  syncAlchemyKeyControls();
+  setAlchemyKeyStatus();
   syncOpenseaKeyControls();
   setOpenseaKeyStatus();
 }
@@ -6577,9 +6607,10 @@ settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const explorerApiKeyValue = explorerApiKeyInput.value.trim();
   const openaiApiKeyValue = openaiApiKeyInput.value.trim();
+  const alchemyApiKeyValue = alchemyApiKeyInput.value.trim();
   const openseaApiKeyValue = openseaApiKeyInput.value.trim();
 
-  if (!explorerApiKeyValue && !openaiApiKeyValue && !openseaApiKeyValue) {
+  if (!explorerApiKeyValue && !openaiApiKeyValue && !alchemyApiKeyValue && !openseaApiKeyValue) {
     showToast("Enter a new API key before saving settings.", "info", "No Changes");
     return;
   }
@@ -6590,6 +6621,9 @@ settingsForm.addEventListener("submit", async (event) => {
   }
   if (openaiApiKeyValue) {
     updatedKeys.push("OpenAI");
+  }
+  if (alchemyApiKeyValue) {
+    updatedKeys.push("Alchemy");
   }
   if (openseaApiKeyValue) {
     updatedKeys.push("OpenSea");
@@ -6605,6 +6639,7 @@ settingsForm.addEventListener("submit", async (event) => {
         body: JSON.stringify({
           explorerApiKey: explorerApiKeyValue,
           openaiApiKey: openaiApiKeyValue,
+          alchemyApiKey: alchemyApiKeyValue,
           openseaApiKey: openseaApiKeyValue
         })
       });
@@ -6613,6 +6648,7 @@ settingsForm.addEventListener("submit", async (event) => {
       }
       explorerApiKeyInput.value = "";
       openaiApiKeyInput.value = "";
+      alchemyApiKeyInput.value = "";
       openseaApiKeyInput.value = "";
       showToast(
         `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`,
@@ -6623,12 +6659,15 @@ settingsForm.addEventListener("submit", async (event) => {
       setExplorerKeyStatus();
       syncOpenaiKeyControls();
       setOpenaiKeyStatus();
+      syncAlchemyKeyControls();
+      setAlchemyKeyStatus();
       syncOpenseaKeyControls();
       setOpenseaKeyStatus();
     });
   } catch {} finally {
     syncExplorerKeyControls();
     syncOpenaiKeyControls();
+    syncAlchemyKeyControls();
     syncOpenseaKeyControls();
   }
 });
@@ -6639,6 +6678,10 @@ explorerApiKeyInput.addEventListener("input", () => {
 
 openaiApiKeyInput.addEventListener("input", () => {
   setOpenaiKeyStatus();
+});
+
+alchemyApiKeyInput.addEventListener("input", () => {
+  setAlchemyKeyStatus();
 });
 
 openseaApiKeyInput.addEventListener("input", () => {
@@ -6714,6 +6757,42 @@ deleteOpenaiKeyButton.addEventListener("click", async () => {
   } finally {
     deleteOpenaiKeyButton.textContent = buttonLabel;
     syncOpenaiKeyControls();
+  }
+});
+
+deleteAlchemyKeyButton.addEventListener("click", async () => {
+  if (state.settings.alchemyApiKeySource !== "saved") {
+    showToast("There is no saved Alchemy dashboard key to delete.", "info", "No Saved Key");
+    return;
+  }
+
+  if (!window.confirm("Delete the saved Alchemy API key?")) {
+    return;
+  }
+
+  const buttonLabel = deleteAlchemyKeyButton.textContent;
+  deleteAlchemyKeyButton.disabled = true;
+  deleteAlchemyKeyButton.textContent = "Deleting...";
+
+  try {
+    const payload = await request("/api/settings/alchemy-key", {
+      method: "DELETE"
+    });
+
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
+
+    alchemyApiKeyInput.value = "";
+    syncAlchemyKeyControls();
+    setAlchemyKeyStatus();
+    showToast("Saved Alchemy API key deleted.", "success", "Alchemy Key Deleted");
+  } catch {
+    syncAlchemyKeyControls();
+    setAlchemyKeyStatus();
+  } finally {
+    deleteAlchemyKeyButton.textContent = buttonLabel;
+    syncAlchemyKeyControls();
   }
 });
 
@@ -6842,6 +6921,52 @@ testOpenaiKeyButton.addEventListener("click", async () => {
   } finally {
     testOpenaiKeyButton.disabled = false;
     testOpenaiKeyButton.textContent = buttonLabel;
+  }
+});
+
+testAlchemyKeyButton.addEventListener("click", async () => {
+  const buttonLabel = testAlchemyKeyButton.textContent;
+  const alchemyApiKeyValue = alchemyApiKeyInput.value.trim();
+
+  if (!alchemyApiKeyValue && !state.settings.alchemyApiKeyConfigured) {
+    setAlchemyKeyStatus("No key to test");
+    showToast("Paste an Alchemy key first, or save one before testing.", "info", "Alchemy Key Required");
+    return;
+  }
+
+  testAlchemyKeyButton.disabled = true;
+  testAlchemyKeyButton.textContent = "Testing...";
+
+  try {
+    const payload = await request("/api/control/test-alchemy-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        alchemyApiKey: alchemyApiKeyValue
+      })
+    });
+
+    const statusMessage =
+      payload.source === "input"
+        ? "Typed key verified"
+        : payload.source === "env"
+          ? "Environment key verified"
+          : "Saved key verified";
+    setAlchemyKeyStatus(statusMessage);
+    showToast(
+      payload.source === "input"
+        ? "Alchemy API key is valid. Save settings to replace the current key."
+        : payload.source === "env"
+          ? "Environment Alchemy API key is valid. Save a new key if you want to override it in the dashboard."
+          : "Saved Alchemy API key is valid.",
+      "success",
+      "Alchemy Key Valid"
+    );
+  } catch {
+    setAlchemyKeyStatus("Key test failed");
+  } finally {
+    testAlchemyKeyButton.disabled = false;
+    testAlchemyKeyButton.textContent = buttonLabel;
   }
 });
 

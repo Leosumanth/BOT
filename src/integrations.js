@@ -1,18 +1,21 @@
 const { ethers } = require("ethers");
 
 const EXPLORER_BASE_URL = "https://api.etherscan.io/v2/api";
+const ALCHEMY_KEY_TEST_ENDPOINT = "https://eth-mainnet.g.alchemy.com/v2/";
 const OPENSEA_API_BASE_URL = "https://api.opensea.io";
 const OPENSEA_KEY_TEST_COLLECTION_SLUG = "cryptopunks";
 
 const secretEnvNames = {
   explorerApiKey: "ETHERSCAN_API_KEY",
   openaiApiKey: "OPENAI_API_KEY",
+  alchemyApiKey: "ALCHEMY_API_KEY",
   openseaApiKey: "OPENSEA_API_KEY"
 };
 
 const secretStorageKeys = {
   explorerApiKey: "explorer_api_key",
   openaiApiKey: "openai_api_key",
+  alchemyApiKey: "alchemy_api_key",
   openseaApiKey: "opensea_api_key"
 };
 
@@ -82,6 +85,9 @@ function buildClientSettings(settings, storedSecrets = {}) {
   const storedOpenAiApiKey = trimValue(storedSecrets.openaiApiKey, "");
   const envOpenAiApiKey = trimValue(process.env[secretEnvNames.openaiApiKey], "");
   const openaiApiKeySource = storedOpenAiApiKey ? "saved" : envOpenAiApiKey ? "env" : "";
+  const storedAlchemyApiKey = trimValue(storedSecrets.alchemyApiKey, "");
+  const envAlchemyApiKey = trimValue(process.env[secretEnvNames.alchemyApiKey], "");
+  const alchemyApiKeySource = storedAlchemyApiKey ? "saved" : envAlchemyApiKey ? "env" : "";
   const storedOpenSeaApiKey = trimValue(storedSecrets.openseaApiKey, "");
   const envOpenSeaApiKey = trimValue(process.env[secretEnvNames.openseaApiKey], "");
   const openseaApiKeySource = storedOpenSeaApiKey ? "saved" : envOpenSeaApiKey ? "env" : "";
@@ -92,6 +98,8 @@ function buildClientSettings(settings, storedSecrets = {}) {
     explorerApiKeySource,
     openaiApiKeyConfigured: Boolean(resolved.openaiApiKey),
     openaiApiKeySource,
+    alchemyApiKeyConfigured: Boolean(resolved.alchemyApiKey),
+    alchemyApiKeySource,
     openseaApiKeyConfigured: Boolean(resolved.openseaApiKey),
     openseaApiKeySource,
     openaiRpcAdvisorModel: trimValue(process.env.OPENAI_RPC_ADVISOR_MODEL, "gpt-5-mini-2025-08-07")
@@ -213,9 +221,45 @@ async function fetchOpenSeaCollectionBySlug({ slug, apiKey }) {
   return payload;
 }
 
+async function fetchAlchemyBlockNumber({ apiKey }) {
+  if (!apiKey) {
+    throw new Error("Alchemy API key is not configured");
+  }
+
+  const endpoint = `${ALCHEMY_KEY_TEST_ENDPOINT}${encodeURIComponent(apiKey)}`;
+  const payload = await fetchJson(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "eth_blockNumber",
+      params: []
+    })
+  });
+
+  if (!payload || payload.jsonrpc !== "2.0" || payload.error || !payload.result) {
+    throw new Error(payload?.error?.message || "Alchemy RPC request failed");
+  }
+
+  const blockNumber = Number.parseInt(String(payload.result), 16);
+  if (!Number.isFinite(blockNumber)) {
+    throw new Error("Alchemy returned an invalid block number");
+  }
+
+  return {
+    endpoint,
+    blockNumber
+  };
+}
+
 module.exports = {
+  ALCHEMY_KEY_TEST_ENDPOINT,
   buildClientSettings,
   createDefaultDashboardSettings,
+  fetchAlchemyBlockNumber,
   fetchAbiFromExplorer,
   fetchOpenSeaCollectionBySlug,
   normalizeDashboardSettings,

@@ -317,7 +317,7 @@
           <div class="view-header">
             <div>
               <h2>Settings</h2>
-              <p class="view-subtitle">Update the API keys used by explorer ABI fetches, OpenSea source discovery, and OpenAI-powered tools.</p>
+              <p class="view-subtitle">Update the API keys used by explorer ABI fetches, premium RPC providers, OpenSea source discovery, and OpenAI-powered tools.</p>
             </div>
           </div>
 
@@ -357,6 +357,24 @@
                   <div class="settings-actions">
                     <button id="delete-openai-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card">
+                  <div class="surface-header compact settings-card-header">
+                    <div>
+                      <h4>Alchemy API</h4>
+                      <p class="helper-copy">Save an Alchemy API key for premium RPC endpoints, WebSocket setup, and future NFT ownership indexing.</p>
+                    </div>
+                    <span id="alchemy-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="alchemy-api-key-input" type="password" placeholder="Alchemy API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw Alchemy API key only. Do not paste a link, curl command, or full RPC URL.</p>
+                  <div class="settings-actions">
+                    <button id="delete-alchemy-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-alchemy-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                 </section>
 

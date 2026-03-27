@@ -21,6 +21,7 @@ const {
 } = require("./mint-sources");
 const {
   buildClientSettings,
+  fetchAlchemyBlockNumber,
   fetchAbiFromExplorer,
   fetchOpenSeaCollectionBySlug,
   normalizeDashboardSettings,
@@ -1524,6 +1525,7 @@ function buildAssistantStateSnapshot() {
     settings: {
       explorerApiKeyConfigured: Boolean(settings.explorerApiKeyConfigured),
       openaiApiKeyConfigured: Boolean(settings.openaiApiKeyConfigured),
+      alchemyApiKeyConfigured: Boolean(settings.alchemyApiKeyConfigured),
       openseaApiKeyConfigured: Boolean(settings.openseaApiKeyConfigured),
       queueMode: queueModeEnabled() ? "redis" : "local",
       operatorAssistantModel
@@ -7679,6 +7681,23 @@ async function verifyOpenAiApiKey(apiKey) {
   }
 }
 
+async function verifyAlchemyApiKey(apiKey) {
+  if (/^https?:\/\//i.test(apiKey) || /alchemy/i.test(apiKey) || /^curl\b/i.test(apiKey)) {
+    throw new Error("Paste the raw Alchemy API key only, not a link, command, or full RPC URL.");
+  }
+
+  if (/\s/.test(apiKey)) {
+    throw new Error("Alchemy API key must be a single token with no spaces.");
+  }
+
+  const result = await fetchAlchemyBlockNumber({ apiKey });
+
+  return {
+    network: "Ethereum Mainnet",
+    blockNumber: result.blockNumber
+  };
+}
+
 async function verifyOpenSeaApiKey(apiKey) {
   if (/^https?:\/\//i.test(apiKey) || /x-api-key/i.test(apiKey) || /^curl\b/i.test(apiKey)) {
     throw new Error("Paste the raw OpenSea API key only, not a link, command, or header.");
@@ -7748,6 +7767,30 @@ async function handleOpenAiKeyTest(request, response) {
   }
 }
 
+async function handleAlchemyKeyTest(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const inputKey = String(payload.alchemyApiKey || "").trim();
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const savedKey = String(integrationSecrets.alchemyApiKey || "").trim();
+    const apiKey = inputKey || resolvedSecrets.alchemyApiKey;
+
+    if (!apiKey) {
+      throw new Error("Add an Alchemy API key first.");
+    }
+
+    const result = await verifyAlchemyApiKey(apiKey);
+
+    sendJson(response, 200, {
+      ok: true,
+      source: inputKey ? "input" : savedKey ? "saved" : "env",
+      ...result
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleOpenSeaKeyTest(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -7794,6 +7837,17 @@ async function handleOpenAiKeyDelete(response) {
   }
 }
 
+async function handleAlchemyKeyDelete(response) {
+  try {
+    await database.deleteSecret(secretStorageKeys.alchemyApiKey);
+    delete integrationSecrets.alchemyApiKey;
+    emitState();
+    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleOpenSeaKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.openseaApiKey);
@@ -7825,6 +7879,7 @@ async function handleSettingsSave(request, response) {
     const secretInputs = {
       explorerApiKey: String(payload.explorerApiKey || "").trim(),
       openaiApiKey: String(payload.openaiApiKey || "").trim(),
+      alchemyApiKey: String(payload.alchemyApiKey || "").trim(),
       openseaApiKey: String(payload.openseaApiKey || "").trim()
     };
 
@@ -7833,6 +7888,9 @@ async function handleSettingsSave(request, response) {
     }
     if (secretInputs.openaiApiKey) {
       await verifyOpenAiApiKey(secretInputs.openaiApiKey);
+    }
+    if (secretInputs.alchemyApiKey) {
+      await verifyAlchemyApiKey(secretInputs.alchemyApiKey);
     }
     if (secretInputs.openseaApiKey) {
       await verifyOpenSeaApiKey(secretInputs.openseaApiKey);
@@ -8180,6 +8238,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/control/test-alchemy-key") {
+      await handleAlchemyKeyTest(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/control/test-opensea-key") {
       await handleOpenSeaKeyTest(request, response);
       return;
@@ -8262,6 +8325,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "DELETE" && url.pathname === "/api/settings/openai-key") {
       await handleOpenAiKeyDelete(response);
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/settings/alchemy-key") {
+      await handleAlchemyKeyDelete(response);
       return;
     }
 
