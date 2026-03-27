@@ -175,14 +175,6 @@ let nativeUsdPriceCache = {
   value: null,
   pending: null
 };
-const walletAssetSnapshotCacheTtlMs = Math.max(
-  60_000,
-  Number(process.env.WALLET_ASSET_SNAPSHOT_CACHE_TTL_MS || 5 * 60 * 1000)
-);
-const walletAssetChainScanConcurrency = Math.max(
-  1,
-  Number(process.env.WALLET_ASSET_CHAIN_SCAN_CONCURRENCY || 12)
-);
 const walletAssetRpcTimeoutMs = Math.max(
   1_500,
   Number(process.env.WALLET_ASSET_RPC_TIMEOUT_MS || 4_000)
@@ -190,10 +182,6 @@ const walletAssetRpcTimeoutMs = Math.max(
 const walletAssetChainlistUrlBudget = Math.max(
   1,
   Number(process.env.WALLET_ASSET_CHAINLIST_URL_BUDGET || 2)
-);
-const walletAssetWarningLimit = Math.max(
-  10,
-  Number(process.env.WALLET_ASSET_WARNING_LIMIT || 25)
 );
 const nativeUsdPriceCacheTtlMs = Math.max(
   60_000,
@@ -206,7 +194,6 @@ const nativeUsdPriceFetchTimeoutMs = Math.max(
 const nativeUsdPriceUrl =
   process.env.NATIVE_USD_PRICE_URL ||
   "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin&vs_currencies=usd";
-const walletAssetSnapshotCache = new Map();
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -3100,187 +3087,6 @@ async function withTimeout(promise, timeoutMs, message) {
   }
 }
 
-async function mapWithConcurrency(items, concurrency, iteratee) {
-  const normalizedItems = Array.isArray(items) ? items : [];
-  const limit = Math.max(1, Math.min(Number(concurrency) || 1, normalizedItems.length || 1));
-  const results = new Array(normalizedItems.length);
-  let nextIndex = 0;
-
-  await Promise.all(
-    Array.from({ length: limit }, async () => {
-      while (true) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-
-        if (currentIndex >= normalizedItems.length) {
-          return;
-        }
-
-        results[currentIndex] = await iteratee(normalizedItems[currentIndex], currentIndex);
-      }
-    })
-  );
-
-  return results;
-}
-
-function mergeWalletInspectionChainDescriptor(existing, incoming) {
-  const normalizedExisting = normalizeChainEntry(existing || {});
-  const normalizedIncoming = normalizeChainEntry(incoming || {});
-  if (!normalizedExisting) {
-    return normalizedIncoming;
-  }
-
-  if (!normalizedIncoming) {
-    return normalizedExisting;
-  }
-
-  return {
-    key: normalizedExisting.key || normalizedIncoming.key,
-    label: normalizedExisting.label || normalizedIncoming.label,
-    chainId: Number.isFinite(Number(normalizedExisting.chainId))
-      ? Number(normalizedExisting.chainId)
-      : Number(normalizedIncoming.chainId),
-    nativeCurrencySymbol: normalizedExisting.nativeCurrencySymbol || normalizedIncoming.nativeCurrencySymbol || undefined,
-    nativeCurrencyName: normalizedExisting.nativeCurrencyName || normalizedIncoming.nativeCurrencyName || undefined,
-    nativeCurrencyDecimals: Number.isFinite(Number(normalizedExisting.nativeCurrencyDecimals))
-      ? Number(normalizedExisting.nativeCurrencyDecimals)
-      : Number.isFinite(Number(normalizedIncoming.nativeCurrencyDecimals))
-        ? Number(normalizedIncoming.nativeCurrencyDecimals)
-        : 18,
-    catalogued: Boolean(normalizedExisting.catalogued || normalizedIncoming.catalogued)
-  };
-}
-
-async function buildWalletInspectionScope() {
-  const localChains = getAvailableChains();
-  let chainlistCatalog = null;
-  let catalogWarning = null;
-
-  try {
-    chainlistCatalog = await fetchChainlistRpcCatalog(false);
-  } catch (error) {
-    catalogWarning = `Chainlist catalog unavailable: ${formatError(error)}`;
-  }
-
-  const localChainIds = new Set(localChains.map((chain) => Number(chain.chainId)).filter(Number.isFinite));
-  const chainMap = new Map();
-  const chainlistEntryByChainId = new Map();
-
-  const pushChain = (entry) => {
-    const normalized = normalizeChainEntry(entry);
-    if (!normalized) {
-      return;
-    }
-
-    const chainIdKey = String(normalized.chainId);
-    const existing = chainMap.get(chainIdKey);
-    chainMap.set(chainIdKey, mergeWalletInspectionChainDescriptor(existing, normalized));
-  };
-
-  localChains.forEach(pushChain);
-
-  if (Array.isArray(chainlistCatalog)) {
-    chainlistCatalog.forEach((entry) => {
-      if (extractChainlistRpcUrls(entry).length === 0) {
-        return;
-      }
-
-      const descriptor = buildChainDescriptorFromChainlistEntry(entry);
-      if (!descriptor) {
-        return;
-      }
-
-      pushChain(descriptor);
-      chainlistEntryByChainId.set(Number(descriptor.chainId), entry);
-    });
-  }
-
-  const chains = [...chainMap.values()].sort((left, right) => {
-    const localDelta = Number(localChainIds.has(Number(right.chainId))) - Number(localChainIds.has(Number(left.chainId)));
-    if (localDelta !== 0) {
-      return localDelta;
-    }
-
-    return String(left.label || "").localeCompare(String(right.label || ""));
-  });
-
-  return {
-    chains,
-    chainlistCatalog,
-    chainlistEntryByChainId,
-    catalogWarning
-  };
-}
-
-function buildWalletSymbolTotals(assets = []) {
-  const totals = new Map();
-
-  assets.forEach((asset) => {
-    const symbol = String(asset?.assetSymbol || "").trim();
-    const balanceWei = String(asset?.balanceWei || "").trim();
-    if (!symbol || !balanceWei) {
-      return;
-    }
-
-    let weiValue;
-    try {
-      weiValue = BigInt(balanceWei);
-    } catch {
-      return;
-    }
-
-    if (weiValue <= 0n) {
-      return;
-    }
-
-    const decimals = Number.isFinite(Number(asset?.assetDecimals)) ? Number(asset.assetDecimals) : 18;
-    const key = `${symbol}:${decimals}`;
-    const existing = totals.get(key) || {
-      symbol,
-      name: String(asset?.assetName || symbol).trim() || symbol,
-      totalWei: 0n,
-      decimals,
-      chainCount: 0
-    };
-    existing.totalWei += weiValue;
-    existing.chainCount += 1;
-    totals.set(key, existing);
-  });
-
-  return [...totals.values()]
-    .map((entry) => ({
-      symbol: entry.symbol,
-      name: entry.name,
-      decimals: entry.decimals,
-      totalWei: entry.totalWei.toString(),
-      totalFormatted: formatEthString(entry.totalWei, entry.decimals) || "0",
-      chainCount: entry.chainCount
-    }))
-    .sort((left, right) => {
-      let leftWei = 0n;
-      let rightWei = 0n;
-
-      try {
-        leftWei = BigInt(left.totalWei || "0");
-        rightWei = BigInt(right.totalWei || "0");
-      } catch {
-        leftWei = 0n;
-        rightWei = 0n;
-      }
-
-      if (rightWei > leftWei) {
-        return 1;
-      }
-
-      if (rightWei < leftWei) {
-        return -1;
-      }
-
-      return String(left.symbol || "").localeCompare(String(right.symbol || ""));
-    });
-}
-
 function extractUsdNumber(value) {
   const normalized = Number(value);
   return Number.isFinite(normalized) ? normalized : null;
@@ -3506,26 +3312,28 @@ async function createWalletAssetReadProvider(chainInput, options = {}) {
   };
 }
 
-async function buildExpandedWalletAssetSnapshot(wallet) {
-  const { chains: chainsToInspect, chainlistCatalog, chainlistEntryByChainId, catalogWarning } =
-    await buildWalletInspectionScope();
+async function readWalletAssetSnapshot(wallet) {
+  if (!wallet?.address) {
+    throw new Error("Wallet address is required");
+  }
+
+  const chainsToInspect = buildAvailableChains().filter(
+    (chain) => !/sepolia/i.test(String(chain.key || "")) && !/sepolia/i.test(String(chain.label || ""))
+  );
   if (chainsToInspect.length === 0) {
     return {
       wallet,
       generatedAt: new Date().toISOString(),
       assets: [],
-      warnings: [{ chainLabel: "RPC", message: "No chain RPCs are available for balance inspection yet." }],
+      warnings: [{ chainLabel: "RPC", message: "No supported chains are available for balance inspection yet." }],
       summary: {
         chainCount: 0,
         warningCount: 1,
-        scannedChainCount: 0,
         nonZeroAssetCount: 0,
         totalUsd: null,
         totalUsdFormatted: null,
         pricedAssetCount: 0,
-        usdAvailable: false,
-        symbolTotals: [],
-        suppressedWarningCount: 0
+        usdAvailable: false
       }
     };
   }
@@ -3537,80 +3345,68 @@ async function buildExpandedWalletAssetSnapshot(wallet) {
     nativeUsdPrices = {};
   }
 
-  const results = await mapWithConcurrency(chainsToInspect, walletAssetChainScanConcurrency, async (chain) => {
-    const providerResult = await createWalletAssetReadProvider(chain, {
-      chainlistCatalog,
-      chainlistEntry: chainlistEntryByChainId.get(Number(chain.chainId)) || null
-    });
-    if (!providerResult.provider) {
-      return {
-        asset: null,
-        warning: {
-          chainKey: chain.key,
-          chainLabel: chain.label,
-          message: providerResult.warning || `Unable to inspect ${chain.label} right now.`
-        }
-      };
-    }
+  const results = await Promise.all(
+    chainsToInspect.map(async (chain) => {
+      const providerResult = await createWalletAssetReadProvider(chain.key);
+      if (!providerResult.provider) {
+        return {
+          asset: null,
+          warning: {
+            chainKey: chain.key,
+            chainLabel: chain.label,
+            message: providerResult.warning || `Unable to inspect ${chain.label} right now.`
+          }
+        };
+      }
 
-    try {
-      const assetMeta = nativeAssetMetaForChain(chain);
-      const balance = await withTimeout(
-        providerResult.provider.getBalance(wallet.address),
-        walletAssetRpcTimeoutMs,
-        `${chain.label} balance read timed out after ${walletAssetRpcTimeoutMs}ms`
-      );
-      const balanceFormatted = formatEthString(balance, assetMeta.decimals) || "0";
-      const balanceFloat = Number(balanceFormatted || 0);
-      const usdPrice =
-        assetMeta.priceKey && Number.isFinite(Number(nativeUsdPrices[assetMeta.priceKey]))
-          ? Number(nativeUsdPrices[assetMeta.priceKey])
-          : null;
-      const usdValue = Number.isFinite(balanceFloat) && Number.isFinite(usdPrice) ? balanceFloat * usdPrice : null;
-
-      return {
-        asset: {
-          chainKey: chain.key,
-          chainLabel: chain.label,
-          assetSymbol: assetMeta.symbol,
-          assetName: assetMeta.name,
-          assetDecimals: assetMeta.decimals,
-          balanceWei: balance.toString(),
-          balanceFormatted,
-          balanceFloat,
-          usdPrice,
-          usdValue,
-          usdValueFormatted: formatUsdString(usdValue),
-          rpcLabel: providerResult.sourceLabel || providerResult.rpcNode?.name || "RPC",
-          transportLabel: isSocketRpcUrl(providerResult.rpcNode?.url) ? "WebSocket" : "HTTPS",
-          latencyMs: providerResult.rpcNode?.lastHealth?.latencyMs ?? null,
-          checkedAt: providerResult.rpcNode?.lastHealth?.checkedAt || new Date().toISOString()
-        },
-        warning: null
-      };
-    } catch (error) {
-      return {
-        asset: null,
-        warning: {
-          chainKey: chain.key,
-          chainLabel: chain.label,
-          message: formatError(error)
-        }
-      };
-    } finally {
-      await destroyProvider(providerResult.provider);
-    }
-  });
+      try {
+        const assetMeta = nativeAssetMetaForChain(chain.key);
+        const balance = await providerResult.provider.getBalance(wallet.address);
+        const balanceFormatted = formatEthString(balance, assetMeta.decimals) || "0";
+        const balanceFloat = Number(balanceFormatted || 0);
+        const usdPrice =
+          assetMeta.priceKey && Number.isFinite(Number(nativeUsdPrices[assetMeta.priceKey]))
+            ? Number(nativeUsdPrices[assetMeta.priceKey])
+            : null;
+        const usdValue = Number.isFinite(balanceFloat) && Number.isFinite(usdPrice) ? balanceFloat * usdPrice : null;
+        return {
+          asset: {
+            chainKey: chain.key,
+            chainLabel: chain.label,
+            assetSymbol: assetMeta.symbol,
+            assetName: assetMeta.name,
+            balanceWei: balance.toString(),
+            balanceFormatted,
+            balanceFloat,
+            usdPrice,
+            usdValue,
+            usdValueFormatted: formatUsdString(usdValue),
+            rpcLabel: providerResult.sourceLabel || providerResult.rpcNode?.name || "RPC",
+            transportLabel: isSocketRpcUrl(providerResult.rpcNode?.url) ? "WebSocket" : "HTTPS",
+            latencyMs: providerResult.rpcNode?.lastHealth?.latencyMs ?? null,
+            checkedAt: providerResult.rpcNode?.lastHealth?.checkedAt || new Date().toISOString()
+          },
+          warning: null
+        };
+      } catch (error) {
+        return {
+          asset: null,
+          warning: {
+            chainKey: chain.key,
+            chainLabel: chain.label,
+            message: formatError(error)
+          }
+        };
+      } finally {
+        await destroyProvider(providerResult.provider);
+      }
+    })
+  );
 
   const assets = results
     .map((entry) => entry.asset)
     .filter(Boolean)
     .sort((left, right) => {
-      const usdDelta = Number(right.usdValue || -1) - Number(left.usdValue || -1);
-      if (usdDelta !== 0 && Number.isFinite(usdDelta)) {
-        return usdDelta;
-      }
-
       const balanceDelta = Number(right.balanceFloat || 0) - Number(left.balanceFloat || 0);
       if (balanceDelta !== 0) {
         return balanceDelta;
@@ -3619,16 +3415,10 @@ async function buildExpandedWalletAssetSnapshot(wallet) {
       return String(left.chainLabel || "").localeCompare(String(right.chainLabel || ""));
     });
 
-  const allWarnings = [
-    ...(catalogWarning ? [{ chainLabel: "Chainlist", message: catalogWarning }] : []),
-    ...results.map((entry) => entry.warning).filter(Boolean)
-  ];
-  const warnings = allWarnings.slice(0, walletAssetWarningLimit);
-  const symbolTotals = buildWalletSymbolTotals(assets);
+  const warnings = results.map((entry) => entry.warning).filter(Boolean);
   const nonZeroAssetCount = assets.filter((asset) => Number(asset.balanceFloat || 0) > 0).length;
   const pricedAssets = assets.filter((asset) => Number.isFinite(Number(asset.usdValue)));
   const totalUsd = pricedAssets.reduce((sum, asset) => sum + Number(asset.usdValue || 0), 0);
-
   return {
     wallet,
     generatedAt: new Date().toISOString(),
@@ -3636,71 +3426,14 @@ async function buildExpandedWalletAssetSnapshot(wallet) {
     warnings,
     summary: {
       chainCount: assets.length,
-      warningCount: allWarnings.length,
-      scannedChainCount: chainsToInspect.length,
+      warningCount: warnings.length,
       nonZeroAssetCount,
       totalUsd: pricedAssets.length > 0 ? totalUsd : null,
       totalUsdFormatted: pricedAssets.length > 0 ? formatUsdString(totalUsd) : null,
       pricedAssetCount: pricedAssets.length,
-      usdAvailable: pricedAssets.length > 0,
-      symbolTotals,
-      suppressedWarningCount: Math.max(0, allWarnings.length - warnings.length)
+      usdAvailable: pricedAssets.length > 0
     }
   };
-}
-
-async function readWalletAssetSnapshot(wallet) {
-  if (!wallet?.address) {
-    throw new Error("Wallet address is required");
-  }
-
-  const cacheKey = String(wallet?.id || wallet?.address || "").trim().toLowerCase();
-  if (!cacheKey) {
-    return buildExpandedWalletAssetSnapshot(wallet);
-  }
-
-  const now = Date.now();
-  const cached = walletAssetSnapshotCache.get(cacheKey);
-  if (cached?.value && cached.expiresAt > now) {
-    return cached.value;
-  }
-
-  if (cached?.pending) {
-    return cached.pending;
-  }
-
-  const pending = (async () => {
-    const snapshot = await buildExpandedWalletAssetSnapshot(wallet);
-    walletAssetSnapshotCache.set(cacheKey, {
-      expiresAt: Date.now() + walletAssetSnapshotCacheTtlMs,
-      value: snapshot,
-      pending: null
-    });
-    return snapshot;
-  })();
-
-  walletAssetSnapshotCache.set(cacheKey, {
-    expiresAt: cached?.expiresAt || 0,
-    value: cached?.value || null,
-    pending
-  });
-
-  try {
-    return await pending;
-  } catch (error) {
-    const fallback = walletAssetSnapshotCache.get(cacheKey);
-    if (fallback?.value) {
-      walletAssetSnapshotCache.set(cacheKey, {
-        expiresAt: Date.now() + walletAssetSnapshotCacheTtlMs,
-        value: fallback.value,
-        pending: null
-      });
-      return fallback.value;
-    }
-
-    walletAssetSnapshotCache.delete(cacheKey);
-    throw error;
-  }
 }
 
 async function inferMintPriceFromContract({ chainKey, contractAddress, abiEntries, rpcNodeIds = [] }) {
@@ -7107,14 +6840,11 @@ async function handleWalletAssets(walletId, response) {
         snapshot.summary || {
           chainCount: snapshot.assets.length,
           warningCount: snapshot.warnings.length,
-          scannedChainCount: snapshot.assets.length + snapshot.warnings.length,
           nonZeroAssetCount: snapshot.assets.filter((asset) => Number(asset.balanceFloat || 0) > 0).length,
           totalUsd: null,
           totalUsdFormatted: null,
           pricedAssetCount: 0,
-          usdAvailable: false,
-          symbolTotals: [],
-          suppressedWarningCount: 0
+          usdAvailable: false
         }
     });
   } catch (error) {

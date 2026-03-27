@@ -278,12 +278,6 @@ let assistantState = {
 let assistantRequestController = null;
 let assistantRequestToken = 0;
 const assistantPositionStorageKey = "mintbot.assistant.position.v1";
-const walletBalanceStaleMs = 5 * 60 * 1000;
-const walletBalancePreloadConcurrency = 1;
-const walletAssetRequests = new Map();
-const walletBalancePreloadQueue = [];
-const queuedWalletBalanceIds = new Set();
-let walletBalancePreloadActive = 0;
 const assistantViewCommands = [
   {
     view: "dashboard",
@@ -355,29 +349,6 @@ function formatUsdBalance(value, fallback = "$--") {
     minimumFractionDigits: 2,
     maximumFractionDigits: normalized >= 1000 ? 0 : 2
   }).format(normalized);
-}
-
-function formatWalletBalanceSummary(summary = {}, options = {}) {
-  const maxItems = Math.max(1, Number(options.maxItems || 1));
-  const symbolTotals = Array.isArray(summary?.symbolTotals)
-    ? summary.symbolTotals.filter((entry) => Number(entry?.totalWei || 0) !== 0 || entry?.totalFormatted)
-    : [];
-
-  if (symbolTotals.length > 0) {
-    const visible = symbolTotals
-      .slice(0, maxItems)
-      .map((entry) => `${entry.totalFormatted || "0"} ${entry.symbol || ""}`.trim())
-      .filter(Boolean);
-
-    if (visible.length > 0) {
-      const label = visible.join(" + ");
-      return symbolTotals.length > maxItems ? `${label} + ${symbolTotals.length - maxItems} more` : label;
-    }
-  }
-
-  return Number.isFinite(Number(summary?.totalUsd))
-    ? formatUsdBalance(summary.totalUsd, options.fallback || "$--")
-    : options.fallback || "$--";
 }
 
 function normalizeGasStrategyValue(value) {
@@ -577,16 +548,7 @@ function walletDisplayBalance(wallet, options = {}) {
     return options.loadingLabel || "Loading...";
   }
 
-  return formatWalletBalanceSummary(
-    {
-      totalUsd: wallet?.balanceUsd,
-      symbolTotals: wallet?.balanceSymbolTotals
-    },
-    {
-      maxItems: options.maxItems || 1,
-      fallback: options.fallback || "$--"
-    }
-  );
+  return formatUsdBalance(wallet?.balanceUsd, options.fallback || "$--");
 }
 
 function mergeWalletBalanceState(wallets = []) {
@@ -595,7 +557,6 @@ function mergeWalletBalanceState(wallets = []) {
       wallet.id,
       {
         balanceUsd: wallet.balanceUsd,
-        balanceSymbolTotals: wallet.balanceSymbolTotals,
         balanceLoading: wallet.balanceLoading,
         balanceError: wallet.balanceError,
         balanceUpdatedAt: wallet.balanceUpdatedAt
@@ -611,170 +572,6 @@ function mergeWalletBalanceState(wallets = []) {
 
 function patchWalletBalance(walletId, patch) {
   state.wallets = state.wallets.map((wallet) => (wallet.id === walletId ? { ...wallet, ...patch } : wallet));
-}
-
-function walletBalanceTimestamp(wallet) {
-  const timestamp = new Date(wallet?.balanceUpdatedAt || "").getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function hasFreshWalletBalance(wallet) {
-  const updatedAt = walletBalanceTimestamp(wallet);
-  return updatedAt > 0 && Date.now() - updatedAt < walletBalanceStaleMs;
-}
-
-function shouldPreloadWalletBalance(wallet, options = {}) {
-  if (!wallet?.id || wallet.balanceLoading) {
-    return false;
-  }
-
-  if (walletAssetRequests.has(wallet.id) || queuedWalletBalanceIds.has(wallet.id)) {
-    return false;
-  }
-
-  return options.force ? true : !hasFreshWalletBalance(wallet);
-}
-
-async function requestWalletAssets(walletId, options = {}) {
-  if (walletAssetRequests.has(walletId)) {
-    return walletAssetRequests.get(walletId);
-  }
-
-  const pending = request(`/api/wallets/${walletId}/assets`, {
-    quiet: options.quiet === true
-  }).finally(() => {
-    walletAssetRequests.delete(walletId);
-  });
-
-  walletAssetRequests.set(walletId, pending);
-  return pending;
-}
-
-function applyWalletAssetPayload(walletId, payload) {
-  const currentWallet = state.wallets.find((entry) => entry.id === walletId);
-  patchWalletBalance(walletId, {
-    balanceUsd: Number.isFinite(Number(payload.summary?.totalUsd))
-      ? Number(payload.summary.totalUsd)
-      : currentWallet?.balanceUsd,
-    balanceSymbolTotals: Array.isArray(payload.summary?.symbolTotals)
-      ? payload.summary.symbolTotals
-      : currentWallet?.balanceSymbolTotals,
-    balanceLoading: false,
-    balanceError: "",
-    balanceUpdatedAt: payload.generatedAt || new Date().toISOString()
-  });
-
-  if (walletAssetInspector.walletId === walletId) {
-    walletAssetInspector = {
-      walletId,
-      loading: false,
-      error: "",
-      assets: Array.isArray(payload.assets) ? payload.assets : [],
-      warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
-      generatedAt: payload.generatedAt || new Date().toISOString(),
-      summary: payload.summary || null
-    };
-  }
-}
-
-function applyWalletAssetError(walletId, error, options = {}) {
-  const patch = {
-    balanceLoading: false,
-    balanceError: error.message || "Asset lookup failed"
-  };
-  if (options.markChecked) {
-    patch.balanceUpdatedAt = new Date().toISOString();
-  }
-  patchWalletBalance(walletId, patch);
-
-  if (walletAssetInspector.walletId === walletId) {
-    walletAssetInspector = {
-      walletId,
-      loading: false,
-      error: error.message || "Asset lookup failed",
-      assets: [],
-      warnings: [],
-      generatedAt: "",
-      summary: null
-    };
-  }
-}
-
-async function refreshWalletBalance(walletId, options = {}) {
-  const wallet = state.wallets.find((entry) => entry.id === walletId);
-  if (!wallet) {
-    return null;
-  }
-
-  patchWalletBalance(walletId, {
-    balanceLoading: true,
-    balanceError: ""
-  });
-
-  if (options.openInspector || walletAssetInspector.walletId === walletId) {
-    walletAssetInspector = {
-      walletId,
-      loading: true,
-      error: "",
-      assets: [],
-      warnings: [],
-      generatedAt: "",
-      summary: null
-    };
-  }
-
-  renderWallets();
-  renderWalletAssets();
-
-  try {
-    const payload = await requestWalletAssets(walletId, {
-      quiet: options.quiet === true
-    });
-    applyWalletAssetPayload(walletId, payload);
-    return payload;
-  } catch (error) {
-    applyWalletAssetError(walletId, error, {
-      markChecked: options.quiet === true
-    });
-    throw error;
-  } finally {
-    renderWallets();
-    renderWalletAssets();
-  }
-}
-
-function drainWalletBalancePreloadQueue() {
-  while (walletBalancePreloadActive < walletBalancePreloadConcurrency && walletBalancePreloadQueue.length > 0) {
-    const walletId = walletBalancePreloadQueue.shift();
-    queuedWalletBalanceIds.delete(walletId);
-
-    if (!state.wallets.some((wallet) => wallet.id === walletId)) {
-      continue;
-    }
-
-    walletBalancePreloadActive += 1;
-    void refreshWalletBalance(walletId, {
-      quiet: true
-    })
-      .catch(() => {})
-      .finally(() => {
-        walletBalancePreloadActive = Math.max(0, walletBalancePreloadActive - 1);
-        drainWalletBalancePreloadQueue();
-      });
-  }
-}
-
-function preloadWalletBalances(options = {}) {
-  state.wallets.forEach((wallet) => {
-    if (!shouldPreloadWalletBalance(wallet, options)) {
-      return;
-    }
-
-    queuedWalletBalanceIds.add(wallet.id);
-    walletBalancePreloadQueue.push(wallet.id);
-  });
-
-  drainWalletBalancePreloadQueue();
 }
 
 function setLoginStatus(message) {
@@ -2595,14 +2392,14 @@ function renderWalletAssets() {
       summary: null
     };
     walletAssetsTitle.textContent = "Assets & Coins";
-    walletAssetsSubtitle.textContent = "Wallet totals scan automatically across known EVM chains. Click a wallet for the breakdown.";
+    walletAssetsSubtitle.textContent = "Click a wallet to view native balances across available EVM chains.";
     walletAssetsStatus.classList.add("hidden");
     walletAssetsStatus.textContent = "";
     walletAssetsRefreshButton.disabled = true;
     walletAssetsList.innerHTML = `
       <div class="empty-state">
         <h3>Select a wallet</h3>
-        <p>Wallet totals load automatically. Click any saved wallet to inspect the chain-by-chain breakdown.</p>
+        <p>Click any saved wallet to load its native coin balances.</p>
       </div>
     `;
     return;
@@ -2610,7 +2407,6 @@ function renderWalletAssets() {
 
   walletAssetsTitle.textContent = `${wallet.label} Assets`;
   walletAssetsSubtitle.textContent = `${wallet.addressShort} | ${wallet.label} | ${walletDisplayBalance(wallet, {
-    maxItems: 2,
     fallback: "$--",
     loadingLabel: "Loading..."
   })}`;
@@ -2618,11 +2414,11 @@ function renderWalletAssets() {
 
   if (walletAssetInspector.loading) {
     walletAssetsStatus.classList.remove("hidden");
-    walletAssetsStatus.textContent = "Loading balances across configured and known EVM chains...";
+    walletAssetsStatus.textContent = "Loading balances across configured and discovered chains...";
     walletAssetsList.innerHTML = `
       <div class="empty-state">
         <h3>Loading assets</h3>
-        <p>Scanning reachable RPCs and reading native balances for this wallet across known EVM chains.</p>
+        <p>Checking reachable RPCs and reading native balances for this wallet.</p>
       </div>
     `;
     return;
@@ -2644,27 +2440,16 @@ function renderWalletAssets() {
   const assets = allAssets.filter((asset) => Number(asset.balanceFloat || 0) > 0);
   const warnings = Array.isArray(walletAssetInspector.warnings) ? walletAssetInspector.warnings : [];
   const nonZeroCount = assets.length;
-  const totalChainCount = Number(walletAssetInspector.summary?.scannedChainCount) || allAssets.length + warnings.length;
-  const totalBalanceLabel = formatWalletBalanceSummary(walletAssetInspector.summary, {
-    maxItems: 3,
-    fallback: ""
-  });
   const statusParts = [];
-  if (totalChainCount > 0) {
-    statusParts.push(`${pluralize(totalChainCount, "chain")} checked`);
+  if (allAssets.length > 0) {
+    statusParts.push(`${pluralize(allAssets.length, "chain")} checked`);
     statusParts.push(nonZeroCount > 0 ? `${pluralize(nonZeroCount, "balance")} above zero` : "No balances above zero");
-  }
-  if (Number(walletAssetInspector.summary?.warningCount || 0) > 0) {
-    statusParts.push(`${pluralize(Number(walletAssetInspector.summary.warningCount || 0), "warning")}`);
   }
   if (walletAssetInspector.generatedAt) {
     statusParts.push(`updated ${relativeTime(walletAssetInspector.generatedAt)}`);
   }
   if (Number.isFinite(Number(walletAssetInspector.summary?.totalUsd))) {
-    statusParts.unshift(`Approx ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
-  }
-  if (totalBalanceLabel) {
-    statusParts.unshift(`Total ${totalBalanceLabel}`);
+    statusParts.unshift(`Total ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
   }
   walletAssetsStatus.classList.toggle("hidden", statusParts.length === 0);
   walletAssetsStatus.textContent = statusParts.join(" | ");
@@ -2723,33 +2508,66 @@ function renderWalletAssets() {
       `
     )
     .join("");
-
-  const hiddenWarningMarkup =
-    Number(walletAssetInspector.summary?.suppressedWarningCount || 0) > 0
-      ? `
-        <div class="wallet-assets-warning">
-          <strong>Additional chain warnings hidden</strong>
-          <p class="muted-copy">${escapeHtml(
-            `${walletAssetInspector.summary.suppressedWarningCount} more chain warnings were omitted to keep this view readable.`
-          )}</p>
-        </div>
-      `
-      : "";
-
-  walletAssetsList.innerHTML = `${assetMarkup}${warningMarkup}${hiddenWarningMarkup}`;
+  walletAssetsList.innerHTML = `${assetMarkup}${warningMarkup}`;
 }
 
 async function loadWalletAssets(walletId) {
-  if (!state.wallets.find((entry) => entry.id === walletId)) {
+  const wallet = state.wallets.find((entry) => entry.id === walletId);
+  if (!wallet) {
     return;
   }
 
   try {
-    await refreshWalletBalance(walletId, {
-      openInspector: true,
-      quiet: false
+    patchWalletBalance(walletId, {
+      balanceLoading: true,
+      balanceError: ""
     });
-  } catch {}
+    walletAssetInspector = {
+      walletId,
+      loading: true,
+      error: "",
+      assets: [],
+      warnings: [],
+      generatedAt: "",
+      summary: null
+    };
+    renderWallets();
+    renderWalletAssets();
+
+    const payload = await request(`/api/wallets/${walletId}/assets`);
+    patchWalletBalance(walletId, {
+      balanceUsd: Number.isFinite(Number(payload.summary?.totalUsd)) ? Number(payload.summary.totalUsd) : wallet.balanceUsd,
+      balanceLoading: false,
+      balanceError: "",
+      balanceUpdatedAt: payload.generatedAt || new Date().toISOString()
+    });
+    walletAssetInspector = {
+      walletId,
+      loading: false,
+      error: "",
+      assets: Array.isArray(payload.assets) ? payload.assets : [],
+      warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+      generatedAt: payload.generatedAt || new Date().toISOString(),
+      summary: payload.summary || null
+    };
+  } catch (error) {
+    patchWalletBalance(walletId, {
+      balanceLoading: false,
+      balanceError: error.message || "Asset lookup failed"
+    });
+    walletAssetInspector = {
+      walletId,
+      loading: false,
+      error: error.message || "Asset lookup failed",
+      assets: [],
+      warnings: [],
+      generatedAt: "",
+      summary: null
+    };
+  }
+
+  renderWallets();
+  renderWalletAssets();
 }
 
 function rpcHealthMarkup(node) {
@@ -4658,10 +4476,6 @@ function applyAppState(payload) {
     : "Batch tools are available for visual planning.";
 
   renderAll();
-
-  if (state.currentView === "wallets") {
-    preloadWalletBalances();
-  }
 }
 
 function ensureChainOption(chain) {
@@ -4695,10 +4509,6 @@ function setView(viewName) {
     view.classList.toggle("active", view.dataset.viewPanel === viewName);
   });
   renderRuntime();
-
-  if (viewName === "wallets") {
-    preloadWalletBalances();
-  }
 }
 
 function populateChainSelectors() {
