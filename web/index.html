@@ -57,6 +57,7 @@
             <button class="nav-button" data-view="tasks" type="button">Tasks</button>
             <button class="nav-button" data-view="wallets" type="button">Wallets</button>
             <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
+            <button class="nav-button" data-view="assistant" type="button">Operator AI</button>
             <button class="nav-button" data-view="settings" type="button">Settings</button>
           </nav>
         </div>
@@ -160,7 +161,16 @@
                   <span>Private Key</span>
                   <textarea id="wallet-keys-input" rows="8" placeholder="Paste private key"></textarea>
                 </label>
-                <button class="primary-button fx-button" type="submit">Import Wallet</button>
+                <button id="wallet-import-submit-button" class="primary-button fx-button" type="submit">Import Wallet</button>
+                <div id="wallet-import-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                  <div class="operation-progress-meta">
+                    <span id="wallet-import-progress-label" class="helper-copy">Preparing wallet import...</span>
+                    <strong id="wallet-import-progress-value">0%</strong>
+                  </div>
+                  <div class="progress-track">
+                    <span id="wallet-import-progress-bar" class="progress-bar" style="width: 0%"></span>
+                  </div>
+                </div>
               </form>
             </section>
 
@@ -365,6 +375,15 @@
                     <button id="delete-explorer-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
+                  <div id="explorer-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="explorer-key-progress-label" class="helper-copy">Checking Explorer API key...</span>
+                      <strong id="explorer-key-progress-value">0%</strong>
+                    </div>
+                    <div class="progress-track">
+                      <span id="explorer-key-progress-bar" class="progress-bar" style="width: 0%"></span>
+                    </div>
+                  </div>
                 </section>
 
                 <section class="surface inset-surface settings-card">
@@ -382,6 +401,15 @@
                   <div class="settings-actions">
                     <button id="delete-openai-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="openai-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="openai-key-progress-label" class="helper-copy">Checking OpenAI API key...</span>
+                      <strong id="openai-key-progress-value">0%</strong>
+                    </div>
+                    <div class="progress-track">
+                      <span id="openai-key-progress-bar" class="progress-bar" style="width: 0%"></span>
+                    </div>
                   </div>
                 </section>
 
@@ -401,6 +429,15 @@
                     <button id="delete-alchemy-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-alchemy-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
+                  <div id="alchemy-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="alchemy-key-progress-label" class="helper-copy">Checking Alchemy API key...</span>
+                      <strong id="alchemy-key-progress-value">0%</strong>
+                    </div>
+                    <div class="progress-track">
+                      <span id="alchemy-key-progress-bar" class="progress-bar" style="width: 0%"></span>
+                    </div>
+                  </div>
                 </section>
 
                 <section class="surface inset-surface settings-card">
@@ -418,6 +455,15 @@
                   <div class="settings-actions">
                     <button id="delete-drpc-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-drpc-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="drpc-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="drpc-key-progress-label" class="helper-copy">Checking dRPC API key...</span>
+                      <strong id="drpc-key-progress-value">0%</strong>
+                    </div>
+                    <div class="progress-track">
+                      <span id="drpc-key-progress-bar" class="progress-bar" style="width: 0%"></span>
+                    </div>
                   </div>
                 </section>
 
@@ -437,6 +483,15 @@
                     <button id="delete-opensea-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-opensea-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
+                  <div id="opensea-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="opensea-key-progress-label" class="helper-copy">Checking OpenSea API key...</span>
+                      <strong id="opensea-key-progress-value">0%</strong>
+                    </div>
+                    <div class="progress-track">
+                      <span id="opensea-key-progress-bar" class="progress-bar" style="width: 0%"></span>
+                    </div>
+                  </div>
                 </section>
 
                 <div class="settings-footer">
@@ -450,82 +505,55 @@
           </section>
         </section>
 
+        <section class="view" data-view-panel="assistant">
+          <div class="view-header">
+            <div>
+              <h2>Operator AI</h2>
+              <p class="view-subtitle">Ask naturally and control the live app from one place.</p>
+            </div>
+          </div>
+
+          <div class="assistant-view-shell">
+            <section id="assistant-panel" class="assistant-panel assistant-panel-view" aria-label="Operator AI assistant">
+              <div class="assistant-panel-header">
+                <div class="assistant-panel-titlebar">
+                  <div class="assistant-panel-heading">
+                    <p class="eyebrow">Live Assistant</p>
+                    <h3>Operator AI</h3>
+                  </div>
+                </div>
+                <div class="assistant-panel-actions">
+                  <button id="assistant-reset-button" class="assistant-header-button assistant-header-button-reset fx-button" type="button">Reset Chat</button>
+                  <button
+                    id="assistant-close-button"
+                    class="assistant-window-control assistant-window-control-close fx-button"
+                    type="button"
+                    aria-label="Close assistant"
+                    title="Close assistant"
+                  ></button>
+                </div>
+              </div>
+
+              <div id="assistant-messages" class="assistant-messages"></div>
+
+              <form id="assistant-form" class="assistant-composer">
+                <label class="assistant-composer-field">
+                  <span>Message</span>
+                  <textarea
+                    id="assistant-input"
+                    rows="4"
+                    placeholder="Tell Operator AI what you want to change"
+                  ></textarea>
+                </label>
+                <div class="assistant-composer-actions">
+                  <button id="assistant-send-button" class="primary-button fx-button assistant-send-toggle" type="button">Send</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
       </main>
-    </div>
-
-    <div id="assistant-root" class="assistant-root hidden">
-      <button
-        id="assistant-fab-button"
-        class="assistant-fab fx-button"
-        type="button"
-        aria-expanded="false"
-        aria-controls="assistant-panel"
-      >
-        <span class="assistant-fab-mark" aria-hidden="true">
-          <span class="assistant-avatar assistant-avatar-robot">
-            <span class="assistant-avatar-orbit"></span>
-            <span class="assistant-avatar-antenna"></span>
-            <span class="assistant-avatar-head">
-              <span class="assistant-avatar-eye"></span>
-              <span class="assistant-avatar-eye"></span>
-              <span class="assistant-avatar-mouth"></span>
-            </span>
-          </span>
-        </span>
-        <span class="assistant-fab-copy">
-          <strong>Operator AI</strong>
-          <span id="assistant-fab-status">Live copilot ready</span>
-        </span>
-      </button>
-
-      <section id="assistant-panel" class="assistant-panel" aria-label="Operator AI assistant">
-        <div class="assistant-panel-header">
-          <div class="assistant-panel-titlebar">
-            <div class="assistant-window-controls" aria-label="Assistant window controls">
-              <button
-                id="assistant-close-button"
-                class="assistant-window-control assistant-window-control-close fx-button"
-                type="button"
-                aria-label="Close assistant"
-                title="Close assistant"
-              ></button>
-              <button
-                id="assistant-minimize-button"
-                class="assistant-window-control assistant-window-control-minimize fx-button"
-                type="button"
-                aria-label="Minimize assistant"
-                title="Minimize assistant"
-                aria-pressed="false"
-              ></button>
-            </div>
-            <div class="assistant-panel-heading">
-              <p class="eyebrow">Live Assistant</p>
-              <h3>Operator AI</h3>
-              <p id="assistant-status" class="helper-copy"></p>
-            </div>
-          </div>
-          <div class="assistant-panel-actions">
-            <button id="assistant-reset-button" class="assistant-header-button assistant-header-button-reset fx-button" type="button">Reset Chat</button>
-          </div>
-        </div>
-
-        <div id="assistant-messages" class="assistant-messages"></div>
-
-        <form id="assistant-form" class="assistant-composer">
-          <label class="assistant-composer-field">
-            <span>Message</span>
-            <textarea
-              id="assistant-input"
-              rows="4"
-              placeholder="Tell Operator AI what you want to change"
-            ></textarea>
-          </label>
-          <div class="assistant-composer-actions">
-            <button id="assistant-stop-button" class="ghost-button fx-button hidden" type="button">Stop</button>
-            <button id="assistant-send-button" class="primary-button fx-button" type="submit">Send</button>
-          </div>
-        </form>
-      </section>
     </div>
 
     <div id="task-modal" class="modal hidden">

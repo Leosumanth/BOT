@@ -107,6 +107,7 @@ const runPriorityButton = document.getElementById("run-priority-button");
 const rpcPulseButton = document.getElementById("rpc-pulse-button");
 const snapshotButton = document.getElementById("snapshot-button");
 const walletImportForm = document.getElementById("wallet-import-form");
+const walletImportSubmitButton = document.getElementById("wallet-import-submit-button");
 const walletGroupInput = document.getElementById("wallet-group-input");
 const walletKeysInput = document.getElementById("wallet-keys-input");
 const walletList = document.getElementById("wallet-list");
@@ -207,23 +208,32 @@ const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const logoutButton = document.getElementById("logout-button");
 const toastStack = document.getElementById("toast-stack");
-const assistantRoot = document.getElementById("assistant-root");
-const assistantFabButton = document.getElementById("assistant-fab-button");
-const assistantFabStatus = document.getElementById("assistant-fab-status");
 const assistantPanel = document.getElementById("assistant-panel");
-const assistantPanelHeader = assistantPanel.querySelector(".assistant-panel-header");
-const assistantStatus = document.getElementById("assistant-status");
 const assistantCloseButton = document.getElementById("assistant-close-button");
-const assistantMinimizeButton = document.getElementById("assistant-minimize-button");
 const assistantResetButton = document.getElementById("assistant-reset-button");
 const assistantMessages = document.getElementById("assistant-messages");
 const assistantForm = document.getElementById("assistant-form");
 const assistantInput = document.getElementById("assistant-input");
-const assistantStopButton = document.getElementById("assistant-stop-button");
 const assistantSendButton = document.getElementById("assistant-send-button");
+const walletImportProgress = getOperationProgressRefs("wallet-import-progress");
+const explorerKeyProgress = getOperationProgressRefs("explorer-key-progress");
+const openaiKeyProgress = getOperationProgressRefs("openai-key-progress");
+const alchemyKeyProgress = getOperationProgressRefs("alchemy-key-progress");
+const drpcKeyProgress = getOperationProgressRefs("drpc-key-progress");
+const openseaKeyProgress = getOperationProgressRefs("opensea-key-progress");
+const operationProgressState = new WeakMap();
 
 function getApiKeyDraft(name) {
   return apiKeyDraftState[name] || { value: "", validated: false };
+}
+
+function getOperationProgressRefs(idBase) {
+  return {
+    container: document.getElementById(idBase),
+    label: document.getElementById(`${idBase}-label`),
+    value: document.getElementById(`${idBase}-value`),
+    bar: document.getElementById(`${idBase}-bar`)
+  };
 }
 
 function stageApiKeyDraft(name, value, options = {}) {
@@ -439,14 +449,11 @@ let currentMintStartDetection = {
   config: null
 };
 let assistantState = {
-  open: false,
-  minimized: false,
   loading: false,
   messages: []
 };
 let assistantRequestController = null;
 let assistantRequestToken = 0;
-const assistantPositionStorageKey = "mintbot.assistant.position.v1";
 const assistantViewCommands = [
   {
     view: "dashboard",
@@ -469,21 +476,16 @@ const assistantViewCommands = [
     aliases: ["rpc", "rpc node", "rpc nodes", "rpc mesh", "mesh"]
   },
   {
+    view: "assistant",
+    label: "Operator AI",
+    aliases: ["assistant", "operator ai", "operator", "ai", "copilot"]
+  },
+  {
     view: "settings",
     label: "Settings",
     aliases: ["settings", "setting", "config", "configuration"]
   }
 ];
-let assistantDragState = {
-  active: false,
-  moved: false,
-  suppressClick: false,
-  pointerId: null,
-  startX: 0,
-  startY: 0,
-  offsetX: 0,
-  offsetY: 0
-};
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1345,7 +1347,6 @@ function setAuthState(authenticated, user = null, authRequired = true) {
   if (logoutButton) {
     logoutButton.classList.toggle("hidden", !authenticated || !authRequired);
   }
-  assistantRoot.classList.toggle("hidden", !authenticated && authRequired);
 
   if (!authenticated && authRequired) {
     stopWalletAssetAutoSync();
@@ -1355,8 +1356,6 @@ function setAuthState(authenticated, user = null, authRequired = true) {
       rpcHealthSyncStatus.textContent = "";
     }
     assistantState = {
-      open: false,
-      minimized: false,
       loading: false,
       messages: []
     };
@@ -1888,11 +1887,6 @@ function showToast(message, tone = "info", title = null) {
   }, 4200);
 }
 
-function assistantModelLabel() {
-  const model = state.settings.operatorAssistantModel || state.settings.openaiRpcAdvisorModel || "OpenAI";
-  return /^gpt-5-mini(?:-|$)/i.test(String(model || "").trim()) ? "gpt-5-mini" : model;
-}
-
 function assistantUsesSavedDashboardKey() {
   return state.settings.openaiApiKeySource === "saved";
 }
@@ -1910,7 +1904,6 @@ function assistantAvailability() {
     return {
       ready: false,
       fab: "Sign in required",
-      status: "Sign in to unlock the live operator assistant.",
       emptyTitle: "Authentication required",
       emptyCopy: "Sign in first, then I can answer questions and control the app for you."
     };
@@ -1920,7 +1913,6 @@ function assistantAvailability() {
     return {
       ready: false,
       fab: "OpenAI key required",
-      status: "Add an OpenAI API key in Settings to enable the live operator assistant.",
       emptyTitle: "OpenAI key missing",
       emptyCopy: "Save an OpenAI API key in Settings, then I can manage tasks, RPCs, and dashboard controls for you."
     };
@@ -1930,7 +1922,6 @@ function assistantAvailability() {
     return {
       ready: false,
       fab: "Saved key required",
-      status: "Save an OpenAI API key in Settings to enable the live operator assistant.",
       emptyTitle: "Saved key required",
       emptyCopy: "Operator AI uses the OpenAI key saved in the dashboard settings for live control."
     };
@@ -1940,7 +1931,6 @@ function assistantAvailability() {
     return {
       ready: false,
       fab: "OpenAI key invalid",
-      status: "The saved OpenAI API key failed validation. Replace it in Settings to re-enable the live operator assistant.",
       emptyTitle: "OpenAI key invalid",
       emptyCopy: "Replace the saved OpenAI API key in Settings, then I can control tasks, RPCs, and settings again."
     };
@@ -1949,7 +1939,6 @@ function assistantAvailability() {
   return {
     ready: true,
     fab: "Live copilot ready",
-    status: `Live control for tasks, RPCs, and settings via ${assistantModelLabel()}.`,
     emptyTitle: "",
     emptyCopy: ""
   };
@@ -2031,187 +2020,6 @@ function handleAssistantLocalCommand(message) {
   };
 }
 
-function isCompactAssistantLayout() {
-  return window.matchMedia("(max-width: 820px)").matches;
-}
-
-function clampAssistantPosition(left, top) {
-  const fabRect = assistantFabButton.getBoundingClientRect();
-  const width = Math.max(Math.round(fabRect.width || 280), 240);
-  const height = Math.max(Math.round(fabRect.height || 72), 72);
-
-  return {
-    left: Math.min(Math.max(14, Math.round(left)), Math.max(14, window.innerWidth - width - 14)),
-    top: Math.min(Math.max(14, Math.round(top)), Math.max(14, window.innerHeight - height - 14))
-  };
-}
-
-function readStoredAssistantPosition() {
-  try {
-    const rawValue = window.localStorage.getItem(assistantPositionStorageKey);
-    if (!rawValue) {
-      return null;
-    }
-
-    const parsed = JSON.parse(rawValue);
-    if (!Number.isFinite(parsed?.left) || !Number.isFinite(parsed?.top)) {
-      return null;
-    }
-
-    return {
-      left: Number(parsed.left),
-      top: Number(parsed.top)
-    };
-  } catch {
-    return null;
-  }
-}
-
-function persistAssistantPosition(position) {
-  if (isCompactAssistantLayout()) {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(assistantPositionStorageKey, JSON.stringify(position));
-  } catch {}
-}
-
-function clearAssistantInlinePosition() {
-  assistantRoot.style.removeProperty("left");
-  assistantRoot.style.removeProperty("top");
-  assistantRoot.style.removeProperty("right");
-  assistantRoot.style.removeProperty("bottom");
-}
-
-function applyAssistantPosition(position = null) {
-  if (isCompactAssistantLayout()) {
-    clearAssistantInlinePosition();
-    return;
-  }
-
-  const nextPosition = position || readStoredAssistantPosition();
-  if (!nextPosition) {
-    clearAssistantInlinePosition();
-    return;
-  }
-
-  const clamped = clampAssistantPosition(nextPosition.left, nextPosition.top);
-  assistantRoot.style.left = `${clamped.left}px`;
-  assistantRoot.style.top = `${clamped.top}px`;
-  assistantRoot.style.right = "auto";
-  assistantRoot.style.bottom = "auto";
-}
-
-function syncAssistantPositionOnResize() {
-  if (isCompactAssistantLayout()) {
-    clearAssistantInlinePosition();
-    return;
-  }
-
-  const storedPosition = readStoredAssistantPosition();
-  if (!storedPosition) {
-    clearAssistantInlinePosition();
-    return;
-  }
-
-  const clamped = clampAssistantPosition(storedPosition.left, storedPosition.top);
-  persistAssistantPosition(clamped);
-  applyAssistantPosition(clamped);
-}
-
-function beginAssistantDrag(event) {
-  if (isCompactAssistantLayout()) {
-    return;
-  }
-
-  if (typeof event.button === "number" && event.button !== 0) {
-    return;
-  }
-
-  if (event.target.closest("button") && !assistantFabButton.contains(event.target)) {
-    return;
-  }
-
-  const fabRect = assistantFabButton.getBoundingClientRect();
-  assistantDragState.active = true;
-  assistantDragState.moved = false;
-  assistantDragState.pointerId = event.pointerId;
-  assistantDragState.startX = event.clientX;
-  assistantDragState.startY = event.clientY;
-  assistantDragState.offsetX = event.clientX - fabRect.left;
-  assistantDragState.offsetY = event.clientY - fabRect.top;
-
-  assistantRoot.style.left = `${Math.round(fabRect.left)}px`;
-  assistantRoot.style.top = `${Math.round(fabRect.top)}px`;
-  assistantRoot.style.right = "auto";
-  assistantRoot.style.bottom = "auto";
-
-  if (typeof event.currentTarget?.setPointerCapture === "function") {
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {}
-  }
-
-  event.preventDefault();
-}
-
-function moveAssistantDrag(event) {
-  if (!assistantDragState.active) {
-    return;
-  }
-
-  if (assistantDragState.pointerId !== null && event.pointerId !== assistantDragState.pointerId) {
-    return;
-  }
-
-  if (!assistantDragState.moved) {
-    const deltaX = Math.abs(event.clientX - assistantDragState.startX);
-    const deltaY = Math.abs(event.clientY - assistantDragState.startY);
-    if (deltaX < 4 && deltaY < 4) {
-      return;
-    }
-  }
-
-  const nextPosition = clampAssistantPosition(
-    event.clientX - assistantDragState.offsetX,
-    event.clientY - assistantDragState.offsetY
-  );
-
-  assistantRoot.style.left = `${nextPosition.left}px`;
-  assistantRoot.style.top = `${nextPosition.top}px`;
-  assistantRoot.style.right = "auto";
-  assistantRoot.style.bottom = "auto";
-  assistantDragState.moved = true;
-}
-
-function endAssistantDrag(event) {
-  if (!assistantDragState.active) {
-    return;
-  }
-
-  if (assistantDragState.pointerId !== null && event.pointerId !== assistantDragState.pointerId) {
-    return;
-  }
-
-  if (assistantDragState.moved) {
-    persistAssistantPosition({
-      left: Number.parseInt(assistantRoot.style.left, 10) || 14,
-      top: Number.parseInt(assistantRoot.style.top, 10) || 14
-    });
-    assistantDragState.suppressClick = true;
-    window.setTimeout(() => {
-      assistantDragState.suppressClick = false;
-    }, 0);
-  }
-
-  assistantDragState.active = false;
-  assistantDragState.moved = false;
-  assistantDragState.pointerId = null;
-  assistantDragState.startX = 0;
-  assistantDragState.startY = 0;
-}
-
 function formatAssistantTimestamp(value) {
   const parsed = new Date(value || "");
   if (Number.isNaN(parsed.getTime())) {
@@ -2241,30 +2049,14 @@ function renderAssistantWelcomeState() {
 
 function renderAssistant() {
   const availability = assistantAvailability();
-  const panelOpen = assistantState.open && !assistantRoot.classList.contains("hidden");
-
-  assistantFabButton.setAttribute("aria-expanded", panelOpen ? "true" : "false");
-  assistantFabStatus.textContent = assistantState.loading ? "Thinking..." : availability.fab;
-  assistantStatus.textContent = assistantState.loading
-    ? "Working on the live app now."
-    : availability.status;
-  assistantPanel.classList.toggle("open", panelOpen);
-  assistantPanel.classList.toggle("minimized", assistantState.minimized);
-  assistantMinimizeButton.setAttribute("aria-pressed", assistantState.minimized ? "true" : "false");
-  assistantMinimizeButton.setAttribute(
-    "aria-label",
-    assistantState.minimized ? "Restore assistant" : "Minimize assistant"
-  );
-  assistantMinimizeButton.setAttribute(
-    "title",
-    assistantState.minimized ? "Restore assistant" : "Minimize assistant"
-  );
+  const sendButtonLabel = assistantState.loading ? "Stop" : "Send";
 
   assistantInput.disabled = assistantState.loading || !availability.ready;
-  assistantStopButton.classList.toggle("hidden", !assistantState.loading);
-  assistantStopButton.disabled = !assistantState.loading;
-  assistantSendButton.disabled =
-    assistantState.loading || !availability.ready || !assistantInput.value.trim();
+  assistantSendButton.textContent = sendButtonLabel;
+  assistantSendButton.classList.toggle("ghost-button", assistantState.loading);
+  assistantSendButton.classList.toggle("primary-button", !assistantState.loading);
+  assistantSendButton.disabled = assistantState.loading ? false : !availability.ready || !assistantInput.value.trim();
+  assistantSendButton.setAttribute("aria-label", assistantState.loading ? "Stop response" : "Send message");
   assistantResetButton.disabled = assistantState.loading;
 
   if (!availability.ready) {
@@ -2323,29 +2115,6 @@ function renderAssistant() {
 
   assistantMessages.innerHTML = `${messageMarkup}${loadingMarkup}`;
   scrollAssistantMessagesToBottom();
-}
-
-function toggleAssistantPanel(forceOpen = !assistantState.open) {
-  assistantState.open = Boolean(forceOpen);
-  if (assistantState.open) {
-    assistantState.minimized = false;
-  }
-  renderAssistant();
-
-  if (assistantState.open && !assistantInput.disabled) {
-    window.setTimeout(() => {
-      assistantInput.focus();
-    }, 0);
-  }
-}
-
-function toggleAssistantMinimize(forceMinimized = !assistantState.minimized) {
-  if (!assistantState.open) {
-    assistantState.open = true;
-  }
-
-  assistantState.minimized = Boolean(forceMinimized);
-  renderAssistant();
 }
 
 function stopAssistantMessage(options = {}) {
@@ -2411,8 +2180,6 @@ async function sendAssistantMessage() {
     return;
   }
 
-  assistantState.open = true;
-  assistantState.minimized = false;
   assistantState.messages = [
     ...assistantState.messages,
     {
@@ -6069,6 +5836,7 @@ async function runApiKeyTest({
   label,
   input,
   button,
+  progress,
   payloadField,
   endpoint,
   configured,
@@ -6093,6 +5861,15 @@ async function runApiKeyTest({
 
   button.disabled = true;
   button.textContent = "Testing...";
+  const progressIndicator = startOperationProgress(progress, {
+    steps: [
+      `Checking ${label} key format...`,
+      `Connecting to ${label} validation endpoint...`,
+      `Confirming ${label} response...`
+    ],
+    successLabel: `${label} key verified.`,
+    errorLabel: `${label} key test failed.`
+  });
 
   if (usingDraft) {
     input.value = "";
@@ -6139,6 +5916,7 @@ async function runApiKeyTest({
       );
     }
 
+    progressIndicator.complete(`${label} key verified.`);
     return { tested: true, skipped: false, success: true };
   } catch {
     if (usingDraft) {
@@ -6150,6 +5928,7 @@ async function runApiKeyTest({
 
     syncControls();
     statusSetter(usingDraft ? "Key test failed. Enter it again" : "Key test failed");
+    progressIndicator.fail(`${label} key test failed.`);
     return { tested: true, skipped: false, success: false };
   } finally {
     button.disabled = false;
@@ -6167,6 +5946,142 @@ function clearPendingApiKeyUi({ draftKey, input, label, syncControls, statusSett
   syncControls();
   statusSetter();
   showToast(`Pending ${label} API key cleared.`, "info", "Pending Key Cleared");
+}
+
+function resetOperationProgress(progressRefs, options = {}) {
+  if (!progressRefs?.container) {
+    return;
+  }
+
+  const { hide = false, label = "" } = options;
+  const activeState = operationProgressState.get(progressRefs.container);
+  if (activeState) {
+    window.clearInterval(activeState.intervalId);
+    window.clearTimeout(activeState.hideTimer);
+    operationProgressState.delete(progressRefs.container);
+  }
+
+  progressRefs.container.dataset.state = "idle";
+  if (progressRefs.bar) {
+    progressRefs.bar.style.width = "0%";
+  }
+  if (progressRefs.value) {
+    progressRefs.value.textContent = "0%";
+  }
+  if (progressRefs.label && label) {
+    progressRefs.label.textContent = label;
+  }
+  progressRefs.container.classList.toggle("hidden", hide);
+}
+
+function startOperationProgress(progressRefs, options = {}) {
+  if (!progressRefs?.container) {
+    return {
+      complete() {},
+      fail() {},
+      stop() {}
+    };
+  }
+
+  const steps = Array.isArray(options.steps) && options.steps.length
+    ? options.steps
+    : ["Working...", "Processing request...", "Finalizing..."];
+  const baseLabel = steps[0];
+  let percent = Math.max(10, Math.min(28, Number(options.initialPercent || 14)));
+  let stepIndex = 0;
+  let finished = false;
+
+  const render = () => {
+    progressRefs.container.classList.remove("hidden");
+    progressRefs.container.dataset.state = finished ? progressRefs.container.dataset.state : "running";
+    if (progressRefs.label) {
+      progressRefs.label.textContent = steps[Math.min(stepIndex, steps.length - 1)] || baseLabel;
+    }
+    if (progressRefs.value) {
+      progressRefs.value.textContent = `${Math.round(percent)}%`;
+    }
+    if (progressRefs.bar) {
+      progressRefs.bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    }
+  };
+
+  resetOperationProgress(progressRefs, { hide: false, label: baseLabel });
+  render();
+
+  const intervalId = window.setInterval(() => {
+    if (finished) {
+      return;
+    }
+
+    const increment =
+      percent < 42 ? 11
+      : percent < 68 ? 7
+      : percent < 84 ? 4
+      : 2;
+    percent = Math.min(92, percent + increment);
+
+    if (steps.length > 1) {
+      const nextStepIndex = Math.min(
+        steps.length - 1,
+        Math.floor((percent / 92) * steps.length)
+      );
+      stepIndex = Math.max(stepIndex, nextStepIndex);
+    }
+
+    render();
+  }, Number(options.intervalMs || 320));
+
+  operationProgressState.set(progressRefs.container, {
+    intervalId,
+    hideTimer: 0
+  });
+
+  const finish = (state, label) => {
+    const activeState = operationProgressState.get(progressRefs.container);
+    if (activeState) {
+      window.clearInterval(activeState.intervalId);
+      window.clearTimeout(activeState.hideTimer);
+    }
+
+    finished = true;
+    percent = 100;
+    progressRefs.container.dataset.state = state;
+    if (progressRefs.label) {
+      progressRefs.label.textContent = label;
+    }
+    if (progressRefs.value) {
+      progressRefs.value.textContent = "100%";
+    }
+    if (progressRefs.bar) {
+      progressRefs.bar.style.width = "100%";
+    }
+
+    const hideAfterMs =
+      state === "error"
+        ? Number(options.errorHideAfterMs || 2400)
+        : Number(options.successHideAfterMs || 1700);
+
+    const hideTimer = window.setTimeout(() => {
+      resetOperationProgress(progressRefs, { hide: true, label: baseLabel });
+    }, hideAfterMs);
+
+    operationProgressState.set(progressRefs.container, {
+      intervalId: 0,
+      hideTimer
+    });
+  };
+
+  return {
+    complete(label = options.successLabel || "Done.") {
+      finish("success", label);
+    },
+    fail(label = options.errorLabel || "Request failed.") {
+      finish("error", label);
+    },
+    stop() {
+      resetOperationProgress(progressRefs, { hide: true, label: baseLabel });
+    }
+  };
 }
 
 function withButtonBusyState(button, busyLabel, work) {
@@ -6355,6 +6270,11 @@ function setView(viewName) {
     renderWallets();
     renderWalletAssets();
     scheduleWalletAssetAutoSync({ immediate: true });
+  }
+  if (viewName === "assistant" && assistantAvailability().ready) {
+    window.setTimeout(() => {
+      assistantInput.focus();
+    }, 0);
   }
   renderRuntime();
 }
@@ -7627,36 +7547,22 @@ if (logoutButton) {
   });
 }
 
-assistantFabButton.addEventListener("click", () => {
-  if (assistantDragState.suppressClick) {
-    return;
-  }
-
-  toggleAssistantPanel();
-});
-
 assistantCloseButton.addEventListener("click", () => {
-  toggleAssistantPanel(false);
-});
-
-assistantMinimizeButton.addEventListener("click", () => {
-  toggleAssistantMinimize();
+  setView("dashboard");
 });
 
 assistantResetButton.addEventListener("click", async () => {
   await resetAssistantConversation();
 });
 
-assistantStopButton.addEventListener("click", () => {
-  stopAssistantMessage();
-});
+assistantSendButton.addEventListener("click", async () => {
+  if (assistantState.loading) {
+    stopAssistantMessage();
+    return;
+  }
 
-assistantFabButton.addEventListener("pointerdown", beginAssistantDrag);
-assistantPanelHeader.addEventListener("pointerdown", beginAssistantDrag);
-window.addEventListener("pointermove", moveAssistantDrag);
-window.addEventListener("pointerup", endAssistantDrag);
-window.addEventListener("pointercancel", endAssistantDrag);
-window.addEventListener("resize", syncAssistantPositionOnResize);
+  await sendAssistantMessage();
+});
 
 assistantInput.addEventListener("input", () => {
   renderAssistant();
@@ -7676,22 +7582,42 @@ assistantForm.addEventListener("submit", async (event) => {
 
 walletImportForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const walletLabel = String(walletGroupInput.value || "Imported").trim() || "Imported";
+  const progressIndicator = startOperationProgress(walletImportProgress, {
+    steps: [
+      `Preparing ${walletLabel} wallet...`,
+      "Validating private key...",
+      "Saving wallet to the dashboard..."
+    ],
+    successLabel: "Wallet import finished.",
+    errorLabel: "Wallet import failed."
+  });
+
   try {
-    const payload = await request("/api/wallets/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        group: walletGroupInput.value || "Imported",
-        privateKeys: walletKeysInput.value
+    const payload = await withButtonBusyState(walletImportSubmitButton, "Importing...", async () =>
+      request("/api/wallets/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          group: walletGroupInput.value || "Imported",
+          privateKeys: walletKeysInput.value
+        })
       })
-    });
+    );
     walletKeysInput.value = "";
+    progressIndicator.complete(
+      payload.imported > 0
+        ? `${payload.imported} wallet${payload.imported === 1 ? "" : "s"} imported.`
+        : "Wallet import checked."
+    );
     showToast(
       `${payload.imported} imported · ${payload.skipped} skipped`,
       "success",
       "Wallet Import Complete"
     );
-  } catch {}
+  } catch {
+    progressIndicator.fail("Wallet import failed.");
+  }
 });
 
 rpcForm.addEventListener("submit", async (event) => {
@@ -8197,6 +8123,7 @@ testExplorerKeyButton.addEventListener("click", async () => {
     label: "Explorer",
     input: explorerApiKeyInput,
     button: testExplorerKeyButton,
+    progress: explorerKeyProgress,
     payloadField: "explorerApiKey",
     endpoint: "/api/control/test-explorer-key",
     configured: () => state.settings.explorerApiKeyConfigured,
@@ -8213,6 +8140,7 @@ testOpenaiKeyButton.addEventListener("click", async () => {
     label: "OpenAI",
     input: openaiApiKeyInput,
     button: testOpenaiKeyButton,
+    progress: openaiKeyProgress,
     payloadField: "openaiApiKey",
     endpoint: "/api/control/test-openai-key",
     configured: () => state.settings.openaiApiKeyConfigured,
@@ -8229,6 +8157,7 @@ testAlchemyKeyButton.addEventListener("click", async () => {
     label: "Alchemy",
     input: alchemyApiKeyInput,
     button: testAlchemyKeyButton,
+    progress: alchemyKeyProgress,
     payloadField: "alchemyApiKey",
     endpoint: "/api/control/test-alchemy-key",
     configured: () => state.settings.alchemyApiKeyConfigured,
@@ -8245,6 +8174,7 @@ testDrpcKeyButton.addEventListener("click", async () => {
     label: "dRPC",
     input: drpcApiKeyInput,
     button: testDrpcKeyButton,
+    progress: drpcKeyProgress,
     payloadField: "drpcApiKey",
     endpoint: "/api/control/test-drpc-key",
     configured: () => state.settings.drpcApiKeyConfigured,
@@ -8261,6 +8191,7 @@ testOpenseaKeyButton.addEventListener("click", async () => {
     label: "OpenSea",
     input: openseaApiKeyInput,
     button: testOpenseaKeyButton,
+    progress: openseaKeyProgress,
     payloadField: "openseaApiKey",
     endpoint: "/api/control/test-opensea-key",
     configured: () => state.settings.openseaApiKeyConfigured,
@@ -8280,6 +8211,7 @@ testAllApiKeysButton?.addEventListener("click", async () => {
         label: "Explorer",
         input: explorerApiKeyInput,
         button: testExplorerKeyButton,
+        progress: explorerKeyProgress,
         payloadField: "explorerApiKey",
         endpoint: "/api/control/test-explorer-key",
         configured: () => state.settings.explorerApiKeyConfigured,
@@ -8295,6 +8227,7 @@ testAllApiKeysButton?.addEventListener("click", async () => {
         label: "OpenAI",
         input: openaiApiKeyInput,
         button: testOpenaiKeyButton,
+        progress: openaiKeyProgress,
         payloadField: "openaiApiKey",
         endpoint: "/api/control/test-openai-key",
         configured: () => state.settings.openaiApiKeyConfigured,
@@ -8310,6 +8243,7 @@ testAllApiKeysButton?.addEventListener("click", async () => {
         label: "Alchemy",
         input: alchemyApiKeyInput,
         button: testAlchemyKeyButton,
+        progress: alchemyKeyProgress,
         payloadField: "alchemyApiKey",
         endpoint: "/api/control/test-alchemy-key",
         configured: () => state.settings.alchemyApiKeyConfigured,
@@ -8325,6 +8259,7 @@ testAllApiKeysButton?.addEventListener("click", async () => {
         label: "dRPC",
         input: drpcApiKeyInput,
         button: testDrpcKeyButton,
+        progress: drpcKeyProgress,
         payloadField: "drpcApiKey",
         endpoint: "/api/control/test-drpc-key",
         configured: () => state.settings.drpcApiKeyConfigured,
@@ -8340,6 +8275,7 @@ testAllApiKeysButton?.addEventListener("click", async () => {
         label: "OpenSea",
         input: openseaApiKeyInput,
         button: testOpenseaKeyButton,
+        progress: openseaKeyProgress,
         payloadField: "openseaApiKey",
         endpoint: "/api/control/test-opensea-key",
         configured: () => state.settings.openseaApiKeyConfigured,
@@ -8613,7 +8549,6 @@ taskForm.addEventListener("submit", async (event) => {
 populateMintSourceSelectors();
 updateClock();
 window.setInterval(updateClock, 1000);
-applyAssistantPosition();
 
 setAuthState(false, null, true);
 

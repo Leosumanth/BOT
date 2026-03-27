@@ -2174,6 +2174,44 @@ body[data-current-view="tasks"] .mini-button {
   animation: shimmer 2.6s linear infinite;
 }
 
+.operation-progress {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(124, 223, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(113, 224, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(10, 18, 28, 0.82);
+}
+
+.operation-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.operation-progress-meta strong {
+  font-size: 13px;
+  line-height: 1;
+  color: #eafaff;
+}
+
+.operation-progress[data-state="running"] .progress-bar {
+  background: linear-gradient(90deg, #79ebff, #2fb8ff 42%, #4cffd2 100%);
+}
+
+.operation-progress[data-state="success"] .progress-bar {
+  background: linear-gradient(90deg, #8fffc2, #49d77f 55%, #7af0b4 100%);
+  box-shadow: 0 0 22px rgba(73, 215, 127, 0.34);
+}
+
+.operation-progress[data-state="error"] .progress-bar {
+  background: linear-gradient(90deg, #ff9bb0, #ff6678 55%, #ff9a67 100%);
+  box-shadow: 0 0 22px rgba(255, 102, 120, 0.28);
+}
+
 .history-block {
   padding-top: 14px;
   border-top: 1px solid rgba(124, 223, 255, 0.1);
@@ -2844,6 +2882,32 @@ select:focus {
   pointer-events: auto;
 }
 
+.assistant-view-shell {
+  display: grid;
+}
+
+.assistant-panel.assistant-panel-view {
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  width: min(960px, 100%);
+  min-height: min(76vh, 760px);
+  max-height: calc(100vh - 170px);
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.assistant-panel.assistant-panel-view .assistant-panel-header {
+  cursor: default;
+}
+
+.assistant-panel.assistant-panel-view .assistant-panel-header:active {
+  cursor: default;
+}
+
 .assistant-panel-header,
 .assistant-composer {
   padding: 18px 18px 16px;
@@ -2860,8 +2924,7 @@ select:focus {
 
 .assistant-panel-titlebar {
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  align-items: center;
   min-width: 0;
 }
 
@@ -2873,20 +2936,8 @@ select:focus {
   cursor: grabbing;
 }
 
-.assistant-panel-header .helper-copy:empty {
-  display: none;
-}
-
 .assistant-panel-header h3 {
-  margin: 6px 0 8px;
-}
-
-.assistant-window-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-top: 3px;
-  flex-shrink: 0;
+  margin: 6px 0 0;
 }
 
 .assistant-window-control {
@@ -2931,18 +2982,6 @@ select:focus {
   transform: translate(-50%, -50%) rotate(-45deg);
 }
 
-.assistant-window-control-minimize {
-  background: linear-gradient(180deg, #ffd676, #ffbd44);
-  border-color: rgba(137, 92, 8, 0.45);
-}
-
-.assistant-window-control-minimize::before {
-  width: 7px;
-  height: 1.5px;
-  background: rgba(114, 72, 0, 0.72);
-  transform: translate(-50%, -50%);
-}
-
 .assistant-window-control:hover:not(:disabled),
 .assistant-window-control:focus-visible:not(:disabled) {
   transform: translateY(-1px);
@@ -2958,18 +2997,7 @@ select:focus {
 
 .assistant-panel-actions {
   justify-content: flex-end;
-  align-items: flex-start;
-}
-
-.assistant-panel.minimized {
-  width: min(360px, calc(100vw - 32px));
-  max-height: none;
-  grid-template-rows: auto;
-}
-
-.assistant-panel.minimized .assistant-messages,
-.assistant-panel.minimized .assistant-composer {
-  display: none;
+  align-items: center;
 }
 
 .assistant-header-button {
@@ -3191,6 +3219,10 @@ select:focus {
 .assistant-composer-actions {
   justify-content: flex-end;
   margin-top: 14px;
+}
+
+.assistant-send-toggle {
+  min-width: 88px;
 }
 
 body[data-auth-state="locked"] .assistant-root {
@@ -3510,6 +3542,12 @@ body[data-auth-state="locked"] .assistant-root {
     right: 0;
   }
 
+  .assistant-panel.assistant-panel-view {
+    width: 100%;
+    min-height: min(70vh, 680px);
+    max-height: none;
+  }
+
   .assistant-panel-header,
   .assistant-panel-actions,
   .assistant-composer-actions {
@@ -3519,10 +3557,6 @@ body[data-auth-state="locked"] .assistant-root {
 
   .assistant-panel-titlebar {
     align-items: stretch;
-  }
-
-  .assistant-window-controls {
-    padding-top: 0;
   }
 
   .toast-stack {
