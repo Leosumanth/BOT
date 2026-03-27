@@ -1,3 +1,5 @@
+const { resolveMintSourceAdapter } = require("./mint-source-adapters");
+
 const defaultMintSourceType = "generic_contract";
 const defaultMintSourceStage = "auto";
 
@@ -100,10 +102,18 @@ function getMintSourceDefinition(type) {
 }
 
 function listMintSourceDefinitions() {
-  return Object.values(mintSourceCatalog).map((definition) => ({
-    ...definition,
-    configExample: cloneMintSourceValue(definition.configExample)
-  }));
+  return Object.values(mintSourceCatalog).map((definition) => {
+    const sourceContext = resolveMintSourceContext(definition.type, {
+      sourceStage: definition.configExample?.stage,
+      sourceConfig: definition.configExample
+    });
+
+    return {
+      ...definition,
+      configExample: cloneMintSourceValue(definition.configExample),
+      discoveryPlan: cloneMintSourceValue(sourceContext.discoveryPlan)
+    };
+  });
 }
 
 function cloneMintSourceValue(value) {
@@ -200,23 +210,34 @@ function mergeMintSourceConfig(baseConfig = {}, patchConfig = {}) {
 }
 
 function buildMintSourceSummary(sourceType, options = {}) {
-  const definition = getMintSourceDefinition(sourceType);
-  const target = String(options.target || "").trim();
-  const stage = normalizeMintSourceStage(options.stage);
+  return resolveMintSourceContext(sourceType, {
+    sourceTarget: options.target,
+    sourceStage: options.stage,
+    sourceConfig: options.sourceConfig
+  }).summary;
+}
 
-  if (target && stage !== "auto") {
-    return `${definition.label} / ${target} / ${stage}`;
-  }
+function resolveMintSourceContext(sourceType, input = {}) {
+  const normalizedType = normalizeMintSourceType(sourceType);
+  const definition = getMintSourceDefinition(normalizedType);
+  const sourceStage = normalizeMintSourceStage(input.sourceStage);
+  const sourceTarget = String(input.sourceTarget || "").trim();
+  const sourceConfig = sanitizeMintSourceConfig(input.sourceConfig);
+  const adapterContext = resolveMintSourceAdapter(normalizedType, {
+    sourceTarget,
+    sourceStage,
+    sourceConfig
+  });
 
-  if (target) {
-    return `${definition.label} / ${target}`;
-  }
-
-  if (stage !== "auto") {
-    return `${definition.label} / ${stage}`;
-  }
-
-  return definition.label;
+  return {
+    sourceType: normalizedType,
+    sourceLabel: definition.label,
+    sourceDescription: definition.description,
+    sourceCapabilities: cloneMintSourceValue(definition.capabilities),
+    sourceStage,
+    sourceTarget,
+    ...adapterContext
+  };
 }
 
 function normalizeMintSourceSelection(input = {}) {
@@ -229,6 +250,11 @@ function normalizeMintSourceSelection(input = {}) {
       stage: sourceStage !== defaultMintSourceStage ? sourceStage : undefined
     })
   );
+  const sourceContext = resolveMintSourceContext(sourceType, {
+    sourceTarget,
+    sourceStage,
+    sourceConfig
+  });
 
   return {
     sourceType,
@@ -236,29 +262,31 @@ function normalizeMintSourceSelection(input = {}) {
     sourceStage,
     sourceLabel: getMintSourceDefinition(sourceType).label,
     sourceConfig,
-    sourceConfigJson: serializeMintSourceConfig(sourceConfig)
+    sourceConfigJson: serializeMintSourceConfig(sourceConfig),
+    sourceContext
   };
 }
 
 function validateMintSourceSelection(sourceType, selection = {}) {
   const normalizedType = normalizeMintSourceType(sourceType);
-  const definition = getMintSourceDefinition(normalizedType);
-  const sourceTarget = String(selection.sourceTarget || "").trim();
+  const sourceContext =
+    selection.sourceContext ||
+    resolveMintSourceContext(normalizedType, {
+      sourceTarget: selection.sourceTarget,
+      sourceStage: selection.sourceStage,
+      sourceConfig: selection.sourceConfig
+    });
 
   if (normalizedType === "generic_contract") {
     return;
   }
 
-  if (!sourceTarget && !selection.sourceConfig?.target) {
+  if (!sourceContext.hasTarget) {
     return;
   }
 
-  if (/^https?:\/\//i.test(sourceTarget)) {
-    return;
-  }
-
-  if (sourceTarget.includes(" ")) {
-    throw new Error(`${definition.label} source target must be a URL, slug, or identifier without spaces`);
+  if (!sourceContext.valid) {
+    throw new Error(sourceContext.error || `${sourceContext.sourceLabel} source target is invalid`);
   }
 }
 
@@ -270,10 +298,27 @@ async function prepareMintSourceConfig(config, hooks = {}) {
     sourceConfig: config.sourceConfig
   });
   const definition = getMintSourceDefinition(sourceSelection.sourceType);
+  const sourceContext =
+    sourceSelection.sourceContext ||
+    resolveMintSourceContext(sourceSelection.sourceType, {
+      sourceTarget: sourceSelection.sourceTarget,
+      sourceStage: sourceSelection.sourceStage,
+      sourceConfig: sourceSelection.sourceConfig
+    });
   const logger = hooks.logger;
-  const summary = buildMintSourceSummary(sourceSelection.sourceType, sourceSelection);
+  const summary = sourceContext.summary;
 
   logger?.info(`Mint source: ${summary}`);
+  if (sourceContext.displayTarget) {
+    logger?.info(
+      `Source target resolved: ${sourceContext.displayTarget}${
+        sourceContext.targetKind ? ` (${sourceContext.targetKind})` : ""
+      }`
+    );
+  }
+  if (sourceContext.discoveryPlan?.summary) {
+    logger?.info(`Source discovery plan: ${sourceContext.discoveryPlan.summary}`);
+  }
   if (sourceSelection.sourceType !== defaultMintSourceType) {
     logger?.info(
       `${definition.label} adapter foundation is active. Source-specific auth, eligibility, and payload preparation can extend this task without changing the core mint runner.`
@@ -283,6 +328,14 @@ async function prepareMintSourceConfig(config, hooks = {}) {
   return {
     ...config,
     ...sourceSelection,
+    sourceSummary: summary,
+    sourceContext,
+    sourceDiscoveryPlan: cloneMintSourceValue(sourceContext.discoveryPlan),
+    sourceTargetKind: sourceContext.targetKind,
+    sourceDisplayTarget: sourceContext.displayTarget,
+    sourceProjectSlug: sourceContext.projectSlug,
+    sourceProjectLabel: sourceContext.projectLabel,
+    sourceCanonicalUrl: sourceContext.canonicalUrl,
     sourceCapabilities: cloneMintSourceValue(definition.capabilities),
     sourceDescription: definition.description
   };
@@ -300,6 +353,7 @@ module.exports = {
   normalizeMintSourceType,
   parseMintSourceConfig,
   prepareMintSourceConfig,
+  resolveMintSourceContext,
   serializeMintSourceConfig,
   validateMintSourceSelection
 };

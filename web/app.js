@@ -1375,6 +1375,9 @@ function taskReadiness(task) {
   const issues = [];
   let score = 0;
   const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const sourceType = task.sourceType || "generic_contract";
+  const sourceContext = task.sourceContext || null;
+  let blockingSourceIssue = false;
 
   if (task.contractAddress) {
     score += 25;
@@ -1401,10 +1404,22 @@ function taskReadiness(task) {
     issues.push("No enabled RPC nodes");
   }
 
+  if (sourceType !== "generic_contract") {
+    if (!task.sourceTarget) {
+      issues.push("Source target missing");
+      blockingSourceIssue = true;
+    } else if (sourceContext && sourceContext.valid === false) {
+      issues.push(sourceContext.error || "Source target is invalid");
+      blockingSourceIssue = true;
+    } else {
+      score += 10;
+    }
+  }
+
   let health = "blocked";
-  if (score >= 100) {
+  if (!blockingSourceIssue && score >= (sourceType === "generic_contract" ? 100 : 110)) {
     health = "armed";
-  } else if (score >= 50) {
+  } else if (!blockingSourceIssue && score >= 50) {
     health = "warming";
   }
 
@@ -2309,7 +2324,7 @@ function renderSystemAlerts(telemetry) {
     alertFeed.push({
       severity: "warning",
       title: "Task configuration needs attention",
-      detail: `${pluralize(blockedTaskCount, "task")} are missing required inputs such as ABI, wallets, contract data, or RPC coverage.`
+      detail: `${pluralize(blockedTaskCount, "task")} are missing required inputs such as source targets, ABI, wallets, contract data, or RPC coverage.`
     });
   }
 
@@ -4678,7 +4693,11 @@ function renderRpcNodes() {
                             <span class="queue-chip">${escapeHtml(roleLabel)}</span>
                             <span class="queue-chip">${escapeHtml(transportLabel)}</span>
                             <span class="queue-chip">${escapeHtml(provider)}</span>
-                            <span class="queue-chip">${escapeHtml(node.source === "env" ? "Env Managed" : "Stored")}</span>
+                            ${
+                              node.source === "env"
+                                ? '<span class="queue-chip">Env Managed</span>'
+                                : ""
+                            }
                             ${
                               node.lastHealth?.checkedAt
                                 ? `<span class="queue-chip">${escapeHtml(relativeTime(node.lastHealth.checkedAt))}</span>`
@@ -5129,6 +5148,7 @@ function updateTaskSourceInputs() {
   const sourceType = sourceDefinition.type || "generic_contract";
   const sourceLabel = sourceDefinition.label || "Mint Source";
   const sourceDescription = String(sourceDefinition.description || "Source-aware mint adapter.").trim();
+  const discoverySummary = String(sourceDefinition.discoveryPlan?.summary || "").trim();
   const configExample =
     sourceDefinition.configExample && typeof sourceDefinition.configExample === "object"
       ? sourceDefinition.configExample
@@ -5161,8 +5181,9 @@ function updateTaskSourceInputs() {
   const capabilityCopy = capabilityFlags.length
     ? `Adapter focus: ${capabilityFlags.join(", ")}.`
     : "Adapter focus: local contract execution only.";
+  const discoveryCopy = discoverySummary ? ` ${discoverySummary}` : "";
 
-  taskSourceHint.textContent = `${sourceDescription} ${targetCopy} Stage: ${stageLabel}. ${capabilityCopy}`;
+  taskSourceHint.textContent = `${sourceDescription} ${targetCopy} Stage: ${stageLabel}. ${capabilityCopy}${discoveryCopy}`;
 }
 
 function parseAbiEntries(value) {

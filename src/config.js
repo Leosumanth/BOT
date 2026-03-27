@@ -609,6 +609,7 @@ function normalizeConfig(raw) {
     sourceConfig: parseMintSourceConfig(raw.SOURCE_CONFIG_JSON, { fieldName: "SOURCE_CONFIG_JSON" })
   });
   const sourceDefinition = getMintSourceDefinition(sourceSelection.sourceType);
+  const sourceContext = sourceSelection.sourceContext;
   const abi = loadAbi(raw, abiPath);
   const autoMintMode = optionalBoolean(raw, "AUTO_MINT_MODE", true);
   const requestedMintFunction = optionalString(raw, "MINT_FUNCTION") || "";
@@ -652,6 +653,14 @@ function normalizeConfig(raw) {
     sourceDescription: sourceDefinition.description,
     sourceCapabilities: sourceDefinition.capabilities,
     sourceConfig: sourceSelection.sourceConfig,
+    sourceSummary: sourceContext.summary,
+    sourceContext,
+    sourceDiscoveryPlan: sourceContext.discoveryPlan,
+    sourceTargetKind: sourceContext.targetKind,
+    sourceDisplayTarget: sourceContext.displayTarget,
+    sourceProjectSlug: sourceContext.projectSlug,
+    sourceProjectLabel: sourceContext.projectLabel,
+    sourceCanonicalUrl: sourceContext.canonicalUrl,
     autoMintMode,
     quantityPerWallet,
     mintFunctionProvided: !isBlank(raw.MINT_FUNCTION),

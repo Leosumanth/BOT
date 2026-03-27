@@ -11,12 +11,12 @@ const mintAutomation = require("./mint-automation");
 const { defaultInputValues, normalizeConfig, normalizeGasStrategyValue } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
 const {
-  buildMintSourceSummary,
   defaultMintSourceStage,
   defaultMintSourceType,
   getMintSourceDefinition,
   listMintSourceDefinitions,
   normalizeMintSourceSelection,
+  resolveMintSourceContext,
   validateMintSourceSelection
 } = require("./mint-sources");
 const {
@@ -1759,6 +1759,10 @@ function buildAssistantTaskSummary(taskLike) {
   const selectedRpcNodes = appState.rpcNodes.filter((node) => (task.rpcNodeIds || []).includes(node.id));
   const defaultWallet = selectAssistantDefaultWallet();
   const defaultRpc = selectAssistantDefaultRpcNodes(task.chainKey)[0] || null;
+  const sourceContext = resolveMintSourceContext(task.sourceType || defaultMintSourceType, {
+    sourceTarget: task.sourceTarget,
+    sourceStage: task.sourceStage
+  });
 
   return {
     taskId: task.id || null,
@@ -1769,10 +1773,9 @@ function buildAssistantTaskSummary(taskLike) {
     sourceLabel: getMintSourceDefinition(task.sourceType || defaultMintSourceType).label,
     sourceTarget: task.sourceTarget || "",
     sourceStage: task.sourceStage || defaultMintSourceStage,
-    sourceSummary: buildMintSourceSummary(task.sourceType || defaultMintSourceType, {
-      target: task.sourceTarget,
-      stage: task.sourceStage
-    }),
+    sourceSummary: sourceContext.summary,
+    sourceDisplayTarget: sourceContext.displayTarget,
+    sourceProjectSlug: sourceContext.projectSlug,
     walletLabels: selectedWallets.map((wallet) => assistantWalletLabel(wallet)),
     rpcNames: selectedRpcNodes.map((node) => assistantRpcLabel(node)),
     usedDefaultWallet:
@@ -5742,6 +5745,10 @@ function buildTaskResponse(task) {
   const runtimePatch = distributedTaskPatches.get(task.id) || null;
   const sourceType = task.sourceType || defaultMintSourceType;
   const sourceDefinition = getMintSourceDefinition(sourceType);
+  const sourceContext = resolveMintSourceContext(sourceType, {
+    sourceTarget: task.sourceTarget,
+    sourceStage: task.sourceStage
+  });
 
   const response = {
     ...task,
@@ -5751,10 +5758,13 @@ function buildTaskResponse(task) {
     sourceLabel: sourceDefinition.label,
     sourceTarget: task.sourceTarget || "",
     sourceStage: task.sourceStage || defaultMintSourceStage,
-    sourceSummary: buildMintSourceSummary(sourceType, {
-      target: task.sourceTarget,
-      stage: task.sourceStage
-    }),
+    sourceSummary: sourceContext.summary,
+    sourceContext,
+    sourceTargetKind: sourceContext.targetKind,
+    sourceDisplayTarget: sourceContext.displayTarget,
+    sourceProjectSlug: sourceContext.projectSlug,
+    sourceProjectLabel: sourceContext.projectLabel,
+    sourceDiscoveryPlan: sourceContext.discoveryPlan,
     walletIds,
     rpcNodeIds,
     walletCount: walletIds.length,
@@ -5812,6 +5822,14 @@ function taskReadiness(task) {
   const issues = [];
   let score = 0;
   const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const sourceType = task.sourceType || defaultMintSourceType;
+  const sourceContext =
+    task.sourceContext ||
+    resolveMintSourceContext(sourceType, {
+      sourceTarget: task.sourceTarget,
+      sourceStage: task.sourceStage
+    });
+  let blockingSourceIssue = false;
 
   if (task.contractAddress) {
     score += 25;
@@ -5838,10 +5856,22 @@ function taskReadiness(task) {
     issues.push("No enabled RPC nodes");
   }
 
+  if (sourceType !== defaultMintSourceType) {
+    if (!sourceContext.hasTarget) {
+      issues.push("Source target missing");
+      blockingSourceIssue = true;
+    } else if (!sourceContext.valid) {
+      issues.push(sourceContext.error || "Source target is invalid");
+      blockingSourceIssue = true;
+    } else {
+      score += 10;
+    }
+  }
+
   let health = "blocked";
-  if (score >= 100) {
+  if (!blockingSourceIssue && score >= (sourceType === defaultMintSourceType ? 100 : 110)) {
     health = "armed";
-  } else if (score >= 50) {
+  } else if (!blockingSourceIssue && score >= 50) {
     health = "warming";
   }
 
@@ -5888,7 +5918,7 @@ function buildTelemetry() {
     alerts.push({
       severity: "warning",
       title: "Blocked tasks detected",
-      detail: "One or more priority tasks are missing required inputs or RPC coverage."
+      detail: "One or more priority tasks are missing required inputs such as source targets, contract data, wallets, or RPC coverage."
     });
   }
   if (activeTask) {
