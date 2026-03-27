@@ -191,8 +191,7 @@ body[data-auth-state="locked"] .scanline-layer {
 .task-card,
 .modal-card,
 .brand-card,
-.account-card,
-.batch-bar {
+.account-card {
   position: relative;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(15, 26, 40, 0.88), rgba(9, 17, 29, 0.94));
@@ -205,8 +204,7 @@ body[data-auth-state="locked"] .scanline-layer {
 .task-card::before,
 .modal-card::before,
 .brand-card::before,
-.account-card::before,
-.batch-bar::before {
+.account-card::before {
   content: "";
   position: absolute;
   inset: 0 0 auto;
@@ -1652,15 +1650,6 @@ body[data-current-view="rpc"] .view-subtitle {
   line-height: 1.58;
   white-space: pre-wrap;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.batch-bar {
-  padding: 14px 16px;
-  border-radius: var(--radius-xl);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
 }
 
 .toggle-inline,

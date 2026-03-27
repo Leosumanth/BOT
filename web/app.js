@@ -42,8 +42,6 @@ const liveClock = document.getElementById("live-clock");
 const logOutput = document.getElementById("log-output");
 const resultsOutput = document.getElementById("results-output");
 const runtimeOutput = document.getElementById("runtime-output");
-const refreshButton = document.getElementById("refresh-button");
-const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
 const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
 const runPriorityButton = document.getElementById("run-priority-button");
@@ -125,8 +123,6 @@ const deleteOpenaiKeyButton = document.getElementById("delete-openai-key-button"
 const testOpenaiKeyButton = document.getElementById("test-openai-key-button");
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
-const batchToggle = document.getElementById("batch-toggle");
-const batchStatus = document.getElementById("batch-status");
 const globalStopButton = document.getElementById("global-stop-button");
 const logoutButton = document.getElementById("logout-button");
 const toastStack = document.getElementById("toast-stack");
@@ -5727,20 +5723,6 @@ taskSearchInput.addEventListener("input", () => {
 taskStatusFilter.addEventListener("change", () => {
   state.taskStatusFilter = taskStatusFilter.value;
   renderTasks();
-});
-
-if (refreshButton) {
-  refreshButton.addEventListener("click", () => {
-    loadState()
-      .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
-      .catch(() => {});
-  });
-}
-
-dashboardRefreshButton.addEventListener("click", () => {
-  loadState()
-    .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
-    .catch(() => {});
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());
