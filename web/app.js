@@ -205,7 +205,6 @@ const apiKeyDraftState = {
 };
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
-const globalStopButton = document.getElementById("global-stop-button");
 const logoutButton = document.getElementById("logout-button");
 const toastStack = document.getElementById("toast-stack");
 const assistantRoot = document.getElementById("assistant-root");
@@ -215,6 +214,7 @@ const assistantPanel = document.getElementById("assistant-panel");
 const assistantPanelHeader = assistantPanel.querySelector(".assistant-panel-header");
 const assistantStatus = document.getElementById("assistant-status");
 const assistantCloseButton = document.getElementById("assistant-close-button");
+const assistantMinimizeButton = document.getElementById("assistant-minimize-button");
 const assistantResetButton = document.getElementById("assistant-reset-button");
 const assistantMessages = document.getElementById("assistant-messages");
 const assistantForm = document.getElementById("assistant-form");
@@ -440,6 +440,7 @@ let currentMintStartDetection = {
 };
 let assistantState = {
   open: false,
+  minimized: false,
   loading: false,
   messages: []
 };
@@ -1355,6 +1356,7 @@ function setAuthState(authenticated, user = null, authRequired = true) {
     }
     assistantState = {
       open: false,
+      minimized: false,
       loading: false,
       messages: []
     };
@@ -1365,7 +1367,6 @@ function setAuthState(authenticated, user = null, authRequired = true) {
     if (accountStatus) {
       accountStatus.textContent = "Sign in required";
     }
-    globalStopButton.disabled = true;
     loginPasswordInput.value = "";
     window.setTimeout(() => {
       if (!authOverlay.classList.contains("hidden")) {
@@ -2233,8 +2234,7 @@ function renderAssistantWelcomeState() {
   return `
     <div class="assistant-empty-state welcome">
       <h4>Your live MintBot copilot is ready.</h4>
-      <p>Ask naturally. I can inspect the dashboard, manage tasks, delete saved API keys, add or remove RPCs, run RPC health checks, and rebuild failed RPC nodes for you.</p>
-      <p>I work on the live app, so I'll tell you exactly what changed.</p>
+      <p>Ask naturally. I can manage tasks, RPCs, and saved API keys on the live app.</p>
     </div>
   `;
 }
@@ -2249,6 +2249,16 @@ function renderAssistant() {
     ? "Working on the live app now."
     : availability.status;
   assistantPanel.classList.toggle("open", panelOpen);
+  assistantPanel.classList.toggle("minimized", assistantState.minimized);
+  assistantMinimizeButton.setAttribute("aria-pressed", assistantState.minimized ? "true" : "false");
+  assistantMinimizeButton.setAttribute(
+    "aria-label",
+    assistantState.minimized ? "Restore assistant" : "Minimize assistant"
+  );
+  assistantMinimizeButton.setAttribute(
+    "title",
+    assistantState.minimized ? "Restore assistant" : "Minimize assistant"
+  );
 
   assistantInput.disabled = assistantState.loading || !availability.ready;
   assistantStopButton.classList.toggle("hidden", !assistantState.loading);
@@ -2317,6 +2327,9 @@ function renderAssistant() {
 
 function toggleAssistantPanel(forceOpen = !assistantState.open) {
   assistantState.open = Boolean(forceOpen);
+  if (assistantState.open) {
+    assistantState.minimized = false;
+  }
   renderAssistant();
 
   if (assistantState.open && !assistantInput.disabled) {
@@ -2324,6 +2337,15 @@ function toggleAssistantPanel(forceOpen = !assistantState.open) {
       assistantInput.focus();
     }, 0);
   }
+}
+
+function toggleAssistantMinimize(forceMinimized = !assistantState.minimized) {
+  if (!assistantState.open) {
+    assistantState.open = true;
+  }
+
+  assistantState.minimized = Boolean(forceMinimized);
+  renderAssistant();
 }
 
 function stopAssistantMessage(options = {}) {
@@ -2390,6 +2412,7 @@ async function sendAssistantMessage() {
   }
 
   assistantState.open = true;
+  assistantState.minimized = false;
   assistantState.messages = [
     ...assistantState.messages,
     {
@@ -6253,11 +6276,9 @@ function renderShellTelemetry() {
     sidebarModeLabel.textContent = "Queued";
     sidebarModeDot.className = "signal-dot hot";
   } else {
-    sidebarModeLabel.textContent = (telemetry.readyTaskCount || 0) > 0 ? "Armed" : "Healthy";
+    sidebarModeLabel.textContent = "Activated";
     sidebarModeDot.className = "signal-dot";
   }
-
-  globalStopButton.disabled = activeTaskCount === 0;
 }
 
 function renderAll() {
@@ -7593,13 +7614,6 @@ clearLogsButton?.addEventListener("click", () => {
   renderLogs();
 });
 
-globalStopButton.addEventListener("click", async () => {
-  try {
-    await request("/api/run/stop", { method: "POST" });
-    showToast("Stop signal sent to all active runs.", "info", "Run Control");
-  } catch {}
-});
-
 if (logoutButton) {
   logoutButton.addEventListener("click", async () => {
     try {
@@ -7623,6 +7637,10 @@ assistantFabButton.addEventListener("click", () => {
 
 assistantCloseButton.addEventListener("click", () => {
   toggleAssistantPanel(false);
+});
+
+assistantMinimizeButton.addEventListener("click", () => {
+  toggleAssistantMinimize();
 });
 
 assistantResetButton.addEventListener("click", async () => {
