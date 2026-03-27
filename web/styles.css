@@ -2891,9 +2891,9 @@ select:focus {
   left: auto;
   right: auto;
   bottom: auto;
-  width: min(960px, 100%);
-  min-height: min(76vh, 760px);
-  max-height: calc(100vh - 170px);
+  width: 100%;
+  min-height: calc(100vh - 210px);
+  max-height: none;
   transform: none;
   opacity: 1;
   visibility: visible;
@@ -2938,54 +2938,6 @@ select:focus {
 
 .assistant-panel-header h3 {
   margin: 6px 0 0;
-}
-
-.assistant-window-control {
-  position: relative;
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
-  padding: 0;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2), 0 0 0 1px rgba(10, 16, 26, 0.24);
-}
-
-.assistant-window-control::before,
-.assistant-window-control::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  border-radius: 999px;
-  opacity: 0.78;
-}
-
-.assistant-window-control-close {
-  background: linear-gradient(180deg, #ff8a7d, #ff5f57);
-  border-color: rgba(123, 24, 13, 0.45);
-}
-
-.assistant-window-control-close::before,
-.assistant-window-control-close::after {
-  width: 7px;
-  height: 1.5px;
-  background: rgba(104, 19, 11, 0.72);
-}
-
-.assistant-window-control-close::before {
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-.assistant-window-control-close::after {
-  transform: translate(-50%, -50%) rotate(-45deg);
-}
-
-.assistant-window-control:hover:not(:disabled),
-.assistant-window-control:focus-visible:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.24), 0 6px 16px rgba(4, 10, 18, 0.24);
 }
 
 .assistant-panel-actions,
@@ -3544,7 +3496,7 @@ body[data-auth-state="locked"] .assistant-root {
 
   .assistant-panel.assistant-panel-view {
     width: 100%;
-    min-height: min(70vh, 680px);
+    min-height: calc(100vh - 180px);
     max-height: none;
   }
 

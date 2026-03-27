@@ -209,7 +209,6 @@ const accountStatus = document.getElementById("account-status");
 const logoutButton = document.getElementById("logout-button");
 const toastStack = document.getElementById("toast-stack");
 const assistantPanel = document.getElementById("assistant-panel");
-const assistantCloseButton = document.getElementById("assistant-close-button");
 const assistantResetButton = document.getElementById("assistant-reset-button");
 const assistantMessages = document.getElementById("assistant-messages");
 const assistantForm = document.getElementById("assistant-form");
@@ -7546,10 +7545,6 @@ if (logoutButton) {
     showToast("Session closed.", "info", "Signed Out");
   });
 }
-
-assistantCloseButton.addEventListener("click", () => {
-  setView("dashboard");
-});
 
 assistantResetButton.addEventListener("click", async () => {
   await resetAssistantConversation();
