@@ -4555,13 +4555,15 @@ function renderShellTelemetry() {
           ? "Queue armed"
           : "Operator mode";
   }
-  heroModeCopy.textContent = active
+  const heroMessage = active
     ? activeTaskCount > 1
       ? `${pluralize(activeTaskCount, "task")} are executing concurrently. Primary run: ${active.name} on ${chainLabel(active.chainKey)} at ${active.progress?.percent || 0}% completion.`
       : `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
     : (state.runState.queuedTaskIds || []).length > 0
       ? `${pluralize((state.runState.queuedTaskIds || []).length, "task")} queued for worker execution across the Redis lane.`
-      : `Monitoring ${pluralize(state.tasks.length, "task")}, ${pluralize(state.wallets.length, "wallet")}, and ${pluralize(state.rpcNodes.length, "RPC node")} from one control surface.`;
+      : "";
+  heroModeCopy.textContent = heroMessage;
+  heroModeCopy.classList.toggle("hidden", !heroMessage);
 
   if (state.runState.status === "running") {
     sidebarModeLabel.textContent = activeTaskCount > 1 ? "Live Runs" : "Live Run";
@@ -4605,10 +4607,6 @@ function applyAppState(payload) {
   state.runState = payload.runState || state.runState;
   state.session.authRequired = payload.authRequired !== false;
 
-  batchStatus.textContent = batchToggle.checked
-    ? "Batch mode is enabled for selection planning."
-    : "Batch tools are available for visual planning.";
-
   renderAll();
 }
 
@@ -4642,6 +4640,7 @@ function setView(viewName) {
   views.forEach((view) => {
     view.classList.toggle("active", view.dataset.viewPanel === viewName);
   });
+  dashboardOpenTaskButton.classList.toggle("hidden", viewName !== "dashboard");
   renderRuntime();
 }
 
@@ -5730,20 +5729,24 @@ taskStatusFilter.addEventListener("change", () => {
   renderTasks();
 });
 
-refreshButton.addEventListener("click", () => {
-  loadState()
-    .then(() => showToast("Application state refreshed.", "success", "Telemetry Synced"))
-    .catch(() => {});
-});
+if (refreshButton) {
+  refreshButton.addEventListener("click", () => {
+    loadState()
+      .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
+      .catch(() => {});
+  });
+}
 
 dashboardRefreshButton.addEventListener("click", () => {
   loadState()
-    .then(() => showToast("Advanced telemetry refreshed.", "success", "Dashboard Updated"))
+    .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
     .catch(() => {});
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());
-dashboardOpenTaskButton.addEventListener("click", () => openTaskModal());
+dashboardOpenTaskButton.addEventListener("click", () => {
+  setView("tasks");
+});
 
 runPriorityButton.addEventListener("click", async () => {
   try {
@@ -5786,12 +5789,6 @@ taskModal.addEventListener("click", (event) => {
 clearLogsButton.addEventListener("click", () => {
   state.runState.logs = [];
   renderLogs();
-});
-
-batchToggle.addEventListener("change", () => {
-  batchStatus.textContent = batchToggle.checked
-    ? "Batch mode is enabled for selection planning."
-    : "Batch tools are available for visual planning.";
 });
 
 globalStopButton.addEventListener("click", async () => {
