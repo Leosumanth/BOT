@@ -169,11 +169,17 @@
             <div class="content-grid wallets-detail-grid">
               <section class="surface" data-tilt>
                 <div class="surface-header">
-                <div>
-                  <h3>Saved Wallets</h3>
-                  <p class="helper-copy">Saved wallet names and addresses.</p>
-                </div>
-                  <span id="wallet-count" class="muted-copy"></span>
+                  <div>
+                    <h3>Saved Wallets</h3>
+                    <p class="helper-copy">Saved wallet names, addresses, and cached balance snapshots.</p>
+                  </div>
+                  <div class="surface-actions wallet-balance-actions">
+                    <p id="wallet-balance-sync-status" class="helper-copy">Waiting for the first wallet sync.</p>
+                    <span id="wallet-count" class="muted-copy"></span>
+                    <button id="wallet-balances-refresh-all-button" class="ghost-button fx-button" type="button">
+                      Refresh All Wallets
+                    </button>
+                  </div>
                 </div>
                 <div id="wallet-list" class="stack-list"></div>
               </section>
@@ -470,6 +476,46 @@
               <span>Price (ETH)</span>
               <input id="task-price-input" type="text" value="0" />
             </label>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Mint Source</h4>
+                <p class="helper-copy">Choose where mint eligibility, scheduling hints, and payload preparation should come from.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Source Type</span>
+                <select id="task-source-type-input"></select>
+              </label>
+              <label>
+                <span>Source Target</span>
+                <input id="task-source-target-input" type="text" placeholder="Optional drop URL or identifier" />
+              </label>
+              <label>
+                <span>Source Stage</span>
+                <select id="task-source-stage-input">
+                  <option value="auto">Auto Detect</option>
+                  <option value="public">Public</option>
+                  <option value="allowlist">Allowlist</option>
+                  <option value="gtd">GTD</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid single">
+              <label>
+                <span>Source Config JSON</span>
+                <textarea
+                  id="task-source-config-input"
+                  rows="4"
+                  placeholder='{"target":"https://opensea.io/collection/example-drop","stage":"allowlist"}'
+                ></textarea>
+              </label>
+            </div>
+            <p id="task-source-hint" class="helper-copy">Generic contract tasks can leave source target and source config empty.</p>
           </div>
 
           <div class="form-grid single">

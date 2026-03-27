@@ -4,6 +4,7 @@ const state = {
   rpcNodes: [],
   settings: {},
   chains: [],
+  mintSources: [],
   telemetry: null,
   runState: { status: "idle", activeTaskId: null, activeTaskIds: [], activeRuns: [], logs: [], startedAt: null },
   session: { authenticated: false, user: null, authRequired: true },
@@ -11,6 +12,67 @@ const state = {
   walletGroupFilter: "All",
   taskStatusFilter: "all"
 };
+const fallbackMintSources = [
+  {
+    type: "generic_contract",
+    label: "Generic Contract",
+    description: "Direct contract minting with local ABI, RPC routing, and optional claim fetch.",
+    capabilities: {
+      backendPayload: false,
+      scheduleSync: false,
+      sessionAuth: false
+    },
+    configExample: {
+      target: "",
+      stage: "auto"
+    }
+  },
+  {
+    type: "opensea",
+    label: "OpenSea",
+    description: "Marketplace adapter foundation for OpenSea drops, stage discovery, and future source-auth hooks.",
+    capabilities: {
+      backendPayload: true,
+      scheduleSync: true,
+      sessionAuth: true
+    },
+    configExample: {
+      target: "https://opensea.io/collection/example-drop",
+      stage: "allowlist"
+    }
+  },
+  {
+    type: "magiceden",
+    label: "Magic Eden",
+    description: "Marketplace adapter foundation for Magic Eden launch pages and source-specific mint preparation.",
+    capabilities: {
+      backendPayload: true,
+      scheduleSync: true,
+      sessionAuth: true
+    },
+    configExample: {
+      target: "https://magiceden.io/launchpad/example-drop",
+      stage: "allowlist"
+    }
+  },
+  {
+    type: "custom_launchpad",
+    label: "Custom Launchpad",
+    description: "Third-party mint sites that need custom HTTP preparation, proofs, or signed payload fetches.",
+    capabilities: {
+      backendPayload: true,
+      scheduleSync: true,
+      sessionAuth: true
+    },
+    configExample: {
+      target: "https://mint.project.xyz/drop/example",
+      stage: "custom"
+    }
+  }
+];
+const walletAssetSnapshotStorageKey = "mintbot.wallet-assets.snapshots.v1";
+const walletAssetSelectedStorageKey = "mintbot.wallet-assets.selected.v1";
+const walletAssetAutoSyncIntervalMs = 2 * 60 * 1000;
 
 const body = document.body;
 body.dataset.currentView = state.currentView;
@@ -51,6 +113,8 @@ const walletAssetsSubtitle = document.getElementById("wallet-assets-subtitle");
 const walletAssetsStatus = document.getElementById("wallet-assets-status");
 const walletAssetsList = document.getElementById("wallet-assets-list");
 const walletAssetsRefreshButton = document.getElementById("wallet-assets-refresh-button");
+const walletBalancesRefreshAllButton = document.getElementById("wallet-balances-refresh-all-button");
+const walletBalanceSyncStatus = document.getElementById("wallet-balance-sync-status");
 const rpcForm = document.getElementById("rpc-form");
 const rpcFormTitle = document.getElementById("rpc-form-title");
 const rpcFormSubtitle = document.getElementById("rpc-form-subtitle");
@@ -151,6 +215,11 @@ const abiStatus = document.getElementById("abi-status");
 const abiDropzone = document.getElementById("abi-dropzone");
 const fetchAbiButton = document.getElementById("fetch-abi-button");
 const taskPlatformInput = document.getElementById("task-platform-input");
+const taskSourceTypeInput = document.getElementById("task-source-type-input");
+const taskSourceTargetInput = document.getElementById("task-source-target-input");
+const taskSourceStageInput = document.getElementById("task-source-stage-input");
+const taskSourceConfigInput = document.getElementById("task-source-config-input");
+const taskSourceHint = document.getElementById("task-source-hint");
 const taskFunctionInput = document.getElementById("task-function-input");
 const taskArgsInput = document.getElementById("task-args-input");
 const taskClaimIntegrationToggle = document.getElementById("task-claim-integration-toggle");
@@ -232,15 +301,15 @@ let activeRpcEditId = null;
 let rpcFormGroup = "Custom";
 let rpcSelectedChainlistCandidate = null;
 let rpcPendingSavePayload = null;
-let walletAssetInspector = {
-  walletId: "",
-  loading: false,
-  error: "",
-  assets: [],
-  warnings: [],
-  generatedAt: "",
-  summary: null
-};
+let walletAssetSnapshots = loadPersistedWalletAssetSnapshots();
+let walletAssetsRefreshAllInFlight = false;
+let walletAssetsAutoSyncInFlight = false;
+let walletAssetsAutoSyncTimer = null;
+let walletAssetsAutoSyncKickTimer = null;
+let walletAssetInspector = createWalletAssetInspector(
+  loadPersistedSelectedWalletAssetId(),
+  walletAssetSnapshots[loadPersistedSelectedWalletAssetId()] || null
+);
 let rpcDiscoveryState = {
   query: "",
   chain: null,
@@ -407,6 +476,226 @@ function summarizeWalletAssets(assets = [], options = {}) {
     .map((entry) => `${formatTokenBalance(entry.amount)} ${entry.symbol}`);
 
   return entries.length > maxItems ? `${visible.join(" + ")} + ${entries.length - maxItems} more` : visible.join(" + ");
+}
+
+function safeLocalStorageGet(key) {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(key, value);
+    }
+  } catch {}
+}
+
+function safeLocalStorageRemove(key) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(key);
+    }
+  } catch {}
+}
+
+function normalizeWalletAssetSnapshot(snapshot = null) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+
+  const assets = Array.isArray(snapshot.assets) ? snapshot.assets : [];
+  const warnings = Array.isArray(snapshot.warnings) ? snapshot.warnings : [];
+  const generatedAt = String(snapshot.generatedAt || "").trim();
+  const summary = snapshot.summary && typeof snapshot.summary === "object" ? snapshot.summary : null;
+
+  if (!assets.length && !warnings.length && !generatedAt && !summary) {
+    return null;
+  }
+
+  return {
+    assets,
+    warnings,
+    generatedAt,
+    summary
+  };
+}
+
+function createWalletAssetInspector(walletId = "", snapshot = null, overrides = {}) {
+  const normalizedSnapshot = normalizeWalletAssetSnapshot(snapshot);
+  return {
+    walletId: String(walletId || "").trim(),
+    loading: false,
+    error: "",
+    assets: normalizedSnapshot?.assets || [],
+    warnings: normalizedSnapshot?.warnings || [],
+    generatedAt: normalizedSnapshot?.generatedAt || "",
+    summary: normalizedSnapshot?.summary || null,
+    ...overrides
+  };
+}
+
+function loadPersistedWalletAssetSnapshots() {
+  const raw = safeLocalStorageGet(walletAssetSnapshotStorageKey);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([walletId, snapshot]) => [walletId, normalizeWalletAssetSnapshot(snapshot)])
+        .filter((entry) => Boolean(entry[0]) && Boolean(entry[1]))
+    );
+  } catch {
+    return {};
+  }
+}
+
+function persistWalletAssetSnapshots() {
+  safeLocalStorageSet(walletAssetSnapshotStorageKey, JSON.stringify(walletAssetSnapshots));
+}
+
+function loadPersistedSelectedWalletAssetId() {
+  return String(safeLocalStorageGet(walletAssetSelectedStorageKey) || "").trim();
+}
+
+function persistSelectedWalletAssetId(walletId) {
+  const normalized = String(walletId || "").trim();
+  if (!normalized) {
+    safeLocalStorageRemove(walletAssetSelectedStorageKey);
+    return;
+  }
+
+  safeLocalStorageSet(walletAssetSelectedStorageKey, normalized);
+}
+
+function getWalletAssetSnapshot(walletId) {
+  return normalizeWalletAssetSnapshot(walletAssetSnapshots[String(walletId || "").trim()] || null);
+}
+
+function setWalletAssetSnapshot(walletId, snapshot) {
+  const normalizedWalletId = String(walletId || "").trim();
+  const normalizedSnapshot = normalizeWalletAssetSnapshot(snapshot);
+  if (!normalizedWalletId || !normalizedSnapshot) {
+    return;
+  }
+
+  walletAssetSnapshots = {
+    ...walletAssetSnapshots,
+    [normalizedWalletId]: normalizedSnapshot
+  };
+  persistWalletAssetSnapshots();
+}
+
+function deleteWalletAssetSnapshot(walletId) {
+  const normalizedWalletId = String(walletId || "").trim();
+  if (!normalizedWalletId || !Object.prototype.hasOwnProperty.call(walletAssetSnapshots, normalizedWalletId)) {
+    return;
+  }
+
+  const { [normalizedWalletId]: _removed, ...rest } = walletAssetSnapshots;
+  walletAssetSnapshots = rest;
+  persistWalletAssetSnapshots();
+}
+
+function walletBalanceStateFromSnapshot(snapshot) {
+  const normalizedSnapshot = normalizeWalletAssetSnapshot(snapshot);
+  if (!normalizedSnapshot) {
+    return {};
+  }
+
+  return {
+    balanceUsd: Number.isFinite(Number(normalizedSnapshot.summary?.totalUsd))
+      ? Number(normalizedSnapshot.summary.totalUsd)
+      : undefined,
+    balanceAssetLabel: summarizeWalletAssets(normalizedSnapshot.assets || [], { maxItems: 2 }) || "",
+    balanceUpdatedAt: normalizedSnapshot.generatedAt || undefined
+  };
+}
+
+function latestWalletAssetSyncAt() {
+  return Object.values(walletAssetSnapshots)
+    .map((snapshot) => String(snapshot?.generatedAt || "").trim())
+    .filter(Boolean)
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || "";
+}
+
+function walletAssetSnapshotAgeMs(snapshot) {
+  const generatedAt = String(snapshot?.generatedAt || "").trim();
+  if (!generatedAt) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const ageMs = Date.now() - new Date(generatedAt).getTime();
+  return Number.isFinite(ageMs) ? ageMs : Number.POSITIVE_INFINITY;
+}
+
+function hasFreshWalletAssetSnapshot(walletId, maxAgeMs = walletAssetAutoSyncIntervalMs) {
+  return walletAssetSnapshotAgeMs(getWalletAssetSnapshot(walletId)) <= maxAgeMs;
+}
+
+function shouldAutoSyncWalletBalances() {
+  return (
+    state.session.authenticated &&
+    state.wallets.length > 0 &&
+    state.wallets.some((wallet) => !hasFreshWalletAssetSnapshot(wallet.id))
+  );
+}
+
+function syncWalletAssetInspectorFromCache() {
+  const selectedWalletId = String(walletAssetInspector.walletId || "").trim();
+  if (!selectedWalletId) {
+    walletAssetInspector = createWalletAssetInspector();
+    persistSelectedWalletAssetId("");
+    return;
+  }
+
+  if (!state.wallets.some((wallet) => wallet.id === selectedWalletId)) {
+    walletAssetInspector = createWalletAssetInspector();
+    persistSelectedWalletAssetId("");
+    deleteWalletAssetSnapshot(selectedWalletId);
+    return;
+  }
+
+  const snapshot = getWalletAssetSnapshot(selectedWalletId);
+  if (!walletAssetInspector.loading && snapshot) {
+    walletAssetInspector = createWalletAssetInspector(selectedWalletId, snapshot, {
+      error: walletAssetInspector.error || ""
+    });
+  } else {
+    walletAssetInspector.walletId = selectedWalletId;
+  }
+
+  persistSelectedWalletAssetId(selectedWalletId);
+}
+
+function selectWalletAsset(walletId) {
+  const normalizedWalletId = String(walletId || "").trim();
+  walletAssetInspector = createWalletAssetInspector(normalizedWalletId, getWalletAssetSnapshot(normalizedWalletId));
+  persistSelectedWalletAssetId(normalizedWalletId);
+}
+
+function hydrateWalletAssetSnapshotsForCurrentState() {
+  const validWalletIds = new Set(state.wallets.map((wallet) => wallet.id));
+  const nextSnapshots = Object.fromEntries(
+    Object.entries(walletAssetSnapshots).filter(([walletId]) => validWalletIds.has(walletId))
+  );
+
+  if (Object.keys(nextSnapshots).length !== Object.keys(walletAssetSnapshots).length) {
+    walletAssetSnapshots = nextSnapshots;
+    persistWalletAssetSnapshots();
+  }
+
+  syncWalletAssetInspectorFromCache();
 }
 
 function normalizeGasStrategyValue(value) {
@@ -631,12 +920,63 @@ function mergeWalletBalanceState(wallets = []) {
 
   return wallets.map((wallet) => ({
     ...wallet,
+    ...walletBalanceStateFromSnapshot(getWalletAssetSnapshot(wallet.id)),
     ...(existingBalances.get(wallet.id) || {})
   }));
 }
 
 function patchWalletBalance(walletId, patch) {
   state.wallets = state.wallets.map((wallet) => (wallet.id === walletId ? { ...wallet, ...patch } : wallet));
+}
+
+function stopWalletAssetAutoSync() {
+  if (walletAssetsAutoSyncKickTimer) {
+    window.clearTimeout(walletAssetsAutoSyncKickTimer);
+    walletAssetsAutoSyncKickTimer = null;
+  }
+
+  if (walletAssetsAutoSyncTimer) {
+    window.clearInterval(walletAssetsAutoSyncTimer);
+    walletAssetsAutoSyncTimer = null;
+  }
+
+  walletAssetsAutoSyncInFlight = false;
+}
+
+function ensureWalletAssetAutoSync() {
+  if (walletAssetsAutoSyncTimer || typeof window === "undefined") {
+    return;
+  }
+
+  walletAssetsAutoSyncTimer = window.setInterval(() => {
+    if (shouldAutoSyncWalletBalances()) {
+      void refreshAllWalletBalances({ silent: true, source: "auto" });
+    }
+  }, walletAssetAutoSyncIntervalMs);
+}
+
+function scheduleWalletAssetAutoSync(options = {}) {
+  const { immediate = false } = options;
+  if (!state.session.authenticated) {
+    stopWalletAssetAutoSync();
+    return;
+  }
+
+  ensureWalletAssetAutoSync();
+  if (!immediate || walletAssetsAutoSyncKickTimer || walletAssetsRefreshAllInFlight || walletAssetsAutoSyncInFlight) {
+    return;
+  }
+
+  if (!shouldAutoSyncWalletBalances()) {
+    return;
+  }
+
+  walletAssetsAutoSyncKickTimer = window.setTimeout(() => {
+    walletAssetsAutoSyncKickTimer = null;
+    if (shouldAutoSyncWalletBalances()) {
+      void refreshAllWalletBalances({ silent: true, source: "auto" });
+    }
+  }, 500);
 }
 
 function setLoginStatus(message) {
@@ -658,6 +998,7 @@ function setAuthState(authenticated, user = null, authRequired = true) {
   assistantRoot.classList.toggle("hidden", !authenticated && authRequired);
 
   if (!authenticated && authRequired) {
+    stopWalletAssetAutoSync();
     assistantState = {
       open: false,
       loading: false,
@@ -2110,6 +2451,8 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
   const latestHashCount = Array.isArray(latestHistorySummary.hashes) ? latestHistorySummary.hashes.length : 0;
   const tags = [...(task.tags || [])];
   const updatedLabel = active ? "Live now" : `Updated ${relativeTime(task.updatedAt)}`;
+  const sourceLabel = task.sourceLabel || findMintSourceDefinition(task.sourceType).label;
+  const sourceSummary = task.sourceSummary || sourceLabel;
 
   if (task.multiRpcBroadcast) {
     tags.push("RPC Mesh");
@@ -2130,12 +2473,14 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
       </div>
 
       <div class="chip-row">
+        <span class="tag-chip">${escapeHtml(sourceLabel)}</span>
         <span class="tag-chip">${escapeHtml(humanizePriority(task.priority || "standard"))}</span>
         ${tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}
       </div>
 
       <div class="task-meta">
         <div class="meta-item"><label>Contract</label><strong>${escapeHtml(truncateMiddle(task.contractAddress || "Not set"))}</strong></div>
+        <div class="meta-item"><label>Source</label><strong title="${escapeHtml(sourceSummary)}">${escapeHtml(truncateMiddle(sourceSummary, 24, 18) || sourceLabel)}</strong></div>
         <div class="meta-item"><label>Chain</label><strong>${escapeHtml(chainLabel(task.chainKey))}</strong></div>
         <div class="meta-item"><label>Wallets</label><strong>${task.walletCount || 0}</strong></div>
         <div class="meta-item"><label>RPC</label><strong>${task.rpcCount || 0}</strong></div>
@@ -2281,9 +2626,35 @@ function renderTasks() {
   });
 }
 
+function renderWalletBalanceSyncStatus() {
+  if (walletCount) {
+    walletCount.textContent = pluralize(state.wallets.length, "wallet");
+  }
+
+  if (walletBalanceSyncStatus) {
+    if (walletAssetsRefreshAllInFlight) {
+      walletBalanceSyncStatus.textContent = walletAssetsAutoSyncInFlight
+        ? "Auto-sync is refreshing wallet balances..."
+        : "Refreshing wallet balances...";
+    } else {
+      const latestSyncAt = latestWalletAssetSyncAt();
+      walletBalanceSyncStatus.textContent = latestSyncAt
+        ? `Auto-sync on · last sync ${relativeTime(latestSyncAt)}`
+        : "Auto-sync on · waiting for the first wallet sync.";
+    }
+  }
+
+  if (walletBalancesRefreshAllButton) {
+    walletBalancesRefreshAllButton.disabled = state.wallets.length === 0 || walletAssetsRefreshAllInFlight;
+    walletBalancesRefreshAllButton.textContent = walletAssetsRefreshAllInFlight
+      ? "Refreshing Wallets..."
+      : "Refresh All Wallets";
+  }
+}
+
 function renderWallets() {
   const selectedWalletId = walletAssetInspector.walletId;
-  walletCount.textContent = pluralize(state.wallets.length, "wallet");
+  renderWalletBalanceSyncStatus();
   walletList.innerHTML = state.wallets.length
     ? state.wallets
         .map(
@@ -2405,6 +2776,11 @@ async function submitWalletDelete() {
 
   try {
     await request(`/api/wallets/${wallet.id}`, { method: "DELETE" });
+    deleteWalletAssetSnapshot(wallet.id);
+    if (walletAssetInspector.walletId === wallet.id) {
+      walletAssetInspector = createWalletAssetInspector();
+      persistSelectedWalletAssetId("");
+    }
     walletDeletePending = false;
     closeWalletDeleteModal();
     showToast(`${wallet.label || "Wallet"} removed from local storage.`, "success", "Wallet Deleted");
@@ -2421,6 +2797,24 @@ function selectedInspectedWallet() {
   return state.wallets.find((wallet) => wallet.id === walletAssetInspector.walletId) || null;
 }
 
+function displayedWalletAssetSnapshot(walletId) {
+  if (!walletId) {
+    return null;
+  }
+
+  const inspectorSnapshot =
+    walletAssetInspector.walletId === walletId
+      ? normalizeWalletAssetSnapshot({
+          assets: walletAssetInspector.assets,
+          warnings: walletAssetInspector.warnings,
+          generatedAt: walletAssetInspector.generatedAt,
+          summary: walletAssetInspector.summary
+        })
+      : null;
+
+  return inspectorSnapshot || getWalletAssetSnapshot(walletId);
+}
+
 function renderWalletAssets() {
   if (!walletAssetsList || !walletAssetsTitle || !walletAssetsSubtitle || !walletAssetsStatus || !walletAssetsRefreshButton) {
     return;
@@ -2428,15 +2822,8 @@ function renderWalletAssets() {
 
   const wallet = selectedInspectedWallet();
   if (!wallet) {
-    walletAssetInspector = {
-      walletId: "",
-      loading: false,
-      error: "",
-      assets: [],
-      warnings: [],
-      generatedAt: "",
-      summary: null
-    };
+    walletAssetInspector = createWalletAssetInspector();
+    persistSelectedWalletAssetId("");
     walletAssetsTitle.textContent = "Assets & Coins";
     walletAssetsSubtitle.textContent = "Click a wallet to view native balances across available EVM chains.";
     walletAssetsStatus.classList.add("hidden");
@@ -2456,9 +2843,12 @@ function renderWalletAssets() {
     fallback: "$--",
     loadingLabel: "Loading..."
   })}`;
-  walletAssetsRefreshButton.disabled = walletAssetInspector.loading;
+  walletAssetsRefreshButton.disabled = walletAssetInspector.loading || walletAssetsRefreshAllInFlight;
 
-  if (walletAssetInspector.loading) {
+  const snapshot = displayedWalletAssetSnapshot(wallet.id);
+  const hasSnapshotData = Boolean(snapshot);
+
+  if (walletAssetInspector.loading && !hasSnapshotData) {
     walletAssetsStatus.classList.remove("hidden");
     walletAssetsStatus.textContent = "Loading balances across configured and discovered chains...";
     walletAssetsList.innerHTML = `
@@ -2470,7 +2860,7 @@ function renderWalletAssets() {
     return;
   }
 
-  if (walletAssetInspector.error) {
+  if (walletAssetInspector.error && !hasSnapshotData) {
     walletAssetsStatus.classList.remove("hidden");
     walletAssetsStatus.textContent = walletAssetInspector.error;
     walletAssetsList.innerHTML = `
@@ -2482,12 +2872,21 @@ function renderWalletAssets() {
     return;
   }
 
-  const allAssets = Array.isArray(walletAssetInspector.assets) ? walletAssetInspector.assets : [];
+  const allAssets = Array.isArray(snapshot?.assets) ? snapshot.assets : [];
   const assets = allAssets.filter((asset) => Number(asset.balanceFloat || 0) > 0);
-  const warnings = Array.isArray(walletAssetInspector.warnings) ? walletAssetInspector.warnings : [];
+  const warnings = Array.isArray(snapshot?.warnings) ? snapshot.warnings : [];
   const nonZeroCount = assets.length;
   const assetSummaryLabel = summarizeWalletAssets(assets, { maxItems: 3 });
   const statusParts = [];
+  if (walletAssetInspector.loading) {
+    statusParts.push("Refreshing balances...");
+  }
+  if (walletAssetInspector.error) {
+    statusParts.push(walletAssetInspector.error);
+  }
+  if (snapshot?.generatedAt) {
+    statusParts.push(`Synced ${relativeTime(snapshot.generatedAt)}`);
+  }
   if (allAssets.length > 0) {
     statusParts.push(`${pluralize(allAssets.length, "chain")} checked`);
     statusParts.push(nonZeroCount > 0 ? `${pluralize(nonZeroCount, "balance")} above zero` : "No balances above zero");
@@ -2495,13 +2894,23 @@ function renderWalletAssets() {
   if (assetSummaryLabel) {
     statusParts.unshift(`Total ${assetSummaryLabel}`);
   }
-  if (Number.isFinite(Number(walletAssetInspector.summary?.totalUsd)) && Math.abs(Number(walletAssetInspector.summary.totalUsd)) >= 0.01) {
-    statusParts.unshift(`Approx ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
-  } else if (!assetSummaryLabel && Number.isFinite(Number(walletAssetInspector.summary?.totalUsd))) {
-    statusParts.unshift(`Total ${formatUsdBalance(walletAssetInspector.summary.totalUsd)}`);
+  if (Number.isFinite(Number(snapshot?.summary?.totalUsd)) && Math.abs(Number(snapshot.summary.totalUsd)) >= 0.01) {
+    statusParts.unshift(`Approx ${formatUsdBalance(snapshot.summary.totalUsd)}`);
+  } else if (!assetSummaryLabel && Number.isFinite(Number(snapshot?.summary?.totalUsd))) {
+    statusParts.unshift(`Total ${formatUsdBalance(snapshot.summary.totalUsd)}`);
   }
   walletAssetsStatus.classList.toggle("hidden", statusParts.length === 0);
   walletAssetsStatus.textContent = statusParts.join(" | ");
+
+  if (!assets.length && !warnings.length && !hasSnapshotData) {
+    walletAssetsList.innerHTML = `
+      <div class="empty-state">
+        <h3>No balance data yet</h3>
+        <p>Use View Assets or Refresh Assets to sync this wallet for the first time.</p>
+      </div>
+    `;
+    return;
+  }
 
   if (!assets.length && !warnings.length) {
     walletAssetsList.innerHTML = `
@@ -2549,65 +2958,147 @@ function renderWalletAssets() {
   walletAssetsList.innerHTML = `${assetMarkup}${warningMarkup}`;
 }
 
-async function loadWalletAssets(walletId) {
+function applyWalletAssetSnapshotToState(walletId, snapshot) {
+  const normalizedSnapshot = normalizeWalletAssetSnapshot(snapshot);
+  if (!normalizedSnapshot) {
+    return;
+  }
+
+  setWalletAssetSnapshot(walletId, normalizedSnapshot);
+  patchWalletBalance(walletId, {
+    ...walletBalanceStateFromSnapshot(normalizedSnapshot),
+    balanceLoading: false,
+    balanceError: ""
+  });
+}
+
+async function fetchWalletAssetSnapshot(walletId) {
+  const payload = await request(`/api/wallets/${walletId}/assets`);
+  return normalizeWalletAssetSnapshot({
+    assets: Array.isArray(payload.assets) ? payload.assets : [],
+    warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+    generatedAt: payload.generatedAt || new Date().toISOString(),
+    summary: payload.summary || null
+  });
+}
+
+async function refreshWalletAssetSnapshot(walletId, options = {}) {
+  const { render = true } = options;
+  const wallet = state.wallets.find((entry) => entry.id === walletId);
+  if (!wallet) {
+    return { ok: false, error: "Wallet not found" };
+  }
+
+  const cachedSnapshot = getWalletAssetSnapshot(walletId);
+
+  patchWalletBalance(walletId, {
+    balanceLoading: true,
+    balanceError: ""
+  });
+
+  if (walletAssetInspector.walletId === walletId) {
+    walletAssetInspector = createWalletAssetInspector(walletId, cachedSnapshot, {
+      loading: true,
+      error: ""
+    });
+  }
+
+  if (render) {
+    renderWallets();
+    renderWalletAssets();
+  }
+
+  try {
+    const snapshot = await fetchWalletAssetSnapshot(walletId);
+    applyWalletAssetSnapshotToState(walletId, snapshot);
+
+    if (walletAssetInspector.walletId === walletId) {
+      walletAssetInspector = createWalletAssetInspector(walletId, snapshot);
+    }
+
+    if (render) {
+      renderWallets();
+      renderWalletAssets();
+    }
+
+    return { ok: true, snapshot };
+  } catch (error) {
+    const message = error.message || "Asset lookup failed";
+    patchWalletBalance(walletId, {
+      balanceLoading: false,
+      balanceError: message
+    });
+
+    if (walletAssetInspector.walletId === walletId) {
+      walletAssetInspector = createWalletAssetInspector(walletId, cachedSnapshot, {
+        error: message
+      });
+    }
+
+    if (render) {
+      renderWallets();
+      renderWalletAssets();
+    }
+
+    return { ok: false, error: message };
+  }
+}
+
+async function refreshAllWalletBalances(options = {}) {
+  const { silent = false, source = "manual" } = options;
+  if (walletAssetsRefreshAllInFlight || state.wallets.length === 0) {
+    return;
+  }
+
+  walletAssetsRefreshAllInFlight = true;
+  walletAssetsAutoSyncInFlight = source === "auto";
+  renderWallets();
+  renderWalletAssets();
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (const wallet of state.wallets) {
+    const result = await refreshWalletAssetSnapshot(wallet.id, { render: false });
+    if (result.ok) {
+      successCount += 1;
+    } else {
+      failureCount += 1;
+    }
+  }
+
+  walletAssetsRefreshAllInFlight = false;
+  walletAssetsAutoSyncInFlight = false;
+  renderWallets();
+  renderWalletAssets();
+
+  if (!silent) {
+    showToast(
+      failureCount > 0
+        ? `Synced ${successCount}/${state.wallets.length} wallets. ${failureCount} need another retry.`
+        : `Synced ${pluralize(successCount, "wallet")} successfully.`,
+      failureCount > 0 ? "info" : "success",
+      "Wallet Balances"
+    );
+  }
+}
+
+async function loadWalletAssets(walletId, options = {}) {
+  const { force = false } = options;
   const wallet = state.wallets.find((entry) => entry.id === walletId);
   if (!wallet) {
     return;
   }
 
-  try {
-    patchWalletBalance(walletId, {
-      balanceLoading: true,
-      balanceError: ""
-    });
-    walletAssetInspector = {
-      walletId,
-      loading: true,
-      error: "",
-      assets: [],
-      warnings: [],
-      generatedAt: "",
-      summary: null
-    };
-    renderWallets();
-    renderWalletAssets();
-
-    const payload = await request(`/api/wallets/${walletId}/assets`);
-    const balanceAssetLabel = summarizeWalletAssets(payload.assets || [], { maxItems: 2 });
-    patchWalletBalance(walletId, {
-      balanceUsd: Number.isFinite(Number(payload.summary?.totalUsd)) ? Number(payload.summary.totalUsd) : wallet.balanceUsd,
-      balanceAssetLabel: balanceAssetLabel || "",
-      balanceLoading: false,
-      balanceError: "",
-      balanceUpdatedAt: payload.generatedAt || new Date().toISOString()
-    });
-    walletAssetInspector = {
-      walletId,
-      loading: false,
-      error: "",
-      assets: Array.isArray(payload.assets) ? payload.assets : [],
-      warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
-      generatedAt: payload.generatedAt || new Date().toISOString(),
-      summary: payload.summary || null
-    };
-  } catch (error) {
-    patchWalletBalance(walletId, {
-      balanceLoading: false,
-      balanceError: error.message || "Asset lookup failed"
-    });
-    walletAssetInspector = {
-      walletId,
-      loading: false,
-      error: error.message || "Asset lookup failed",
-      assets: [],
-      warnings: [],
-      generatedAt: "",
-      summary: null
-    };
-  }
-
+  selectWalletAsset(walletId);
   renderWallets();
   renderWalletAssets();
+
+  if (!force && hasFreshWalletAssetSnapshot(walletId)) {
+    return;
+  }
+
+  await refreshWalletAssetSnapshot(walletId);
 }
 
 function rpcHealthMarkup(node) {
@@ -4509,11 +5000,15 @@ function applyAppState(payload) {
   state.rpcNodes = payload.rpcNodes || [];
   state.settings = payload.settings || {};
   state.chains = payload.chains || [];
+  state.mintSources = payload.mintSources || [];
   state.telemetry = payload.telemetry || null;
   state.runState = payload.runState || state.runState;
   state.session.authRequired = payload.authRequired !== false;
+  hydrateWalletAssetSnapshotsForCurrentState();
+  populateMintSourceSelectors(taskSourceTypeInput?.value || "generic_contract");
 
   renderAll();
+  scheduleWalletAssetAutoSync({ immediate: true });
 }
 
 function ensureChainOption(chain) {
@@ -4547,6 +5042,11 @@ function setView(viewName) {
     view.classList.toggle("active", view.dataset.viewPanel === viewName);
   });
   dashboardOpenTaskButton.classList.toggle("hidden", viewName !== "dashboard");
+  if (viewName === "wallets") {
+    renderWallets();
+    renderWalletAssets();
+    scheduleWalletAssetAutoSync({ immediate: true });
+  }
   renderRuntime();
 }
 
@@ -4565,6 +5065,104 @@ function populateChainSelectors() {
   if (!state.chains.find((chain) => chain.key === rpcChainInput.value)) {
     rpcChainInput.value = state.chains[0]?.key || "";
   }
+}
+
+function mintSourceDefinitions() {
+  return Array.isArray(state.mintSources) && state.mintSources.length > 0
+    ? state.mintSources
+    : fallbackMintSources;
+}
+
+function findMintSourceDefinition(sourceType = "") {
+  const normalized = String(sourceType || "generic_contract").trim().toLowerCase();
+  return (
+    mintSourceDefinitions().find((entry) => String(entry.type || "").trim().toLowerCase() === normalized) ||
+    fallbackMintSources[0]
+  );
+}
+
+function formatMintSourceStage(stage = "auto") {
+  const normalized = String(stage || "auto").trim().toLowerCase();
+  if (normalized === "gtd") {
+    return "GTD";
+  }
+
+  if (normalized === "allowlist") {
+    return "Allowlist";
+  }
+
+  if (normalized === "auto") {
+    return "Auto Detect";
+  }
+
+  if (normalized === "custom") {
+    return "Custom";
+  }
+
+  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Auto Detect";
+}
+
+function populateMintSourceSelectors(selectedType = "") {
+  if (!taskSourceTypeInput) {
+    return;
+  }
+
+  const preferredType = String(selectedType || taskSourceTypeInput.value || "generic_contract").trim();
+  const options = mintSourceDefinitions()
+    .map(
+      (source) =>
+        `<option value="${escapeHtml(source.type || "")}">${escapeHtml(source.label || source.type || "Mint Source")}</option>`
+    )
+    .join("");
+
+  taskSourceTypeInput.innerHTML = options;
+  taskSourceTypeInput.value = findMintSourceDefinition(preferredType).type || "generic_contract";
+  updateTaskSourceInputs();
+}
+
+function updateTaskSourceInputs() {
+  if (!taskSourceTypeInput || !taskSourceTargetInput || !taskSourceConfigInput || !taskSourceHint) {
+    return;
+  }
+
+  const sourceDefinition = findMintSourceDefinition(taskSourceTypeInput.value);
+  const sourceType = sourceDefinition.type || "generic_contract";
+  const sourceLabel = sourceDefinition.label || "Mint Source";
+  const sourceDescription = String(sourceDefinition.description || "Source-aware mint adapter.").trim();
+  const configExample =
+    sourceDefinition.configExample && typeof sourceDefinition.configExample === "object"
+      ? sourceDefinition.configExample
+      : {};
+  const exampleTarget = String(configExample.target || "").trim();
+  const stageLabel = formatMintSourceStage(taskSourceStageInput?.value || configExample.stage || "auto");
+  const capabilityFlags = [];
+
+  if (sourceDefinition.capabilities?.backendPayload) {
+    capabilityFlags.push("backend payload");
+  }
+  if (sourceDefinition.capabilities?.scheduleSync) {
+    capabilityFlags.push("schedule sync");
+  }
+  if (sourceDefinition.capabilities?.sessionAuth) {
+    capabilityFlags.push("session auth");
+  }
+
+  taskSourceTargetInput.disabled = sourceType === "generic_contract";
+  taskSourceTargetInput.placeholder =
+    sourceType === "generic_contract"
+      ? "Not needed for direct contract mints"
+      : exampleTarget || "Paste a drop URL, slug, or source identifier";
+  taskSourceConfigInput.placeholder = JSON.stringify(configExample, null, 2);
+
+  const targetCopy =
+    sourceType === "generic_contract"
+      ? "Target is optional for direct contract mint tasks."
+      : `Use a drop URL, slug, or identifier for ${sourceLabel}.`;
+  const capabilityCopy = capabilityFlags.length
+    ? `Adapter focus: ${capabilityFlags.join(", ")}.`
+    : "Adapter focus: local contract execution only.";
+
+  taskSourceHint.textContent = `${sourceDescription} ${targetCopy} Stage: ${stageLabel}. ${capabilityCopy}`;
 }
 
 function parseAbiEntries(value) {
@@ -5350,6 +5948,12 @@ function openTaskModal(task = null) {
   taskPriceInput.value = task?.priceEth || "";
   taskAbiInput.value = task?.abiJson || "";
   taskPlatformInput.value = task?.platform || "Generic EVM (auto-detect)";
+  populateMintSourceSelectors(task?.sourceType || "generic_contract");
+  taskSourceTypeInput.value = task?.sourceType || "generic_contract";
+  taskSourceTargetInput.value = task?.sourceTarget || "";
+  taskSourceStageInput.value = task?.sourceStage || "auto";
+  taskSourceConfigInput.value = task?.sourceConfigJson || "";
+  updateTaskSourceInputs();
   taskFunctionInput.value = task?.mintFunction || "";
   taskArgsInput.value = task?.mintArgs || "";
   taskClaimIntegrationToggle.checked = Boolean(task?.claimIntegrationEnabled);
@@ -5470,6 +6074,10 @@ function buildTaskPayload() {
     notes: taskNotesInput.value,
     contractAddress: taskContractInput.value,
     chainKey: taskChainInput.value,
+    sourceType: taskSourceTypeInput.value,
+    sourceTarget: taskSourceTypeInput.value === "generic_contract" ? "" : taskSourceTargetInput.value,
+    sourceStage: taskSourceStageInput.value,
+    sourceConfigJson: taskSourceConfigInput.value.trim(),
     quantityPerWallet: taskQuantityInput.value,
     priceEth: taskPriceInput.value,
     abiJson: taskAbiInput.value,
@@ -5879,7 +6487,13 @@ if (walletAssetsRefreshButton) {
       return;
     }
 
-    await loadWalletAssets(walletAssetInspector.walletId);
+    await loadWalletAssets(walletAssetInspector.walletId, { force: true });
+  });
+}
+
+if (walletBalancesRefreshAllButton) {
+  walletBalancesRefreshAllButton.addEventListener("click", async () => {
+    await refreshAllWalletBalances({ silent: false, source: "manual" });
   });
 }
 
@@ -6147,6 +6761,18 @@ selectAllRpcButton.addEventListener("click", () => {
   setRpcSelectionCount();
 });
 
+taskSourceTypeInput?.addEventListener("change", () => {
+  updateTaskSourceInputs();
+});
+
+taskSourceStageInput?.addEventListener("change", () => {
+  updateTaskSourceInputs();
+});
+
+taskSourceTargetInput?.addEventListener("input", () => {
+  updateTaskSourceInputs();
+});
+
 taskLatencyProfileInput.addEventListener("change", () => {
   applyLatencyProfile(taskLatencyProfileInput.value);
 });
@@ -6362,6 +6988,7 @@ taskForm.addEventListener("submit", async (event) => {
   } catch {}
 });
 
+populateMintSourceSelectors();
 updateClock();
 window.setInterval(updateClock, 1000);
 applyAssistantPosition();

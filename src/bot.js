@@ -10,6 +10,7 @@ const {
   resolveWalletClaimRecord
 } = require("./claims");
 const mintAutomation = require("./mint-automation");
+const { prepareMintSourceConfig } = require("./mint-sources");
 
 class AbortRunError extends Error {
   constructor(message = "Run stopped by user") {
@@ -3489,50 +3490,51 @@ async function runMintBotWithPreparedWallets(config, context) {
 async function runMintBot(config, hooks = {}) {
   const logger = createLogger(hooks);
   const signal = hooks.signal;
+  const preparedConfig = await prepareMintSourceConfig(config, { logger, signal });
 
-  logger.info(`Wallet mode: ${config.walletMode}`);
-  logger.info(`Wallet count: ${config.privateKeys.length}`);
-  logger.info(`Configured RPC URLs: ${config.rpcUrls.length}`);
-  logger.info(`Simulation: ${config.simulateTransaction ? "enabled" : "disabled"}`);
-  logger.info(`Dry run: ${config.dryRun ? "enabled" : "disabled"}`);
-  logger.info(`Mint mode: ${config.autoMintMode ? "automated" : "manual"}`);
-  logger.info(`Gas strategy: ${config.gasStrategy}`);
+  logger.info(`Wallet mode: ${preparedConfig.walletMode}`);
+  logger.info(`Wallet count: ${preparedConfig.privateKeys.length}`);
+  logger.info(`Configured RPC URLs: ${preparedConfig.rpcUrls.length}`);
+  logger.info(`Simulation: ${preparedConfig.simulateTransaction ? "enabled" : "disabled"}`);
+  logger.info(`Dry run: ${preparedConfig.dryRun ? "enabled" : "disabled"}`);
+  logger.info(`Mint mode: ${preparedConfig.autoMintMode ? "automated" : "manual"}`);
+  logger.info(`Gas strategy: ${preparedConfig.gasStrategy}`);
   logger.info(
     `Mint start detection: ${
-      config.mintStartDetectionEnabled
-        ? (config.mintStartDetectionConfig?.signals || [])
+      preparedConfig.mintStartDetectionEnabled
+        ? (preparedConfig.mintStartDetectionConfig?.signals || [])
             .map((signalName) => signalName)
             .join(", ") || "enabled"
         : "disabled"
     }`
   );
-  logger.info(`Ready check: ${config.readyCheckFunction || "disabled"}`);
-  logger.info(`Execution trigger: ${config.executionTriggerMode}`);
-  if (config.executionTriggerMode === "block") {
-    logger.info(`Trigger block: ${config.triggerBlockNumber}`);
+  logger.info(`Ready check: ${preparedConfig.readyCheckFunction || "disabled"}`);
+  logger.info(`Execution trigger: ${preparedConfig.executionTriggerMode}`);
+  if (preparedConfig.executionTriggerMode === "block") {
+    logger.info(`Trigger block: ${preparedConfig.triggerBlockNumber}`);
   }
-  logger.info(`Private relay: ${config.privateRelayEnabled ? "enabled" : "disabled"}`);
+  logger.info(`Private relay: ${preparedConfig.privateRelayEnabled ? "enabled" : "disabled"}`);
   logger.info(
     `Claims adapter: ${
-      config.claimIntegrationEnabled
-        ? `${config.claimProjectKey || "custom"}${config.claimFetchEnabled ? " with API fetch" : ""}`
+      preparedConfig.claimIntegrationEnabled
+        ? `${preparedConfig.claimProjectKey || "custom"}${preparedConfig.claimFetchEnabled ? " with API fetch" : ""}`
         : "disabled"
     }`
   );
   logger.info(
     `Pre-signed launch: ${
-      config.preSignTransactions
-        ? config.autoMintMode
+      preparedConfig.preSignTransactions
+        ? preparedConfig.autoMintMode
           ? "enabled when an automated mint plan can be resolved at launch"
           : "required"
         : "disabled"
     }`
   );
 
-  const preparedRun = await runMintBotWithPreparedWallets(config, { signal, logger });
+  const preparedRun = await runMintBotWithPreparedWallets(preparedConfig, { signal, logger });
   const results = preparedRun.results;
 
-  persistResults(config.resultsPath, results, logger);
+  persistResults(preparedConfig.resultsPath, results, logger);
   logger.info("Run summary:");
   for (const result of results) {
     logger.info(

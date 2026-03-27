@@ -1273,6 +1273,14 @@ body[data-current-view="tasks"] .header-input::placeholder {
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+.wallet-balance-actions {
+  justify-content: flex-end;
+}
+
+.wallet-balance-actions .helper-copy {
+  text-align: right;
+}
+
 .wallet-assets-surface {
   display: grid;
   gap: 14px;

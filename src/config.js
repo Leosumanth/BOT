@@ -2,6 +2,14 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const mintAutomation = require("./mint-automation");
+const {
+  defaultMintSourceStage,
+  defaultMintSourceType,
+  getMintSourceDefinition,
+  normalizeMintSourceSelection,
+  parseMintSourceConfig,
+  validateMintSourceSelection
+} = require("./mint-sources");
 
 const defaultInputValues = {
   RPC_URL: "",
@@ -9,6 +17,10 @@ const defaultInputValues = {
   PRIVATE_KEY: "",
   PRIVATE_KEYS: "",
   CHAIN_KEY: "",
+  SOURCE_TYPE: defaultMintSourceType,
+  SOURCE_TARGET: "",
+  SOURCE_STAGE: defaultMintSourceStage,
+  SOURCE_CONFIG_JSON: "",
   CONTRACT_ADDRESS: "",
   ABI_PATH: "./abi/contract.json",
   ABI_JSON: "",
@@ -590,6 +602,13 @@ function normalizeConfig(raw) {
   const abiPath = optionalString(raw, "ABI_PATH") || "./abi/contract.json";
   const pollIntervalMs = optionalInteger(raw, "POLL_INTERVAL_MS") || 1000;
   const retryWindowMs = Math.max(0, optionalInteger(raw, "RETRY_WINDOW_MS") || 0);
+  const sourceSelection = normalizeMintSourceSelection({
+    sourceType: optionalString(raw, "SOURCE_TYPE") || defaultMintSourceType,
+    sourceTarget: optionalString(raw, "SOURCE_TARGET") || "",
+    sourceStage: optionalString(raw, "SOURCE_STAGE") || defaultMintSourceStage,
+    sourceConfig: parseMintSourceConfig(raw.SOURCE_CONFIG_JSON, { fieldName: "SOURCE_CONFIG_JSON" })
+  });
+  const sourceDefinition = getMintSourceDefinition(sourceSelection.sourceType);
   const abi = loadAbi(raw, abiPath);
   const autoMintMode = optionalBoolean(raw, "AUTO_MINT_MODE", true);
   const requestedMintFunction = optionalString(raw, "MINT_FUNCTION") || "";
@@ -626,6 +645,13 @@ function normalizeConfig(raw) {
     abiPath,
     abi,
     chainKey: optionalString(raw, "CHAIN_KEY"),
+    sourceType: sourceSelection.sourceType,
+    sourceTarget: sourceSelection.sourceTarget,
+    sourceStage: sourceSelection.sourceStage,
+    sourceLabel: sourceDefinition.label,
+    sourceDescription: sourceDefinition.description,
+    sourceCapabilities: sourceDefinition.capabilities,
+    sourceConfig: sourceSelection.sourceConfig,
     autoMintMode,
     quantityPerWallet,
     mintFunctionProvided: !isBlank(raw.MINT_FUNCTION),
@@ -715,6 +741,7 @@ function normalizeConfig(raw) {
   };
 
   validateContractAddress(normalized.contractAddress);
+  validateMintSourceSelection(normalized.sourceType, normalized);
 
   if (
     normalized.autoMintMode &&

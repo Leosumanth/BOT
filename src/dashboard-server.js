@@ -11,6 +11,15 @@ const mintAutomation = require("./mint-automation");
 const { defaultInputValues, normalizeConfig, normalizeGasStrategyValue } = require("./config");
 const { createDatabase, normalizePersistentState } = require("./database");
 const {
+  buildMintSourceSummary,
+  defaultMintSourceStage,
+  defaultMintSourceType,
+  getMintSourceDefinition,
+  listMintSourceDefinitions,
+  normalizeMintSourceSelection,
+  validateMintSourceSelection
+} = require("./mint-sources");
+const {
   buildClientSettings,
   fetchAbiFromExplorer,
   normalizeDashboardSettings,
@@ -1756,6 +1765,14 @@ function buildAssistantTaskSummary(taskLike) {
     taskName: task.name || null,
     chainKey: task.chainKey || null,
     chainLabel: chainLabel(task.chainKey),
+    sourceType: task.sourceType || defaultMintSourceType,
+    sourceLabel: getMintSourceDefinition(task.sourceType || defaultMintSourceType).label,
+    sourceTarget: task.sourceTarget || "",
+    sourceStage: task.sourceStage || defaultMintSourceStage,
+    sourceSummary: buildMintSourceSummary(task.sourceType || defaultMintSourceType, {
+      target: task.sourceTarget,
+      stage: task.sourceStage
+    }),
     walletLabels: selectedWallets.map((wallet) => assistantWalletLabel(wallet)),
     rpcNames: selectedRpcNodes.map((node) => assistantRpcLabel(node)),
     usedDefaultWallet:
@@ -1988,6 +2005,12 @@ function normalizeAssistantJsonString(value, fallback = "") {
 async function buildAssistantTaskPayload(args = {}) {
   const existingTask = args.taskRef ? resolveAssistantTask(args.taskRef) : null;
   const chainKey = resolveAssistantChainKey(args.chainKey || existingTask?.chainKey || "");
+  const sourceSelection = normalizeMintSourceSelection({
+    sourceType: args.sourceType ?? existingTask?.sourceType ?? defaultMintSourceType,
+    sourceTarget: args.sourceTarget ?? existingTask?.sourceTarget ?? "",
+    sourceStage: args.sourceStage ?? existingTask?.sourceStage ?? defaultMintSourceStage,
+    sourceConfig: args.sourceConfigJson ?? existingTask?.sourceConfigJson ?? ""
+  });
   const quantityPerWallet = Math.max(
     1,
     Number(args.quantityPerWallet ?? existingTask?.quantityPerWallet ?? 1)
@@ -2060,6 +2083,8 @@ async function buildAssistantTaskPayload(args = {}) {
     }
   }
 
+  validateMintSourceSelection(sourceSelection.sourceType, sourceSelection);
+
   return {
     id: existingTask?.id,
     name: String(args.name || existingTask?.name || "").trim() || `AI Mint ${String(args.contractAddress || existingTask?.contractAddress || "").slice(0, 10)}`,
@@ -2068,6 +2093,10 @@ async function buildAssistantTaskPayload(args = {}) {
     tags: Array.isArray(args.tags) ? args.tags : existingTask?.tags || [],
     contractAddress: String(args.contractAddress || existingTask?.contractAddress || "").trim(),
     chainKey,
+    sourceType: sourceSelection.sourceType,
+    sourceTarget: sourceSelection.sourceTarget,
+    sourceStage: sourceSelection.sourceStage,
+    sourceConfigJson: sourceSelection.sourceConfigJson,
     quantityPerWallet,
     priceEth,
     abiJson,
@@ -2158,6 +2187,10 @@ function buildAssistantToolDefinitions() {
           name: { type: "string" },
           contractAddress: { type: "string" },
           chainKey: { type: "string", description: "Chain key like ethereum, base, base_sepolia, arbitrum, etc." },
+          sourceType: { type: "string", enum: ["generic_contract", "opensea", "magiceden", "custom_launchpad"] },
+          sourceTarget: { type: "string", description: "Marketplace drop URL, slug, or launch identifier when using a source adapter." },
+          sourceStage: { type: "string", enum: ["auto", "public", "allowlist", "gtd", "custom"] },
+          sourceConfigJson: { type: "string", description: "Optional JSON string for source-specific adapter config." },
           abiJson: { type: "string", description: "Full contract ABI JSON string." },
           quantityPerWallet: { type: "integer", minimum: 1 },
           priceEth: { type: "string" },
@@ -2766,6 +2799,10 @@ function defaultTaskState() {
     name: "Untitled Task",
     contractAddress: "",
     chainKey: "base_sepolia",
+    sourceType: defaultMintSourceType,
+    sourceTarget: "",
+    sourceStage: defaultMintSourceStage,
+    sourceConfigJson: "",
     quantityPerWallet: 1,
     priceEth: "",
     abiJson: "",
@@ -2861,6 +2898,12 @@ function defaultTaskState() {
 
 function sanitizeTaskInput(payload, existingTask = null) {
   const base = existingTask ? { ...existingTask } : defaultTaskState();
+  const sourceSelection = normalizeMintSourceSelection({
+    sourceType: payload.sourceType ?? base.sourceType ?? defaultMintSourceType,
+    sourceTarget: payload.sourceTarget ?? base.sourceTarget ?? "",
+    sourceStage: payload.sourceStage ?? base.sourceStage ?? defaultMintSourceStage,
+    sourceConfig: payload.sourceConfigJson ?? base.sourceConfigJson ?? ""
+  });
   const autoArm = Boolean(payload.autoArm ?? base.autoArm ?? true);
   const useSchedule = Boolean(payload.useSchedule ?? base.useSchedule ?? false);
   const waitUntilIso = String(payload.waitUntilIso ?? base.waitUntilIso ?? "").trim();
@@ -2882,11 +2925,17 @@ function sanitizeTaskInput(payload, existingTask = null) {
         ? base.mintStartDetectionConfig
         : null;
 
+  validateMintSourceSelection(sourceSelection.sourceType, sourceSelection);
+
   return {
     ...base,
     name: String(payload.name || base.name).trim() || "Untitled Task",
     contractAddress: String(payload.contractAddress || "").trim(),
     chainKey: String(payload.chainKey || base.chainKey || "base_sepolia"),
+    sourceType: sourceSelection.sourceType,
+    sourceTarget: sourceSelection.sourceTarget,
+    sourceStage: sourceSelection.sourceStage,
+    sourceConfigJson: sourceSelection.sourceConfigJson,
     quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || base.quantityPerWallet || 1)),
     priceEth: String(payload.priceEth ?? base.priceEth ?? "").trim(),
     abiJson: String(payload.abiJson || base.abiJson || "").trim(),
@@ -5691,11 +5740,21 @@ function buildTaskResponse(task) {
   const runtime = appState.taskRuntimeById?.[task.id] || null;
   const history = appState.taskHistoryByTaskId?.[task.id] || task.history || [];
   const runtimePatch = distributedTaskPatches.get(task.id) || null;
+  const sourceType = task.sourceType || defaultMintSourceType;
+  const sourceDefinition = getMintSourceDefinition(sourceType);
 
   const response = {
     ...task,
     gasStrategy: normalizeGasStrategyValue(task.gasStrategy || "normal"),
     preSignTransactions: true,
+    sourceType,
+    sourceLabel: sourceDefinition.label,
+    sourceTarget: task.sourceTarget || "",
+    sourceStage: task.sourceStage || defaultMintSourceStage,
+    sourceSummary: buildMintSourceSummary(sourceType, {
+      target: task.sourceTarget,
+      stage: task.sourceStage
+    }),
     walletIds,
     rpcNodeIds,
     walletCount: walletIds.length,
@@ -5865,6 +5924,7 @@ function buildPublicState(includeDefaults = false) {
     rpcNodes: appState.rpcNodes,
     settings: buildPublicSettings(),
     chains: appState.chains || getAvailableChains(),
+    mintSources: listMintSourceDefinitions(),
     telemetry: buildTelemetry(),
     runState: getRunState(),
     authRequired: authIsRequired()
@@ -6184,6 +6244,10 @@ async function buildConfigForTask(task) {
     ...defaultInputValues,
     RPC_URLS: rankedRpcNodes.map((node) => node.url).join("\n"),
     PRIVATE_KEYS: privateKeys.join("\n"),
+    SOURCE_TYPE: task.sourceType,
+    SOURCE_TARGET: task.sourceTarget,
+    SOURCE_STAGE: task.sourceStage,
+    SOURCE_CONFIG_JSON: task.sourceConfigJson,
     CONTRACT_ADDRESS: task.contractAddress,
     ABI_JSON: task.abiJson,
     MINT_FUNCTION: task.mintFunction,
