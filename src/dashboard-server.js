@@ -73,6 +73,11 @@ const chainlistRpcFetchTimeoutMs = Math.max(
   5_000,
   Number(process.env.CHAINLIST_RPC_FETCH_TIMEOUT_MS || 15_000)
 );
+const rpcHealthWarningLatencyMs = Math.max(120, Number(process.env.RPC_HEALTH_WARNING_MS || 180));
+const rpcHealthCriticalLatencyMs = Math.max(
+  rpcHealthWarningLatencyMs + 40,
+  Number(process.env.RPC_HEALTH_CRITICAL_MS || 320)
+);
 const explorerKeyTestAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const explorerKeyTestChainId = 1;
 const operatorAssistantModel = String(
@@ -5992,16 +5997,83 @@ function taskReadiness(task) {
   };
 }
 
+function rpcLatencyLabel(latencyMs) {
+  const normalized = Number(latencyMs);
+  return Number.isFinite(normalized) ? `${Math.round(normalized)}ms` : "Untested";
+}
+
+function rpcAlertSeverity(node) {
+  if (node?.lastHealth?.status === "error") {
+    return "critical";
+  }
+
+  if (node?.lastHealth?.status !== "healthy") {
+    return null;
+  }
+
+  const latency = Number(node?.lastHealth?.latencyMs);
+  if (!Number.isFinite(latency)) {
+    return null;
+  }
+
+  if (latency >= rpcHealthCriticalLatencyMs) {
+    return "critical";
+  }
+
+  if (latency >= rpcHealthWarningLatencyMs) {
+    return "warning";
+  }
+
+  return null;
+}
+
+function rpcAlertNodeLabel(node) {
+  return node?.name || truncateMiddle(node?.url || "RPC node", 20, 14);
+}
+
+function buildRpcHealthAlerts(rpcNodes = appState.rpcNodes) {
+  const enabledNodes = (rpcNodes || []).filter((node) => node.enabled !== false);
+  const downNodes = enabledNodes.filter((node) => node.lastHealth?.status === "error");
+  const highLatencyNodes = enabledNodes
+    .filter((node) => node.lastHealth?.status === "healthy" && rpcAlertSeverity(node))
+    .sort((left, right) => Number(right.lastHealth?.latencyMs || 0) - Number(left.lastHealth?.latencyMs || 0));
+  const alerts = [];
+
+  if (downNodes.length > 0) {
+    const rpcNames = downNodes
+      .slice(0, 3)
+      .map((node) => rpcAlertNodeLabel(node))
+      .join(", ");
+    alerts.push({
+      severity: "critical",
+      title: downNodes.length === 1 ? "RPC node down" : "Multiple RPC nodes down",
+      detail: `${rpcNames}${downNodes.length > 3 ? ` +${downNodes.length - 3} more` : ""}. Check or replace the failing endpoint${downNodes.length === 1 ? "" : "s"} before the next mint window.`
+    });
+  }
+
+  if (highLatencyNodes.length > 0) {
+    const latencyPreview = highLatencyNodes
+      .slice(0, 3)
+      .map((node) => `${rpcAlertNodeLabel(node)} (${rpcLatencyLabel(node.lastHealth?.latencyMs)})`)
+      .join(", ");
+    const hasCriticalLatency = highLatencyNodes.some((node) => rpcAlertSeverity(node) === "critical");
+    alerts.push({
+      severity: hasCriticalLatency ? "critical" : "warning",
+      title: highLatencyNodes.length === 1 ? "High-latency RPC detected" : "High-latency RPCs detected",
+      detail: `${latencyPreview}${highLatencyNodes.length > 3 ? ` +${highLatencyNodes.length - 3} more` : ""}. Avoid routing hot mints through the slow endpoint${highLatencyNodes.length === 1 ? "" : "s"}.`
+    });
+  }
+
+  return alerts;
+}
+
 function buildTelemetry() {
   const taskViews = appState.tasks.map(buildTaskResponse);
   const activeTask = findActiveTask() ? buildTaskResponse(findActiveTask()) : null;
-  const unhealthyRpcCount = appState.rpcNodes.filter(
-    (node) => node.lastHealth?.status === "error"
-  ).length;
   const currentRunState = getRunState();
   const readyTaskCount = taskViews.filter((task) => taskReadiness(task).health === "armed").length;
 
-  const alerts = [];
+  const alerts = [...buildRpcHealthAlerts(appState.rpcNodes)];
   if (appState.wallets.length === 0) {
     alerts.push({
       severity: "critical",
@@ -6014,13 +6086,6 @@ function buildTelemetry() {
       severity: "critical",
       title: "RPC mesh is empty",
       detail: "Add RPC nodes to arm task execution paths."
-    });
-  }
-  if (unhealthyRpcCount > 0) {
-    alerts.push({
-      severity: "warning",
-      title: "RPC degradation detected",
-      detail: `${unhealthyRpcCount} node${unhealthyRpcCount === 1 ? "" : "s"} reported an error on the last health check.`
     });
   }
   if (taskViews.some((task) => taskReadiness(task).health === "blocked")) {

@@ -73,6 +73,9 @@ const fallbackMintSources = [
 const walletAssetSnapshotStorageKey = "mintbot.wallet-assets.snapshots.v1";
 const walletAssetSelectedStorageKey = "mintbot.wallet-assets.selected.v1";
 const walletAssetAutoSyncIntervalMs = 2 * 60 * 1000;
+const rpcHealthWarningLatencyMs = 180;
+const rpcHealthCriticalLatencyMs = 320;
+const rpcHealthAutoPulseIntervalMs = 3 * 60 * 1000;
 
 const body = document.body;
 body.dataset.currentView = state.currentView;
@@ -170,6 +173,7 @@ const walletDeleteName = document.getElementById("wallet-delete-name");
 const walletDeleteAddress = document.getElementById("wallet-delete-address");
 const settingsForm = document.getElementById("settings-form");
 const saveSettingsButton = document.getElementById("save-settings-button");
+const testAllApiKeysButton = document.getElementById("test-all-api-keys-button");
 const explorerApiKeyInput = document.getElementById("explorer-api-key-input");
 const explorerConfigStatus = document.getElementById("explorer-config-status");
 const deleteExplorerKeyButton = document.getElementById("delete-explorer-key-button");
@@ -190,6 +194,13 @@ const openseaApiKeyInput = document.getElementById("opensea-api-key-input");
 const openseaConfigStatus = document.getElementById("opensea-config-status");
 const deleteOpenseaKeyButton = document.getElementById("delete-opensea-key-button");
 const testOpenseaKeyButton = document.getElementById("test-opensea-key-button");
+const apiKeyDraftState = {
+  explorer: { value: "", validated: false },
+  openai: { value: "", validated: false },
+  alchemy: { value: "", validated: false },
+  drpc: { value: "", validated: false },
+  opensea: { value: "", validated: false }
+};
 const accountLabel = document.getElementById("account-label");
 const accountStatus = document.getElementById("account-status");
 const globalStopButton = document.getElementById("global-stop-button");
@@ -208,6 +219,77 @@ const assistantForm = document.getElementById("assistant-form");
 const assistantInput = document.getElementById("assistant-input");
 const assistantStopButton = document.getElementById("assistant-stop-button");
 const assistantSendButton = document.getElementById("assistant-send-button");
+
+function getApiKeyDraft(name) {
+  return apiKeyDraftState[name] || { value: "", validated: false };
+}
+
+function stageApiKeyDraft(name, value, options = {}) {
+  const normalizedValue = String(value || "").trim();
+  apiKeyDraftState[name] = {
+    value: normalizedValue,
+    validated: normalizedValue ? Boolean(options.validated) : false
+  };
+}
+
+function clearApiKeyDraft(name) {
+  stageApiKeyDraft(name, "");
+}
+
+function hasApiKeyDraft(name) {
+  return Boolean(getApiKeyDraft(name).value);
+}
+
+function isApiKeyDraftValidated(name) {
+  const draft = getApiKeyDraft(name);
+  return Boolean(draft.value && draft.validated);
+}
+
+function syncApiKeyDraftFromInput(name, input) {
+  const normalizedValue = String(input?.value || "").trim();
+  if (normalizedValue) {
+    stageApiKeyDraft(name, normalizedValue, { validated: false });
+    return;
+  }
+
+  if (!isApiKeyDraftValidated(name)) {
+    clearApiKeyDraft(name);
+  }
+}
+
+function getApiKeyCandidate(name, input) {
+  const visibleValue = String(input?.value || "").trim();
+  if (visibleValue) {
+    stageApiKeyDraft(name, visibleValue, { validated: false });
+    return visibleValue;
+  }
+  return getApiKeyDraft(name).value;
+}
+
+function clearAllApiKeyDrafts() {
+  Object.keys(apiKeyDraftState).forEach((name) => clearApiKeyDraft(name));
+}
+
+function clearAllApiKeyInputs() {
+  explorerApiKeyInput.value = "";
+  openaiApiKeyInput.value = "";
+  alchemyApiKeyInput.value = "";
+  drpcApiKeyInput.value = "";
+  openseaApiKeyInput.value = "";
+}
+
+function formatLabelList(labels) {
+  if (!labels.length) {
+    return "";
+  }
+  if (labels.length === 1) {
+    return labels[0];
+  }
+  if (labels.length === 2) {
+    return `${labels[0]} and ${labels[1]}`;
+  }
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
 
 const taskModal = document.getElementById("task-modal");
 const modalTitle = document.getElementById("modal-title");
@@ -320,6 +402,9 @@ let walletAssetsRefreshAllInFlight = false;
 let walletAssetsAutoSyncInFlight = false;
 let walletAssetsAutoSyncTimer = null;
 let walletAssetsAutoSyncKickTimer = null;
+let rpcHealthAutoPulseInFlight = false;
+let rpcHealthAutoPulseTimer = null;
+let rpcHealthAutoPulseKickTimer = null;
 let walletAssetInspector = createWalletAssetInspector(
   loadPersistedSelectedWalletAssetId(),
   walletAssetSnapshots[loadPersistedSelectedWalletAssetId()] || null
@@ -959,6 +1044,20 @@ function stopWalletAssetAutoSync() {
   walletAssetsAutoSyncInFlight = false;
 }
 
+function stopRpcHealthAutoPulse() {
+  if (rpcHealthAutoPulseKickTimer) {
+    window.clearTimeout(rpcHealthAutoPulseKickTimer);
+    rpcHealthAutoPulseKickTimer = null;
+  }
+
+  if (rpcHealthAutoPulseTimer) {
+    window.clearInterval(rpcHealthAutoPulseTimer);
+    rpcHealthAutoPulseTimer = null;
+  }
+
+  rpcHealthAutoPulseInFlight = false;
+}
+
 function ensureWalletAssetAutoSync() {
   if (walletAssetsAutoSyncTimer || typeof window === "undefined") {
     return;
@@ -969,6 +1068,34 @@ function ensureWalletAssetAutoSync() {
       void refreshAllWalletBalances({ silent: true, source: "auto" });
     }
   }, walletAssetAutoSyncIntervalMs);
+}
+
+function shouldAutoSyncRpcHealth() {
+  if (!state.session.authenticated) {
+    return false;
+  }
+
+  const enabledNodes = state.rpcNodes.filter((node) => node.enabled !== false);
+  if (!enabledNodes.length) {
+    return false;
+  }
+
+  return enabledNodes.some((node) => {
+    const checkedAt = new Date(node.lastHealth?.checkedAt || 0).getTime();
+    return checkedAt <= 0 || Date.now() - checkedAt >= rpcHealthAutoPulseIntervalMs;
+  });
+}
+
+function ensureRpcHealthAutoPulse() {
+  if (rpcHealthAutoPulseTimer || typeof window === "undefined") {
+    return;
+  }
+
+  rpcHealthAutoPulseTimer = window.setInterval(() => {
+    if (shouldAutoSyncRpcHealth()) {
+      void pulseRpcMesh({ silent: true });
+    }
+  }, rpcHealthAutoPulseIntervalMs);
 }
 
 function scheduleWalletAssetAutoSync(options = {}) {
@@ -995,6 +1122,30 @@ function scheduleWalletAssetAutoSync(options = {}) {
   }, 500);
 }
 
+function scheduleRpcHealthAutoPulse(options = {}) {
+  const { immediate = false } = options;
+  if (!state.session.authenticated) {
+    stopRpcHealthAutoPulse();
+    return;
+  }
+
+  ensureRpcHealthAutoPulse();
+  if (!immediate || rpcHealthAutoPulseKickTimer || rpcHealthAutoPulseInFlight) {
+    return;
+  }
+
+  if (!shouldAutoSyncRpcHealth()) {
+    return;
+  }
+
+  rpcHealthAutoPulseKickTimer = window.setTimeout(() => {
+    rpcHealthAutoPulseKickTimer = null;
+    if (shouldAutoSyncRpcHealth()) {
+      void pulseRpcMesh({ silent: true });
+    }
+  }, 1200);
+}
+
 function setLoginStatus(message) {
   loginStatus.textContent = message;
 }
@@ -1015,6 +1166,7 @@ function setAuthState(authenticated, user = null, authRequired = true) {
 
   if (!authenticated && authRequired) {
     stopWalletAssetAutoSync();
+    stopRpcHealthAutoPulse();
     assistantState = {
       open: false,
       loading: false,
@@ -1473,12 +1625,9 @@ function setStatusPill(element, tone, label) {
 
 function deriveFallbackTelemetry() {
   const active = activeTask();
-  const unhealthyRpcCount = state.rpcNodes.filter(
-    (node) => node.lastHealth?.status === "error"
-  ).length;
   const readyTaskCount = state.tasks.filter((task) => taskReadiness(task).health === "armed").length;
 
-  const alerts = [];
+  const alerts = [...buildRpcHealthAlerts()];
   if (state.wallets.length === 0) {
     alerts.push({
       severity: "critical",
@@ -1491,13 +1640,6 @@ function deriveFallbackTelemetry() {
       severity: "critical",
       title: "RPC mesh is empty",
       detail: "Add RPC nodes to arm task execution paths."
-    });
-  }
-  if (unhealthyRpcCount > 0) {
-    alerts.push({
-      severity: "warning",
-      title: "RPC degradation detected",
-      detail: `${pluralize(unhealthyRpcCount, "RPC node")} reported an error on the last health check.`
     });
   }
   if (active) {
@@ -2223,9 +2365,9 @@ function rpcRowsMarkup(rpcNodes, selectedIds) {
   return rpcNodes
     .map((node) => {
       const checked = selectedIds.includes(node.id);
-      const healthStatus = node.lastHealth?.status || "unknown";
+      const healthStatus = rpcVisualTone(node);
       const healthText =
-        healthStatus === "healthy"
+        healthStatus === "healthy" || healthStatus === "warning"
           ? `${node.lastHealth.latencyMs}ms`
           : healthStatus === "error"
             ? "error"
@@ -2323,22 +2465,73 @@ function renderLogs() {
   logOutput.scrollTop = logOutput.scrollHeight;
 }
 
-function renderSystemAlerts(telemetry) {
-  const rpcFailures = state.rpcNodes.filter((node) => node.enabled && node.lastHealth?.status === "error");
-  const blockedTaskCount = state.tasks.filter((task) => taskReadiness(task).health === "blocked").length;
-  const alertFeed = [];
+function buildFeatureAlerts() {
+  const unavailableFeatures = [];
 
-  if (rpcFailures.length > 0) {
-    const rpcNames = rpcFailures
-      .slice(0, 3)
-      .map((node) => node.name || truncateMiddle(node.url || "RPC node", 20, 12))
-      .join(", ");
-    alertFeed.push({
-      severity: "critical",
-      title: rpcFailures.length === 1 ? "RPC node down" : "Multiple RPC nodes down",
-      detail: `${rpcNames}${rpcFailures.length > 3 ? ` +${rpcFailures.length - 3} more` : ""}. Check or replace the failing endpoint${rpcFailures.length === 1 ? "" : "s"}.`
+  if (!state.settings.openaiApiKeyConfigured) {
+    unavailableFeatures.push({
+      label: "OpenAI assistant",
+      keyLabel: "OpenAI API key"
     });
   }
+
+  if (!state.settings.explorerApiKeyConfigured) {
+    unavailableFeatures.push({
+      label: "Explorer ABI fetches",
+      keyLabel: "Etherscan API key"
+    });
+  }
+
+  if (!state.settings.alchemyApiKeyConfigured) {
+    unavailableFeatures.push({
+      label: "Alchemy RPC import",
+      keyLabel: "Alchemy API key"
+    });
+  }
+
+  if (!state.settings.drpcApiKeyConfigured) {
+    unavailableFeatures.push({
+      label: "dRPC RPC import",
+      keyLabel: "dRPC API key"
+    });
+  }
+
+  if (!state.settings.openseaApiKeyConfigured) {
+    unavailableFeatures.push({
+      label: "OpenSea discovery",
+      keyLabel: "OpenSea API key"
+    });
+  }
+
+  if (!unavailableFeatures.length) {
+    return [];
+  }
+
+  if (unavailableFeatures.length === 1) {
+    const [feature] = unavailableFeatures;
+    return [
+      {
+        severity: "warning",
+        title: `${feature.label} unavailable`,
+        detail: `Add the ${feature.keyLabel} in Settings to enable ${feature.label.toLowerCase()}.`
+      }
+    ];
+  }
+
+  return [
+    {
+      severity: "warning",
+      title: "Features unavailable",
+      detail: `Configure the missing keys in Settings to enable ${formatLabelList(
+        unavailableFeatures.map((feature) => feature.label)
+      )}.`
+    }
+  ];
+}
+
+function buildSystemAlerts(telemetry) {
+  const blockedTaskCount = state.tasks.filter((task) => taskReadiness(task).health === "blocked").length;
+  const alertFeed = [...buildFeatureAlerts(), ...buildRpcHealthAlerts()];
 
   if (blockedTaskCount > 0) {
     alertFeed.push({
@@ -2356,6 +2549,12 @@ function renderSystemAlerts(telemetry) {
       alertFeed.push(alert);
     }
   });
+
+  return alertFeed;
+}
+
+function renderSystemAlerts(telemetry) {
+  const alertFeed = buildSystemAlerts(telemetry);
 
   systemAlerts.innerHTML = alertFeed.length
     ? alertFeed
@@ -2456,19 +2655,19 @@ function renderDashboardRunHistory() {
 
 function renderDashboard() {
   const telemetry = telemetryView();
+  const activeAlerts = buildSystemAlerts(telemetry);
+  const hasActionableAlert = activeAlerts.some((alert) => ["critical", "warning"].includes(alert.severity));
   renderSystemAlerts(telemetry);
   renderDashboardRunHistory();
 
-  if (state.runState.status === "running") {
+  if (hasActionableAlert) {
+    setStatusPill(dashboardHealthPill, "failed", "Needs Attention");
+  } else if (state.runState.status === "running") {
     setStatusPill(dashboardHealthPill, "running", "Live Run");
   } else if ((state.runState.queuedTaskIds || []).length > 0) {
     setStatusPill(dashboardHealthPill, "queued", "Queue Armed");
-  } else if ((telemetry.alerts || []).some((alert) => alert.severity === "critical")) {
-    setStatusPill(dashboardHealthPill, "failed", "Action Needed");
-  } else if ((telemetry.readyTaskCount || 0) > 0) {
-    setStatusPill(dashboardHealthPill, "completed", "Armed");
   } else {
-    setStatusPill(dashboardHealthPill, "", "Standby");
+    setStatusPill(dashboardHealthPill, "healthy", (telemetry.readyTaskCount || 0) > 0 ? "Armed" : "Healthy");
   }
 }
 
@@ -3142,6 +3341,10 @@ function rpcHealthMarkup(node) {
   }
 
   if (node.lastHealth.status === "healthy") {
+    if (rpcHealthAlertSeverity(node)) {
+      return `<span class="rpc-chip warning">Slow · ${node.lastHealth.latencyMs}ms</span>`;
+    }
+
     return `<span class="rpc-chip healthy">Healthy · ${node.lastHealth.latencyMs}ms</span>`;
   }
 
@@ -3158,6 +3361,10 @@ function rpcHealthDetail(node) {
       node.lastHealth.blockNumber !== undefined && node.lastHealth.blockNumber !== null
         ? `Latest block ${node.lastHealth.blockNumber}.`
         : "Live block data received.";
+    if (rpcHealthAlertSeverity(node)) {
+      return `${blockLabel} Last verified ${relativeTime(node.lastHealth.checkedAt)}. Latency is above the mint-safe target.`;
+    }
+
     return `${blockLabel} Last verified ${relativeTime(node.lastHealth.checkedAt)}.`;
   }
 
@@ -3439,7 +3646,7 @@ function renderRpcDiscoveryCandidates() {
       const providerLabel = String(candidate.group || rpcDiscoveryState.summary?.sourceLabel || rpcDiscoveryState.providerLabel || "").trim();
 
       return `
-        <label class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""}">
+        <label class="rpc-candidate-card ${escapeHtml(rpcVisualTone(candidate))} ${isSelected ? "selected" : ""}">
           <div class="rpc-candidate-head">
             <div class="rpc-candidate-select">
               <input
@@ -3983,7 +4190,7 @@ function renderRpcChainlistCandidates() {
 
       return `
         <button
-          class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""}"
+          class="rpc-candidate-card ${escapeHtml(rpcVisualTone(candidate))} ${isSelected ? "selected" : ""}"
           type="button"
           data-rpc-chainlist-select="${escapeHtml(candidate.url)}"
           ${isHealthy ? "" : "disabled"}
@@ -4313,6 +4520,83 @@ function isSocketRpcUrl(url) {
 function rpcLatencyValue(node) {
   const latency = Number(node?.lastHealth?.latencyMs);
   return Number.isFinite(latency) ? latency : Infinity;
+}
+
+function rpcHealthAlertSeverity(node) {
+  if (node?.lastHealth?.status === "error") {
+    return "critical";
+  }
+
+  if (node?.lastHealth?.status !== "healthy") {
+    return null;
+  }
+
+  const latency = rpcLatencyValue(node);
+  if (!Number.isFinite(latency)) {
+    return null;
+  }
+
+  if (latency >= rpcHealthCriticalLatencyMs) {
+    return "critical";
+  }
+
+  if (latency >= rpcHealthWarningLatencyMs) {
+    return "warning";
+  }
+
+  return null;
+}
+
+function rpcAlertNodeLabel(node) {
+  return node?.name || truncateMiddle(node?.url || "RPC node", 20, 12);
+}
+
+function buildRpcHealthAlerts(rpcNodes = state.rpcNodes) {
+  const enabledNodes = (rpcNodes || []).filter((node) => node.enabled !== false);
+  const downNodes = enabledNodes.filter((node) => node.lastHealth?.status === "error");
+  const highLatencyNodes = enabledNodes
+    .filter((node) => node.lastHealth?.status === "healthy" && rpcHealthAlertSeverity(node))
+    .sort((left, right) => rpcLatencyValue(right) - rpcLatencyValue(left));
+  const alerts = [];
+
+  if (downNodes.length > 0) {
+    const rpcNames = downNodes
+      .slice(0, 3)
+      .map((node) => rpcAlertNodeLabel(node))
+      .join(", ");
+    alerts.push({
+      severity: "critical",
+      title: downNodes.length === 1 ? "RPC node down" : "Multiple RPC nodes down",
+      detail: `${rpcNames}${downNodes.length > 3 ? ` +${downNodes.length - 3} more` : ""}. Check or replace the failing endpoint${downNodes.length === 1 ? "" : "s"} before the next mint window.`
+    });
+  }
+
+  if (highLatencyNodes.length > 0) {
+    const latencyPreview = highLatencyNodes
+      .slice(0, 3)
+      .map((node) => `${rpcAlertNodeLabel(node)} (${formatLatencyLabel(node.lastHealth?.latencyMs)})`)
+      .join(", ");
+    const hasCriticalLatency = highLatencyNodes.some((node) => rpcHealthAlertSeverity(node) === "critical");
+    alerts.push({
+      severity: hasCriticalLatency ? "critical" : "warning",
+      title: highLatencyNodes.length === 1 ? "High-latency RPC detected" : "High-latency RPCs detected",
+      detail: `${latencyPreview}${highLatencyNodes.length > 3 ? ` +${highLatencyNodes.length - 3} more` : ""}. Avoid routing hot mints through the slow endpoint${highLatencyNodes.length === 1 ? "" : "s"}.`
+    });
+  }
+
+  return alerts;
+}
+
+function rpcVisualTone(node) {
+  if (node?.lastHealth?.status === "error") {
+    return "error";
+  }
+
+  if (node?.lastHealth?.status === "healthy" && rpcHealthAlertSeverity(node)) {
+    return "warning";
+  }
+
+  return node?.lastHealth?.status || "untested";
 }
 
 function rpcStatusRank(node) {
@@ -4737,14 +5021,31 @@ function renderRpcChainCommandGrid(groups = buildRpcChainGroups()) {
     .join("");
 }
 
-async function pulseRpcMesh() {
-  const payload = await request("/api/control/test-rpc-pool", { method: "POST" });
-  const summary = payload.summary || {};
-  showToast(
-    `${summary.healthy || 0} healthy · ${summary.error || 0} error · ${summary.total || 0} total`,
-    "success",
-    "RPC Mesh Pulse"
-  );
+async function pulseRpcMesh(options = {}) {
+  const { silent = false } = options;
+  if (rpcHealthAutoPulseInFlight) {
+    return null;
+  }
+
+  rpcHealthAutoPulseInFlight = true;
+  try {
+    const payload = await request("/api/control/test-rpc-pool", {
+      method: "POST",
+      quiet: silent
+    });
+    const summary = payload.summary || {};
+    if (!silent) {
+      showToast(
+        `${summary.healthy || 0} healthy · ${summary.error || 0} error · ${summary.total || 0} total`,
+        "success",
+        "RPC Refreshed"
+      );
+    }
+    return payload;
+  } finally {
+    rpcHealthAutoPulseInFlight = false;
+  }
+
 }
 
 function currentRpcImportRequestPayload() {
@@ -4857,7 +5158,7 @@ function renderRpcNodes() {
                   const transportLabel = isSocketRpcUrl(node.url) ? "WebSocket" : "HTTPS";
 
                   return `
-                    <article class="rpc-node-card ${escapeHtml(node.lastHealth?.status || "untested")}">
+                    <article class="rpc-node-card ${escapeHtml(rpcVisualTone(node))}">
                       <div class="rpc-node-top">
                         <div class="rpc-node-copy">
                           <div class="rpc-node-title-row">
@@ -4975,7 +5276,7 @@ function renderRpcNodes() {
   });
 }
 
-function setApiKeyStatus({ input, statusNode, source, message = null }) {
+function setApiKeyStatus({ input, statusNode, source, message = null, pendingValue = "", pendingValidated = false }) {
   let status = "empty";
   let text = "Not configured";
 
@@ -4993,6 +5294,9 @@ function setApiKeyStatus({ input, statusNode, source, message = null }) {
   } else if (input.value.trim()) {
     text = "New key ready to test or save";
     status = "draft";
+  } else if (pendingValue) {
+    text = pendingValidated ? "Verified key hidden until you save" : "Pending key hidden until you test it";
+    status = "draft";
   } else if (source === "saved") {
     text = "Saved key available";
     status = "saved";
@@ -5005,7 +5309,27 @@ function setApiKeyStatus({ input, statusNode, source, message = null }) {
   statusNode.dataset.status = status;
 }
 
-function syncApiKeyControls({ input, deleteButton, source, placeholders, deleteLabel }) {
+function syncApiKeyControls({
+  input,
+  deleteButton,
+  source,
+  placeholders,
+  deleteLabel,
+  pendingValue = "",
+  pendingValidated = false
+}) {
+  if (pendingValue) {
+    input.placeholder = pendingValidated
+      ? "Verified key hidden until you save settings."
+      : "Pending key hidden. Test it before saving.";
+    deleteButton.disabled = false;
+    deleteButton.textContent = "Clear Pending Key";
+    deleteButton.title = pendingValidated
+      ? "Discard the verified key before saving settings"
+      : "Discard the pending key before saving settings";
+    return;
+  }
+
   if (source === "saved") {
     input.placeholder = placeholders.saved;
   } else if (source === "env") {
@@ -5014,6 +5338,7 @@ function syncApiKeyControls({ input, deleteButton, source, placeholders, deleteL
     input.placeholder = placeholders.empty;
   }
 
+  deleteButton.textContent = "Delete Saved Key";
   deleteButton.disabled = source !== "saved";
   deleteButton.title = source === "saved" ? deleteLabel : "Only saved dashboard keys can be deleted here";
 }
@@ -5023,7 +5348,9 @@ function setExplorerKeyStatus(message = null) {
     input: explorerApiKeyInput,
     statusNode: explorerConfigStatus,
     source: state.settings.explorerApiKeySource,
-    message
+    message,
+    pendingValue: getApiKeyDraft("explorer").value,
+    pendingValidated: isApiKeyDraftValidated("explorer")
   });
 }
 
@@ -5037,7 +5364,9 @@ function syncExplorerKeyControls() {
       env: "Loaded from .env. Enter a new key to override it.",
       empty: "Etherscan V2 API key"
     },
-    deleteLabel: "Delete the saved explorer API key"
+    deleteLabel: "Delete the saved explorer API key",
+    pendingValue: getApiKeyDraft("explorer").value,
+    pendingValidated: isApiKeyDraftValidated("explorer")
   });
 }
 
@@ -5046,7 +5375,9 @@ function setOpenaiKeyStatus(message = null) {
     input: openaiApiKeyInput,
     statusNode: openaiConfigStatus,
     source: state.settings.openaiApiKeySource,
-    message
+    message,
+    pendingValue: getApiKeyDraft("openai").value,
+    pendingValidated: isApiKeyDraftValidated("openai")
   });
 }
 
@@ -5060,7 +5391,9 @@ function syncOpenaiKeyControls() {
       env: "Loaded from .env. Enter a new key to override it.",
       empty: "OpenAI API key"
     },
-    deleteLabel: "Delete the saved OpenAI API key"
+    deleteLabel: "Delete the saved OpenAI API key",
+    pendingValue: getApiKeyDraft("openai").value,
+    pendingValidated: isApiKeyDraftValidated("openai")
   });
 }
 
@@ -5069,7 +5402,9 @@ function setAlchemyKeyStatus(message = null) {
     input: alchemyApiKeyInput,
     statusNode: alchemyConfigStatus,
     source: state.settings.alchemyApiKeySource,
-    message
+    message,
+    pendingValue: getApiKeyDraft("alchemy").value,
+    pendingValidated: isApiKeyDraftValidated("alchemy")
   });
 }
 
@@ -5083,7 +5418,9 @@ function syncAlchemyKeyControls() {
       env: "Loaded from .env. Enter a new key to override it.",
       empty: "Alchemy API key"
     },
-    deleteLabel: "Delete the saved Alchemy API key"
+    deleteLabel: "Delete the saved Alchemy API key",
+    pendingValue: getApiKeyDraft("alchemy").value,
+    pendingValidated: isApiKeyDraftValidated("alchemy")
   });
 }
 
@@ -5092,7 +5429,9 @@ function setDrpcKeyStatus(message = null) {
     input: drpcApiKeyInput,
     statusNode: drpcConfigStatus,
     source: state.settings.drpcApiKeySource,
-    message
+    message,
+    pendingValue: getApiKeyDraft("drpc").value,
+    pendingValidated: isApiKeyDraftValidated("drpc")
   });
 }
 
@@ -5106,7 +5445,9 @@ function syncDrpcKeyControls() {
       env: "Loaded from .env. Enter a new key to override it.",
       empty: "dRPC API key"
     },
-    deleteLabel: "Delete the saved dRPC API key"
+    deleteLabel: "Delete the saved dRPC API key",
+    pendingValue: getApiKeyDraft("drpc").value,
+    pendingValidated: isApiKeyDraftValidated("drpc")
   });
 }
 
@@ -5115,7 +5456,9 @@ function setOpenseaKeyStatus(message = null) {
     input: openseaApiKeyInput,
     statusNode: openseaConfigStatus,
     source: state.settings.openseaApiKeySource,
-    message
+    message,
+    pendingValue: getApiKeyDraft("opensea").value,
+    pendingValidated: isApiKeyDraftValidated("opensea")
   });
 }
 
@@ -5129,8 +5472,145 @@ function syncOpenseaKeyControls() {
       env: "Loaded from .env. Enter a new key to override it.",
       empty: "OpenSea API key"
     },
-    deleteLabel: "Delete the saved OpenSea API key"
+    deleteLabel: "Delete the saved OpenSea API key",
+    pendingValue: getApiKeyDraft("opensea").value,
+    pendingValidated: isApiKeyDraftValidated("opensea")
   });
+}
+
+function collectApiKeySaveEntries() {
+  return [
+    {
+      draftKey: "explorer",
+      label: "Explorer",
+      payloadField: "explorerApiKey",
+      value: getApiKeyCandidate("explorer", explorerApiKeyInput)
+    },
+    {
+      draftKey: "openai",
+      label: "OpenAI",
+      payloadField: "openaiApiKey",
+      value: getApiKeyCandidate("openai", openaiApiKeyInput)
+    },
+    {
+      draftKey: "alchemy",
+      label: "Alchemy",
+      payloadField: "alchemyApiKey",
+      value: getApiKeyCandidate("alchemy", alchemyApiKeyInput)
+    },
+    {
+      draftKey: "drpc",
+      label: "dRPC",
+      payloadField: "drpcApiKey",
+      value: getApiKeyCandidate("drpc", drpcApiKeyInput)
+    },
+    {
+      draftKey: "opensea",
+      label: "OpenSea",
+      payloadField: "openseaApiKey",
+      value: getApiKeyCandidate("opensea", openseaApiKeyInput)
+    }
+  ]
+    .filter((entry) => entry.value)
+    .map((entry) => ({
+      ...entry,
+      validated: isApiKeyDraftValidated(entry.draftKey)
+    }));
+}
+
+async function runApiKeyTest({
+  draftKey,
+  label,
+  input,
+  button,
+  payloadField,
+  endpoint,
+  configured,
+  statusSetter,
+  syncControls,
+  requiredTitle,
+  requiredMessage
+}, options = {}) {
+  const { summaryMode = false } = options;
+  const buttonLabel = button.textContent;
+  const apiKeyValue = getApiKeyCandidate(draftKey, input);
+  const usingDraft = Boolean(apiKeyValue);
+
+  if (!apiKeyValue && !configured()) {
+    statusSetter("No key to test");
+    syncControls();
+    if (!summaryMode) {
+      showToast(requiredMessage, "info", requiredTitle);
+    }
+    return { tested: false, skipped: true, success: false };
+  }
+
+  button.disabled = true;
+  button.textContent = "Testing...";
+
+  if (usingDraft) {
+    input.value = "";
+    syncControls();
+    statusSetter();
+  }
+
+  try {
+    const payload = await request(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        [payloadField]: apiKeyValue
+      }),
+      quiet: summaryMode
+    });
+
+    if (usingDraft) {
+      stageApiKeyDraft(draftKey, apiKeyValue, { validated: true });
+    }
+
+    syncControls();
+    statusSetter(
+      usingDraft
+        ? null
+        : payload.source === "env"
+          ? "Environment key verified"
+          : "Saved key verified"
+    );
+
+    if (!summaryMode) {
+      showToast(
+        usingDraft
+          ? `${label} API key is valid. The field was cleared for safety, and the key is staged until you save settings.`
+          : payload.source === "env"
+            ? `Environment ${label} API key is valid. Save a new key if you want to override it in the dashboard.`
+            : `Saved ${label} API key is valid.`,
+        "success",
+        `${label} Key Valid`
+      );
+    }
+
+    return { tested: true, skipped: false, success: true };
+  } catch {
+    if (usingDraft) {
+      clearApiKeyDraft(draftKey);
+      input.value = "";
+    }
+
+    syncControls();
+    statusSetter(usingDraft ? "Key test failed. Enter it again" : "Key test failed");
+    return { tested: true, skipped: false, success: false };
+  } finally {
+    button.disabled = false;
+    button.textContent = buttonLabel;
+  }
+}
+
+function clearPendingApiKeyUi({ draftKey, input, label, syncControls, statusSetter }) {
+  clearApiKeyDraft(draftKey);
+  input.value = "";
+  syncControls();
+  statusSetter();
+  showToast(`Pending ${label} API key cleared.`, "info", "Pending Key Cleared");
 }
 
 function withButtonBusyState(button, busyLabel, work) {
@@ -5151,11 +5631,7 @@ function withButtonBusyState(button, busyLabel, work) {
 }
 
 function renderSettings() {
-  explorerApiKeyInput.value = "";
-  openaiApiKeyInput.value = "";
-  alchemyApiKeyInput.value = "";
-  drpcApiKeyInput.value = "";
-  openseaApiKeyInput.value = "";
+  clearAllApiKeyInputs();
 
   syncExplorerKeyControls();
   setExplorerKeyStatus();
@@ -5207,9 +5683,10 @@ function renderResultsIfAvailable() {
 
 function renderShellTelemetry() {
   const telemetry = telemetryView();
+  const activeAlerts = buildSystemAlerts(telemetry);
   const active = activeTask();
   const activeTaskCount = activeTaskIds().length;
-  const hasCriticalAlert = (telemetry.alerts || []).some((alert) => alert.severity === "critical");
+  const hasActionableAlert = activeAlerts.some((alert) => ["critical", "warning"].includes(alert.severity));
 
   body.dataset.runState = state.runState.status;
   if (accountLabel) {
@@ -5235,17 +5712,17 @@ function renderShellTelemetry() {
   heroModeCopy.textContent = heroMessage;
   heroModeCopy.classList.toggle("hidden", !heroMessage);
 
-  if (state.runState.status === "running") {
+  if (hasActionableAlert) {
+    sidebarModeLabel.textContent = "Needs Attention";
+    sidebarModeDot.className = "signal-dot alert";
+  } else if (state.runState.status === "running") {
     sidebarModeLabel.textContent = activeTaskCount > 1 ? "Live Runs" : "Live Run";
     sidebarModeDot.className = "signal-dot hot";
   } else if ((state.runState.queuedTaskIds || []).length > 0) {
     sidebarModeLabel.textContent = "Queued";
-    sidebarModeDot.className = "signal-dot alert";
-  } else if (hasCriticalAlert) {
-    sidebarModeLabel.textContent = "Alert";
-    sidebarModeDot.className = "signal-dot alert";
+    sidebarModeDot.className = "signal-dot hot";
   } else {
-    sidebarModeLabel.textContent = (telemetry.readyTaskCount || 0) > 0 ? "Armed" : "Standby";
+    sidebarModeLabel.textContent = (telemetry.readyTaskCount || 0) > 0 ? "Armed" : "Healthy";
     sidebarModeDot.className = "signal-dot";
   }
 
@@ -5282,6 +5759,7 @@ function applyAppState(payload) {
 
   renderAll();
   scheduleWalletAssetAutoSync({ immediate: true });
+  scheduleRpcHealthAutoPulse({ immediate: true });
 }
 
 function ensureChainOption(chain) {
@@ -6819,59 +7297,52 @@ if (rpcTransportTabs) {
 
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const explorerApiKeyValue = explorerApiKeyInput.value.trim();
-  const openaiApiKeyValue = openaiApiKeyInput.value.trim();
-  const alchemyApiKeyValue = alchemyApiKeyInput.value.trim();
-  const drpcApiKeyValue = drpcApiKeyInput.value.trim();
-  const openseaApiKeyValue = openseaApiKeyInput.value.trim();
+  const apiKeyEntries = collectApiKeySaveEntries();
 
-  if (!explorerApiKeyValue && !openaiApiKeyValue && !alchemyApiKeyValue && !drpcApiKeyValue && !openseaApiKeyValue) {
+  if (!apiKeyEntries.length) {
     showToast("Enter a new API key before saving settings.", "info", "No Changes");
     return;
   }
 
-  const updatedKeys = [];
-  if (explorerApiKeyValue) {
-    updatedKeys.push("Explorer");
+  const unverifiedEntries = apiKeyEntries.filter((entry) => !entry.validated);
+  if (unverifiedEntries.length) {
+    showToast(
+      `Test ${formatLabelList(unverifiedEntries.map((entry) => entry.label))} before saving settings.`,
+      "info",
+      "Test Keys First"
+    );
+    return;
   }
-  if (openaiApiKeyValue) {
-    updatedKeys.push("OpenAI");
-  }
-  if (alchemyApiKeyValue) {
-    updatedKeys.push("Alchemy");
-  }
-  if (drpcApiKeyValue) {
-    updatedKeys.push("dRPC");
-  }
-  if (openseaApiKeyValue) {
-    updatedKeys.push("OpenSea");
+
+  const updatedKeys = apiKeyEntries.map((entry) => entry.label);
+  const confirmationCopy = `Save ${formatLabelList(updatedKeys)} API ${
+    updatedKeys.length === 1 ? "key" : "keys"
+  } now?`;
+  if (!window.confirm(confirmationCopy)) {
+    return;
   }
 
   const saveButton = saveSettingsButton || settingsForm.querySelector('button[type="submit"]');
 
   try {
     await withButtonBusyState(saveButton, "Saving...", async () => {
+      const payloadBody = {};
+      apiKeyEntries.forEach((entry) => {
+        payloadBody[entry.payloadField] = entry.value;
+      });
+
       const payload = await request("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          explorerApiKey: explorerApiKeyValue,
-          openaiApiKey: openaiApiKeyValue,
-          alchemyApiKey: alchemyApiKeyValue,
-          drpcApiKey: drpcApiKeyValue,
-          openseaApiKey: openseaApiKeyValue
-        })
+        body: JSON.stringify(payloadBody)
       });
       if (payload.settings) {
         state.settings = payload.settings;
       }
-      explorerApiKeyInput.value = "";
-      openaiApiKeyInput.value = "";
-      alchemyApiKeyInput.value = "";
-      drpcApiKeyInput.value = "";
-      openseaApiKeyInput.value = "";
+      clearAllApiKeyDrafts();
+      clearAllApiKeyInputs();
       showToast(
-        `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`,
+        `${formatLabelList(updatedKeys)} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`,
         "success",
         "Settings Saved"
       );
@@ -6881,38 +7352,67 @@ settingsForm.addEventListener("submit", async (event) => {
       setOpenaiKeyStatus();
       syncAlchemyKeyControls();
       setAlchemyKeyStatus();
+      syncDrpcKeyControls();
+      setDrpcKeyStatus();
       syncOpenseaKeyControls();
       setOpenseaKeyStatus();
     });
   } catch {} finally {
     syncExplorerKeyControls();
+    setExplorerKeyStatus();
     syncOpenaiKeyControls();
+    setOpenaiKeyStatus();
     syncAlchemyKeyControls();
+    setAlchemyKeyStatus();
+    syncDrpcKeyControls();
+    setDrpcKeyStatus();
     syncOpenseaKeyControls();
+    setOpenseaKeyStatus();
   }
 });
 
 explorerApiKeyInput.addEventListener("input", () => {
+  syncApiKeyDraftFromInput("explorer", explorerApiKeyInput);
+  syncExplorerKeyControls();
   setExplorerKeyStatus();
 });
 
 openaiApiKeyInput.addEventListener("input", () => {
+  syncApiKeyDraftFromInput("openai", openaiApiKeyInput);
+  syncOpenaiKeyControls();
   setOpenaiKeyStatus();
 });
 
 alchemyApiKeyInput.addEventListener("input", () => {
+  syncApiKeyDraftFromInput("alchemy", alchemyApiKeyInput);
+  syncAlchemyKeyControls();
   setAlchemyKeyStatus();
 });
 
 drpcApiKeyInput.addEventListener("input", () => {
+  syncApiKeyDraftFromInput("drpc", drpcApiKeyInput);
+  syncDrpcKeyControls();
   setDrpcKeyStatus();
 });
 
 openseaApiKeyInput.addEventListener("input", () => {
+  syncApiKeyDraftFromInput("opensea", openseaApiKeyInput);
+  syncOpenseaKeyControls();
   setOpenseaKeyStatus();
 });
 
 deleteExplorerKeyButton.addEventListener("click", async () => {
+  if (hasApiKeyDraft("explorer")) {
+    clearPendingApiKeyUi({
+      draftKey: "explorer",
+      input: explorerApiKeyInput,
+      label: "Explorer",
+      syncControls: syncExplorerKeyControls,
+      statusSetter: setExplorerKeyStatus
+    });
+    return;
+  }
+
   if (state.settings.explorerApiKeySource !== "saved") {
     showToast("There is no saved dashboard key to delete.", "info", "No Saved Key");
     return;
@@ -6949,6 +7449,17 @@ deleteExplorerKeyButton.addEventListener("click", async () => {
 });
 
 deleteOpenaiKeyButton.addEventListener("click", async () => {
+  if (hasApiKeyDraft("openai")) {
+    clearPendingApiKeyUi({
+      draftKey: "openai",
+      input: openaiApiKeyInput,
+      label: "OpenAI",
+      syncControls: syncOpenaiKeyControls,
+      statusSetter: setOpenaiKeyStatus
+    });
+    return;
+  }
+
   if (state.settings.openaiApiKeySource !== "saved") {
     showToast("There is no saved OpenAI dashboard key to delete.", "info", "No Saved Key");
     return;
@@ -6985,6 +7496,17 @@ deleteOpenaiKeyButton.addEventListener("click", async () => {
 });
 
 deleteAlchemyKeyButton.addEventListener("click", async () => {
+  if (hasApiKeyDraft("alchemy")) {
+    clearPendingApiKeyUi({
+      draftKey: "alchemy",
+      input: alchemyApiKeyInput,
+      label: "Alchemy",
+      syncControls: syncAlchemyKeyControls,
+      statusSetter: setAlchemyKeyStatus
+    });
+    return;
+  }
+
   if (state.settings.alchemyApiKeySource !== "saved") {
     showToast("There is no saved Alchemy dashboard key to delete.", "info", "No Saved Key");
     return;
@@ -7021,6 +7543,17 @@ deleteAlchemyKeyButton.addEventListener("click", async () => {
 });
 
 deleteDrpcKeyButton.addEventListener("click", async () => {
+  if (hasApiKeyDraft("drpc")) {
+    clearPendingApiKeyUi({
+      draftKey: "drpc",
+      input: drpcApiKeyInput,
+      label: "dRPC",
+      syncControls: syncDrpcKeyControls,
+      statusSetter: setDrpcKeyStatus
+    });
+    return;
+  }
+
   if (state.settings.drpcApiKeySource !== "saved") {
     showToast("There is no saved dRPC dashboard key to delete.", "info", "No Saved Key");
     return;
@@ -7057,6 +7590,17 @@ deleteDrpcKeyButton.addEventListener("click", async () => {
 });
 
 deleteOpenseaKeyButton.addEventListener("click", async () => {
+  if (hasApiKeyDraft("opensea")) {
+    clearPendingApiKeyUi({
+      draftKey: "opensea",
+      input: openseaApiKeyInput,
+      label: "OpenSea",
+      syncControls: syncOpenseaKeyControls,
+      statusSetter: setOpenseaKeyStatus
+    });
+    return;
+  }
+
   if (state.settings.openseaApiKeySource !== "saved") {
     showToast("There is no saved OpenSea dashboard key to delete.", "info", "No Saved Key");
     return;
@@ -7093,233 +7637,179 @@ deleteOpenseaKeyButton.addEventListener("click", async () => {
 });
 
 testExplorerKeyButton.addEventListener("click", async () => {
-  const buttonLabel = testExplorerKeyButton.textContent;
-  const explorerApiKeyValue = explorerApiKeyInput.value.trim();
-
-  if (!explorerApiKeyValue && !state.settings.explorerApiKeyConfigured) {
-    setExplorerKeyStatus("No key to test");
-    showToast("Paste an explorer key first, or save one before testing.", "info", "Explorer Key Required");
-    return;
-  }
-
-  testExplorerKeyButton.disabled = true;
-  testExplorerKeyButton.textContent = "Testing...";
-
-  try {
-    const payload = await request("/api/control/test-explorer-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        explorerApiKey: explorerApiKeyValue
-      })
-    });
-
-    const statusMessage =
-      payload.source === "input"
-        ? "Typed key verified"
-        : payload.source === "env"
-          ? "Environment key verified"
-          : "Saved key verified";
-    setExplorerKeyStatus(statusMessage);
-    showToast(
-      payload.source === "input"
-        ? "Explorer API key is valid. Save settings to replace the current key."
-        : payload.source === "env"
-          ? "Environment explorer API key is valid. Save a new key if you want to override it in the dashboard."
-          : "Saved explorer API key is valid.",
-      "success",
-      "Explorer Key Valid"
-    );
-  } catch {
-    setExplorerKeyStatus("Key test failed");
-  } finally {
-    testExplorerKeyButton.disabled = false;
-    testExplorerKeyButton.textContent = buttonLabel;
-  }
+  await runApiKeyTest({
+    draftKey: "explorer",
+    label: "Explorer",
+    input: explorerApiKeyInput,
+    button: testExplorerKeyButton,
+    payloadField: "explorerApiKey",
+    endpoint: "/api/control/test-explorer-key",
+    configured: () => state.settings.explorerApiKeyConfigured,
+    statusSetter: setExplorerKeyStatus,
+    syncControls: syncExplorerKeyControls,
+    requiredTitle: "Explorer Key Required",
+    requiredMessage: "Paste an explorer key first, or save one before testing."
+  });
 });
 
 testOpenaiKeyButton.addEventListener("click", async () => {
-  const buttonLabel = testOpenaiKeyButton.textContent;
-  const openaiApiKeyValue = openaiApiKeyInput.value.trim();
-
-  if (!openaiApiKeyValue && !state.settings.openaiApiKeyConfigured) {
-    setOpenaiKeyStatus("No key to test");
-    showToast("Paste an OpenAI key first, or save one before testing.", "info", "OpenAI Key Required");
-    return;
-  }
-
-  testOpenaiKeyButton.disabled = true;
-  testOpenaiKeyButton.textContent = "Testing...";
-
-  try {
-    const payload = await request("/api/control/test-openai-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        openaiApiKey: openaiApiKeyValue
-      })
-    });
-
-    const statusMessage =
-      payload.source === "input"
-        ? "Typed key verified"
-        : payload.source === "env"
-          ? "Environment key verified"
-          : "Saved key verified";
-    setOpenaiKeyStatus(statusMessage);
-    showToast(
-      payload.source === "input"
-        ? "OpenAI API key is valid. Save settings to replace the current key."
-        : payload.source === "env"
-          ? "Environment OpenAI API key is valid. Save a new key if you want to override it in the dashboard."
-          : "Saved OpenAI API key is valid.",
-      "success",
-      "OpenAI Key Valid"
-    );
-  } catch {
-    setOpenaiKeyStatus("Key test failed");
-  } finally {
-    testOpenaiKeyButton.disabled = false;
-    testOpenaiKeyButton.textContent = buttonLabel;
-  }
+  await runApiKeyTest({
+    draftKey: "openai",
+    label: "OpenAI",
+    input: openaiApiKeyInput,
+    button: testOpenaiKeyButton,
+    payloadField: "openaiApiKey",
+    endpoint: "/api/control/test-openai-key",
+    configured: () => state.settings.openaiApiKeyConfigured,
+    statusSetter: setOpenaiKeyStatus,
+    syncControls: syncOpenaiKeyControls,
+    requiredTitle: "OpenAI Key Required",
+    requiredMessage: "Paste an OpenAI key first, or save one before testing."
+  });
 });
 
 testAlchemyKeyButton.addEventListener("click", async () => {
-  const buttonLabel = testAlchemyKeyButton.textContent;
-  const alchemyApiKeyValue = alchemyApiKeyInput.value.trim();
-
-  if (!alchemyApiKeyValue && !state.settings.alchemyApiKeyConfigured) {
-    setAlchemyKeyStatus("No key to test");
-    showToast("Paste an Alchemy key first, or save one before testing.", "info", "Alchemy Key Required");
-    return;
-  }
-
-  testAlchemyKeyButton.disabled = true;
-  testAlchemyKeyButton.textContent = "Testing...";
-
-  try {
-    const payload = await request("/api/control/test-alchemy-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        alchemyApiKey: alchemyApiKeyValue
-      })
-    });
-
-    const statusMessage =
-      payload.source === "input"
-        ? "Typed key verified"
-        : payload.source === "env"
-          ? "Environment key verified"
-          : "Saved key verified";
-    setAlchemyKeyStatus(statusMessage);
-    showToast(
-      payload.source === "input"
-        ? "Alchemy API key is valid. Save settings to replace the current key."
-        : payload.source === "env"
-          ? "Environment Alchemy API key is valid. Save a new key if you want to override it in the dashboard."
-          : "Saved Alchemy API key is valid.",
-      "success",
-      "Alchemy Key Valid"
-    );
-  } catch {
-    setAlchemyKeyStatus("Key test failed");
-  } finally {
-    testAlchemyKeyButton.disabled = false;
-    testAlchemyKeyButton.textContent = buttonLabel;
-  }
+  await runApiKeyTest({
+    draftKey: "alchemy",
+    label: "Alchemy",
+    input: alchemyApiKeyInput,
+    button: testAlchemyKeyButton,
+    payloadField: "alchemyApiKey",
+    endpoint: "/api/control/test-alchemy-key",
+    configured: () => state.settings.alchemyApiKeyConfigured,
+    statusSetter: setAlchemyKeyStatus,
+    syncControls: syncAlchemyKeyControls,
+    requiredTitle: "Alchemy Key Required",
+    requiredMessage: "Paste an Alchemy key first, or save one before testing."
+  });
 });
 
 testDrpcKeyButton.addEventListener("click", async () => {
-  const buttonLabel = testDrpcKeyButton.textContent;
-  const drpcApiKeyValue = drpcApiKeyInput.value.trim();
-
-  if (!drpcApiKeyValue && !state.settings.drpcApiKeyConfigured) {
-    setDrpcKeyStatus("No key to test");
-    showToast("Paste a dRPC key first, or save one before testing.", "info", "dRPC Key Required");
-    return;
-  }
-
-  testDrpcKeyButton.disabled = true;
-  testDrpcKeyButton.textContent = "Testing...";
-
-  try {
-    const payload = await request("/api/control/test-drpc-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        drpcApiKey: drpcApiKeyValue
-      })
-    });
-
-    const statusMessage =
-      payload.source === "input"
-        ? "Typed key verified"
-        : payload.source === "env"
-          ? "Environment key verified"
-          : "Saved key verified";
-    setDrpcKeyStatus(statusMessage);
-    showToast(
-      payload.source === "input"
-        ? "dRPC API key is valid. Save settings to replace the current key."
-        : payload.source === "env"
-          ? "Environment dRPC API key is valid. Save a new key if you want to override it in the dashboard."
-          : "Saved dRPC API key is valid.",
-      "success",
-      "dRPC Key Valid"
-    );
-  } catch {
-    setDrpcKeyStatus("Key test failed");
-  } finally {
-    testDrpcKeyButton.disabled = false;
-    testDrpcKeyButton.textContent = buttonLabel;
-  }
+  await runApiKeyTest({
+    draftKey: "drpc",
+    label: "dRPC",
+    input: drpcApiKeyInput,
+    button: testDrpcKeyButton,
+    payloadField: "drpcApiKey",
+    endpoint: "/api/control/test-drpc-key",
+    configured: () => state.settings.drpcApiKeyConfigured,
+    statusSetter: setDrpcKeyStatus,
+    syncControls: syncDrpcKeyControls,
+    requiredTitle: "dRPC Key Required",
+    requiredMessage: "Paste a dRPC key first, or save one before testing."
+  });
 });
 
 testOpenseaKeyButton.addEventListener("click", async () => {
-  const buttonLabel = testOpenseaKeyButton.textContent;
-  const openseaApiKeyValue = openseaApiKeyInput.value.trim();
+  await runApiKeyTest({
+    draftKey: "opensea",
+    label: "OpenSea",
+    input: openseaApiKeyInput,
+    button: testOpenseaKeyButton,
+    payloadField: "openseaApiKey",
+    endpoint: "/api/control/test-opensea-key",
+    configured: () => state.settings.openseaApiKeyConfigured,
+    statusSetter: setOpenseaKeyStatus,
+    syncControls: syncOpenseaKeyControls,
+    requiredTitle: "OpenSea Key Required",
+    requiredMessage: "Paste an OpenSea key first, or save one before testing."
+  });
+});
 
-  if (!openseaApiKeyValue && !state.settings.openseaApiKeyConfigured) {
-    setOpenseaKeyStatus("No key to test");
-    showToast("Paste an OpenSea key first, or save one before testing.", "info", "OpenSea Key Required");
-    return;
-  }
-
-  testOpenseaKeyButton.disabled = true;
-  testOpenseaKeyButton.textContent = "Testing...";
-
-  try {
-    const payload = await request("/api/control/test-opensea-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        openseaApiKey: openseaApiKeyValue
-      })
-    });
-
-    const statusMessage =
-      payload.source === "input"
-        ? "Typed key verified"
-        : payload.source === "env"
-          ? "Environment key verified"
-          : "Saved key verified";
-    setOpenseaKeyStatus(statusMessage);
-    showToast(
-      payload.source === "input"
-        ? "OpenSea API key is valid. Save settings to replace the current key."
-        : payload.source === "env"
-          ? "Environment OpenSea API key is valid. Save a new key if you want to override it in the dashboard."
-          : "Saved OpenSea API key is valid.",
-      "success",
-      "OpenSea Key Valid"
+testAllApiKeysButton?.addEventListener("click", async () => {
+  await withButtonBusyState(testAllApiKeysButton, "Testing All...", async () => {
+    const results = [];
+    results.push(
+      await runApiKeyTest({
+        draftKey: "explorer",
+        label: "Explorer",
+        input: explorerApiKeyInput,
+        button: testExplorerKeyButton,
+        payloadField: "explorerApiKey",
+        endpoint: "/api/control/test-explorer-key",
+        configured: () => state.settings.explorerApiKeyConfigured,
+        statusSetter: setExplorerKeyStatus,
+        syncControls: syncExplorerKeyControls,
+        requiredTitle: "Explorer Key Required",
+        requiredMessage: "Paste an explorer key first, or save one before testing."
+      }, { summaryMode: true })
     );
-  } catch {
-    setOpenseaKeyStatus("Key test failed");
-  } finally {
-    testOpenseaKeyButton.disabled = false;
-    testOpenseaKeyButton.textContent = buttonLabel;
-  }
+    results.push(
+      await runApiKeyTest({
+        draftKey: "openai",
+        label: "OpenAI",
+        input: openaiApiKeyInput,
+        button: testOpenaiKeyButton,
+        payloadField: "openaiApiKey",
+        endpoint: "/api/control/test-openai-key",
+        configured: () => state.settings.openaiApiKeyConfigured,
+        statusSetter: setOpenaiKeyStatus,
+        syncControls: syncOpenaiKeyControls,
+        requiredTitle: "OpenAI Key Required",
+        requiredMessage: "Paste an OpenAI key first, or save one before testing."
+      }, { summaryMode: true })
+    );
+    results.push(
+      await runApiKeyTest({
+        draftKey: "alchemy",
+        label: "Alchemy",
+        input: alchemyApiKeyInput,
+        button: testAlchemyKeyButton,
+        payloadField: "alchemyApiKey",
+        endpoint: "/api/control/test-alchemy-key",
+        configured: () => state.settings.alchemyApiKeyConfigured,
+        statusSetter: setAlchemyKeyStatus,
+        syncControls: syncAlchemyKeyControls,
+        requiredTitle: "Alchemy Key Required",
+        requiredMessage: "Paste an Alchemy key first, or save one before testing."
+      }, { summaryMode: true })
+    );
+    results.push(
+      await runApiKeyTest({
+        draftKey: "drpc",
+        label: "dRPC",
+        input: drpcApiKeyInput,
+        button: testDrpcKeyButton,
+        payloadField: "drpcApiKey",
+        endpoint: "/api/control/test-drpc-key",
+        configured: () => state.settings.drpcApiKeyConfigured,
+        statusSetter: setDrpcKeyStatus,
+        syncControls: syncDrpcKeyControls,
+        requiredTitle: "dRPC Key Required",
+        requiredMessage: "Paste a dRPC key first, or save one before testing."
+      }, { summaryMode: true })
+    );
+    results.push(
+      await runApiKeyTest({
+        draftKey: "opensea",
+        label: "OpenSea",
+        input: openseaApiKeyInput,
+        button: testOpenseaKeyButton,
+        payloadField: "openseaApiKey",
+        endpoint: "/api/control/test-opensea-key",
+        configured: () => state.settings.openseaApiKeyConfigured,
+        statusSetter: setOpenseaKeyStatus,
+        syncControls: syncOpenseaKeyControls,
+        requiredTitle: "OpenSea Key Required",
+        requiredMessage: "Paste an OpenSea key first, or save one before testing."
+      }, { summaryMode: true })
+    );
+
+    const testedCount = results.filter((result) => result.tested).length;
+    const successCount = results.filter((result) => result.success).length;
+    const failedCount = results.filter((result) => result.tested && !result.success).length;
+
+    if (!testedCount) {
+      showToast("Paste a key or save one before using Test All Keys.", "info", "No Keys To Test");
+      return;
+    }
+
+    showToast(
+      `Tested ${testedCount} API ${testedCount === 1 ? "key" : "keys"}: ${successCount} valid, ${failedCount} failed.`,
+      failedCount ? "error" : "success",
+      "Key Test Complete"
+    );
+  });
 });
 
 selectAllWalletsButton.addEventListener("click", () => {

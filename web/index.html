@@ -47,7 +47,7 @@
           <div class="sidebar-pulse hud-panel">
             <div>
               <span class="micro-label">System Mode</span>
-              <strong id="sidebar-mode-label">Standby</strong>
+              <strong id="sidebar-mode-label">Healthy</strong>
             </div>
             <span id="sidebar-mode-dot" class="signal-dot"></span>
           </div>
@@ -104,9 +104,8 @@
               <div class="surface-header compact">
                 <div>
                   <h3>System Alerts</h3>
-                  <p class="helper-copy">RPC failures, blocked tasks, and system issues that need fixing.</p>
                 </div>
-                <span id="dashboard-health-pill" class="status-pill">Standby</span>
+                <span id="dashboard-health-pill" class="status-pill healthy">Healthy</span>
               </div>
               <div id="system-alerts" class="alert-stack"></div>
             </section>
@@ -429,8 +428,9 @@
                 </section>
 
                 <div class="settings-footer">
-                  <div class="settings-actions">
-                    <button id="save-settings-button" class="primary-button fx-button" type="submit">Save Settings</button>
+                  <div class="settings-actions settings-footer-actions">
+                    <button id="test-all-api-keys-button" class="ghost-button fx-button" type="button">Test All Keys</button>
+                    <button id="save-settings-button" class="primary-button fx-button settings-save-button" type="submit">Save Settings</button>
                   </div>
                 </div>
               </form>
