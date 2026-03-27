@@ -542,7 +542,7 @@
         <div class="modal-header">
           <div>
             <h3 id="modal-title">New Task</h3>
-            <p class="muted-copy">Enter the core mint details. Advanced execution settings stay on safe defaults.</p>
+            <p class="muted-copy">Quick mint only needs the NFT name, contract, chain, ABI, wallet, and launch timing. Open advanced settings only when you need custom claims, gas, or routing.</p>
           </div>
           <button id="close-modal-button" class="icon-button fx-button" type="button">+</button>
         </div>
@@ -552,8 +552,8 @@
 
           <div class="form-grid single">
             <label>
-              <span>Task Name</span>
-              <input id="task-name-input" type="text" placeholder="e.g. Mint Project ABC" />
+              <span>NFT / Task Name</span>
+              <input id="task-name-input" type="text" placeholder="e.g. Project ABC Public Mint" />
             </label>
           </div>
 
@@ -590,11 +590,22 @@
             </label>
             <label>
               <span>Price (ETH)</span>
-              <input id="task-price-input" type="text" value="0" />
+              <input id="task-price-input" type="text" placeholder="Auto or 0 for free mint" />
             </label>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-builder-guidance">
+            <div class="surface-header compact">
+              <div>
+                <h4>Quick Mint Setup</h4>
+                <p class="helper-copy">For most public mints, fill the basics, choose a wallet, and set either a start time or a target block.</p>
+              </div>
+              <button id="task-advanced-toggle-button" class="ghost-button fx-button" type="button" aria-expanded="false">Show Advanced Settings</button>
+            </div>
+            <p class="helper-copy">Advanced settings are optional and mainly for claims, allowlists, proof APIs, custom gas, private relays, and non-standard mint triggers.</p>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <div>
                 <h4>Mint Source</h4>
@@ -665,7 +676,7 @@
             <textarea id="task-abi-input" rows="7" placeholder='[{"inputs":[],"name":"mint","type":"function"}]'></textarea>
           </div>
 
-          <div class="form-grid two">
+          <div class="form-grid two task-advanced-section hidden">
             <label>
               <span>Mint Function</span>
               <input id="task-function-input" type="text" value="mint" />
@@ -676,7 +687,7 @@
             </label>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <div>
                 <h4>Claims and Adapter</h4>
@@ -752,7 +763,7 @@
             <p class="helper-copy">Use `{{wallet}}`, `{{index}}`, `{{contract}}`, `{{quantity}}`, and `{{claim.someKey}}` placeholders in the API request block.</p>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <div>
                 <h4>Phase Planner</h4>
@@ -786,13 +797,42 @@
               <button id="select-all-rpc-button" class="ghost-button fx-button" type="button">Select All</button>
             </div>
             <div id="rpc-selector" class="wallet-selector"></div>
-            <p id="rpc-selection-count" class="selection-copy">0 RPC nodes selected</p>
+            <p id="rpc-selection-count" class="selection-copy">Using all enabled RPC nodes on this chain</p>
+            <p class="helper-copy">Leave RPC selection empty to use every enabled node for the selected chain. Pick specific nodes only if you want to limit routing.</p>
           </div>
 
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <div>
-                <h4>Launch Timing</h4>
+                <h4>Launch Plan</h4>
+                <p class="helper-copy">Choose whether this mint starts now, at a specific time, or at a target block. Safe defaults handle the rest.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Launch Mode</span>
+                <select id="task-simple-launch-mode-input">
+                  <option value="immediate">Start Immediately</option>
+                  <option value="schedule">Schedule by Time</option>
+                  <option value="block">Trigger at Block</option>
+                </select>
+              </label>
+              <label id="task-simple-start-time-field" class="hidden">
+                <span>Start Date and Time</span>
+                <input id="task-simple-start-time-input" type="datetime-local" />
+              </label>
+              <label id="task-simple-target-block-field" class="hidden">
+                <span>Target Block</span>
+                <input id="task-simple-target-block-input" type="number" min="1" placeholder="23456789" />
+              </label>
+            </div>
+            <p id="task-simple-launch-hint" class="helper-copy">Use Start Immediately for a normal public mint. Switch to time or block when you want precise launch control.</p>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
+            <div class="surface-header compact">
+              <div>
+                <h4>Advanced Launch Timing</h4>
                 <p class="helper-copy">Manual timestamps are optional. Auto-arm can wait on detected start times and mint-open signals for you.</p>
               </div>
             </div>
@@ -834,7 +874,7 @@
             </div>
           </div>
 
-          <div class="form-grid five">
+          <div class="form-grid five task-advanced-section hidden">
             <label>
               <span>Retries</span>
               <input id="task-retries-input" type="number" value="1" />
@@ -857,7 +897,7 @@
             </label>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <div>
                 <h4>Gas and Validation</h4>
@@ -916,7 +956,7 @@
             </div>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <div>
                 <h4>Ready Check and Routing</h4>
@@ -1023,7 +1063,7 @@
             </div>
           </div>
 
-          <div class="form-grid two task-option-grid">
+          <div class="form-grid two task-option-grid task-advanced-section hidden">
             <label class="toggle-card task-option-card">
               <input id="task-simulate-toggle" type="checkbox" checked />
               <span class="toggle-card-content">

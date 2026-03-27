@@ -322,6 +322,7 @@ const taskDeleteSubmitButton = document.getElementById("task-delete-submit-butto
 const taskDeleteName = document.getElementById("task-delete-name");
 const taskDeleteChain = document.getElementById("task-delete-chain");
 const taskDeleteContract = document.getElementById("task-delete-contract");
+const taskAdvancedToggleButton = document.getElementById("task-advanced-toggle-button");
 const taskForm = document.getElementById("task-form");
 const taskSubmitButton = taskForm.querySelector('button[type="submit"]');
 const taskIdInput = document.getElementById("task-id-input");
@@ -365,6 +366,12 @@ const walletSelectionCount = document.getElementById("wallet-selection-count");
 const rpcSelector = document.getElementById("rpc-selector");
 const selectAllRpcButton = document.getElementById("select-all-rpc-button");
 const rpcSelectionCount = document.getElementById("rpc-selection-count");
+const taskSimpleLaunchModeInput = document.getElementById("task-simple-launch-mode-input");
+const taskSimpleStartTimeField = document.getElementById("task-simple-start-time-field");
+const taskSimpleStartTimeInput = document.getElementById("task-simple-start-time-input");
+const taskSimpleTargetBlockField = document.getElementById("task-simple-target-block-field");
+const taskSimpleTargetBlockInput = document.getElementById("task-simple-target-block-input");
+const taskSimpleLaunchHint = document.getElementById("task-simple-launch-hint");
 const taskLatencyProfileInput = document.getElementById("task-latency-profile-input");
 const taskScheduleToggle = document.getElementById("task-schedule-toggle");
 const taskAutoArmToggle = document.getElementById("task-auto-arm-toggle");
@@ -410,6 +417,7 @@ const taskPrivateRelayToggle = document.getElementById("task-private-relay-toggl
 const taskPrivateRelayOnlyToggle = document.getElementById("task-private-relay-only-toggle");
 const taskTransferToggle = document.getElementById("task-transfer-toggle");
 const taskNotesInput = document.getElementById("task-notes-input");
+const taskAdvancedSections = [...document.querySelectorAll(".task-advanced-section")];
 let events = null;
 let abiAutofillTimer = null;
 let abiAutofillRequestId = 0;
@@ -457,6 +465,7 @@ let rpcChainlistScan = {
   loading: false,
   summary: null
 };
+let taskAdvancedVisible = false;
 let taskDeleteTargetId = "";
 let taskDeletePending = false;
 let rpcDeleteTargetId = "";
@@ -1734,6 +1743,15 @@ function setWalletSelectionCount() {
 
 function setRpcSelectionCount() {
   const count = selectedRpcIds().length;
+  const activeChain = taskChainInput.value || state.chains[0]?.key || "base_sepolia";
+  const enabledChainRpcCount = state.rpcNodes.filter((node) => node.chainKey === activeChain && node.enabled).length;
+
+  if (count === 0 && enabledChainRpcCount > 0) {
+    rpcSelectionCount.textContent = `Using all ${pluralize(enabledChainRpcCount, "enabled RPC node")} on ${chainLabel(activeChain)}`;
+    rpcSelectionCount.classList.remove("warning");
+    return;
+  }
+
   rpcSelectionCount.textContent = `${pluralize(count, "RPC node")} selected`;
   rpcSelectionCount.classList.toggle("warning", count === 0);
 }
@@ -7521,8 +7539,10 @@ function openTaskModal(task = null) {
     }
   }
 
+  setTaskAdvancedVisibility(Boolean(task));
+  syncTaskSimpleLaunchFromAdvanced();
   updateAbiStatus();
-  renderWalletSelector(task?.walletIds || []);
+  renderWalletSelector(task?.walletIds || (!task && state.wallets.length === 1 ? [state.wallets[0].id] : []));
   renderRpcSelector(task?.rpcNodeIds || []);
   taskModal.classList.remove("hidden");
   initializeMotionSurfaces(taskModal);
@@ -7530,6 +7550,73 @@ function openTaskModal(task = null) {
 
 function closeTaskModal() {
   taskModal.classList.add("hidden");
+}
+
+function setTaskAdvancedVisibility(visible) {
+  taskAdvancedVisible = Boolean(visible);
+  taskAdvancedSections.forEach((section) => {
+    section.classList.toggle("hidden", !taskAdvancedVisible);
+  });
+
+  if (taskAdvancedToggleButton) {
+    taskAdvancedToggleButton.textContent = taskAdvancedVisible ? "Hide Advanced Settings" : "Show Advanced Settings";
+    taskAdvancedToggleButton.setAttribute("aria-expanded", taskAdvancedVisible ? "true" : "false");
+  }
+}
+
+function syncTaskSimpleLaunchFields() {
+  const mode = String(taskSimpleLaunchModeInput?.value || "immediate");
+  taskSimpleStartTimeField?.classList.toggle("hidden", mode !== "schedule");
+  taskSimpleTargetBlockField?.classList.toggle("hidden", mode !== "block");
+
+  if (taskSimpleLaunchHint) {
+    taskSimpleLaunchHint.textContent =
+      mode === "schedule"
+        ? "Set the mint start time here using your browser's local time. The task is saved in UTC automatically."
+        : mode === "block"
+          ? "Set the target block here and the task will wait for that block before firing."
+          : "Use Start Immediately for a normal public mint. Switch to time or block when you want precise launch control.";
+  }
+}
+
+function syncTaskSimpleLaunchFromAdvanced() {
+  if (!taskSimpleLaunchModeInput) {
+    return;
+  }
+
+  let mode = "immediate";
+  if (taskTriggerModeInput.value === "block") {
+    mode = "block";
+  } else if (taskScheduleToggle.checked) {
+    mode = "schedule";
+  }
+
+  taskSimpleLaunchModeInput.value = mode;
+  taskSimpleStartTimeInput.value = taskStartTimeInput.value || "";
+  taskSimpleTargetBlockInput.value = taskTriggerBlockInput.value || "";
+  syncTaskSimpleLaunchFields();
+}
+
+function applyTaskSimpleLaunchToAdvanced() {
+  if (!taskSimpleLaunchModeInput) {
+    return;
+  }
+
+  const mode = String(taskSimpleLaunchModeInput.value || "immediate");
+  taskScheduleToggle.checked = mode === "schedule";
+  taskStartTimeInput.value = mode === "schedule" ? String(taskSimpleStartTimeInput.value || "").trim() : "";
+
+  if (mode === "block") {
+    taskTriggerModeInput.value = "block";
+    taskTriggerBlockInput.value = String(taskSimpleTargetBlockInput.value || "").trim();
+  } else {
+    if (taskTriggerModeInput.value === "block") {
+      taskTriggerModeInput.value = "standard";
+    }
+    taskTriggerBlockInput.value = "";
+  }
+
+  syncTaskSimpleLaunchFields();
 }
 
 function closeTaskDeleteModal() {
@@ -7615,6 +7702,8 @@ function buildClaimTaskSettings() {
 }
 
 function buildTaskPayload() {
+  applyTaskSimpleLaunchToAdvanced();
+
   return {
     id: taskIdInput.value || undefined,
     name: taskNameInput.value,
@@ -7845,6 +7934,23 @@ taskModal.addEventListener("click", (event) => {
   if (event.target.dataset.closeModal === "true") {
     closeTaskModal();
   }
+});
+
+taskAdvancedToggleButton?.addEventListener("click", () => {
+  setTaskAdvancedVisibility(!taskAdvancedVisible);
+  syncTaskSimpleLaunchFromAdvanced();
+});
+
+taskSimpleLaunchModeInput?.addEventListener("change", () => {
+  applyTaskSimpleLaunchToAdvanced();
+});
+
+taskSimpleStartTimeInput?.addEventListener("change", () => {
+  applyTaskSimpleLaunchToAdvanced();
+});
+
+taskSimpleTargetBlockInput?.addEventListener("change", () => {
+  applyTaskSimpleLaunchToAdvanced();
 });
 
 taskDeleteCloseButton.addEventListener("click", closeTaskDeleteModal);
@@ -8671,6 +8777,22 @@ taskSourceTargetInput?.addEventListener("input", () => {
 
 taskLatencyProfileInput.addEventListener("change", () => {
   applyLatencyProfile(taskLatencyProfileInput.value);
+});
+
+taskScheduleToggle.addEventListener("change", () => {
+  syncTaskSimpleLaunchFromAdvanced();
+});
+
+taskStartTimeInput.addEventListener("change", () => {
+  syncTaskSimpleLaunchFromAdvanced();
+});
+
+taskTriggerModeInput.addEventListener("change", () => {
+  syncTaskSimpleLaunchFromAdvanced();
+});
+
+taskTriggerBlockInput.addEventListener("change", () => {
+  syncTaskSimpleLaunchFromAdvanced();
 });
 
 taskChainInput.addEventListener("change", () => {
