@@ -366,12 +366,17 @@ const walletSelectionCount = document.getElementById("wallet-selection-count");
 const rpcSelector = document.getElementById("rpc-selector");
 const selectAllRpcButton = document.getElementById("select-all-rpc-button");
 const rpcSelectionCount = document.getElementById("rpc-selection-count");
+const taskQuickDropTypeInput = document.getElementById("task-quick-drop-type-input");
 const taskSimpleLaunchModeInput = document.getElementById("task-simple-launch-mode-input");
 const taskSimpleStartTimeField = document.getElementById("task-simple-start-time-field");
 const taskSimpleStartTimeInput = document.getElementById("task-simple-start-time-input");
 const taskSimpleTargetBlockField = document.getElementById("task-simple-target-block-field");
 const taskSimpleTargetBlockInput = document.getElementById("task-simple-target-block-input");
+const taskSimpleMempoolField = document.getElementById("task-simple-mempool-field");
+const taskSimpleMempoolInput = document.getElementById("task-simple-mempool-input");
 const taskSimpleLaunchHint = document.getElementById("task-simple-launch-hint");
+const taskQuickStackSummary = document.getElementById("task-quick-stack-summary");
+const taskQuickProofHint = document.getElementById("task-quick-proof-hint");
 const taskLatencyProfileInput = document.getElementById("task-latency-profile-input");
 const taskScheduleToggle = document.getElementById("task-schedule-toggle");
 const taskAutoArmToggle = document.getElementById("task-auto-arm-toggle");
@@ -969,6 +974,149 @@ function applyLatencyProfile(profile) {
   taskWarmupToggle.checked = selectedProfile.warmupRpc;
   taskMultiRpcBroadcastToggle.checked = selectedProfile.multiRpcBroadcast;
   taskSmartReplaceToggle.checked = selectedProfile.smartGasReplacement;
+}
+
+function utcDateTimeLocalToIsoString(value) {
+  const normalized = String(value || "").trim();
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match) {
+    return "";
+  }
+
+  const [, year, month, day, hour, minute] = match;
+  const timestamp = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    0,
+    0
+  );
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "";
+}
+
+function isoStringToUtcDateTimeLocalValue(value) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+
+  const date = new Date(timestamp);
+  const pad = (entry) => String(entry).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(
+    date.getUTCHours()
+  )}:${pad(date.getUTCMinutes())}`;
+}
+
+function normalizeTaskQuickDropType(value) {
+  const normalized = String(value || "public").trim().toLowerCase();
+  return ["public", "pass_fcfs", "allowlist", "gtd"].includes(normalized) ? normalized : "public";
+}
+
+function normalizeTaskQuickLaunchSignal(value) {
+  const normalized = String(value || "onchain").trim().toLowerCase();
+  return ["live", "utc", "onchain", "mempool", "block"].includes(normalized) ? normalized : "onchain";
+}
+
+function taskQuickDropTypeLabel(value) {
+  const normalized = normalizeTaskQuickDropType(value);
+  if (normalized === "pass_fcfs") {
+    return "Pass Holder / FCFS";
+  }
+  if (normalized === "allowlist") {
+    return "Allowlist / Proof";
+  }
+  if (normalized === "gtd") {
+    return "GTD / Guaranteed";
+  }
+  return "Public / Open Mint";
+}
+
+function taskQuickLaunchSignalLabel(value) {
+  const normalized = normalizeTaskQuickLaunchSignal(value);
+  if (normalized === "utc") {
+    return "UTC Schedule";
+  }
+  if (normalized === "live") {
+    return "Run ASAP";
+  }
+  if (normalized === "mempool") {
+    return "Mempool Trigger";
+  }
+  if (normalized === "block") {
+    return "Exact Block";
+  }
+  return "On-Chain Open";
+}
+
+function taskQuickSourceStage(dropType) {
+  const normalized = normalizeTaskQuickDropType(dropType);
+  if (normalized === "allowlist") {
+    return "allowlist";
+  }
+  if (normalized === "gtd" || normalized === "pass_fcfs") {
+    return "gtd";
+  }
+  return "public";
+}
+
+function recommendedTaskLatencyProfile(dropType, launchSignal) {
+  const normalizedDropType = normalizeTaskQuickDropType(dropType);
+  const normalizedLaunchSignal = normalizeTaskQuickLaunchSignal(launchSignal);
+
+  if (normalizedLaunchSignal === "mempool" || normalizedLaunchSignal === "block") {
+    return "ultra_low_latency";
+  }
+
+  if (normalizedDropType === "allowlist" || normalizedDropType === "gtd" || normalizedDropType === "pass_fcfs") {
+    return "low_latency";
+  }
+
+  return "low_latency";
+}
+
+function taskQuickDropTypeFromTask(task = null) {
+  const sourceStage = String(task?.sourceStage || "").trim().toLowerCase();
+  const descriptor = `${task?.name || ""} ${
+    Array.isArray(task?.tags) ? task.tags.join(" ") : String(task?.tags || "")
+  } ${task?.mintFunction || ""}`.toLowerCase();
+
+  if (sourceStage === "allowlist") {
+    return "allowlist";
+  }
+
+  if (sourceStage === "gtd") {
+    return /pass|holder|fcfs/.test(descriptor) ? "pass_fcfs" : "gtd";
+  }
+
+  if (sourceStage === "custom" && task?.claimIntegrationEnabled) {
+    return "allowlist";
+  }
+
+  return "public";
+}
+
+function taskQuickLaunchSignalFromTask(task = null) {
+  const triggerMode = String(task?.executionTriggerMode || "standard").trim().toLowerCase();
+
+  if (triggerMode === "block") {
+    return "block";
+  }
+
+  if (triggerMode === "mempool") {
+    return "mempool";
+  }
+
+  if (task?.useSchedule) {
+    return "utc";
+  }
+
+  if (task?.readyCheckFunction || task?.mintStartDetectionEnabled) {
+    return "onchain";
+  }
+
+  return "live";
 }
 
 function relativeTime(isoString) {
@@ -6693,6 +6841,7 @@ function normalizeMintStartDetectionState(value = null) {
 
 function setMintStartDetectionState(value = null) {
   currentMintStartDetection = normalizeMintStartDetectionState(value);
+  syncTaskSimpleLaunchFields();
 }
 
 function findAbiFunctionEntry(abiEntries, functionName) {
@@ -7468,11 +7617,11 @@ function openTaskModal(task = null) {
   taskClaimFetchCookiesInput.value = task?.claimFetchCookiesJson || "";
   taskClaimFetchBodyInput.value = task?.claimFetchBodyJson || "";
   taskClaimResponseMappingInput.value = task?.claimResponseMappingJson || "";
-  taskAutoPhaseToggle.checked = !task;
+  taskAutoPhaseToggle.checked = false;
   taskAutoPhaseToggle.disabled = Boolean(task);
   taskAutoArmToggle.checked = task?.autoArm ?? true;
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
-  taskStartTimeInput.value = task?.waitUntilIso ? task.waitUntilIso.slice(0, 16) : "";
+  taskStartTimeInput.value = task?.waitUntilIso ? isoStringToUtcDateTimeLocalValue(task.waitUntilIso) : "";
   taskWalletModeInput.value = task?.walletMode || "parallel";
   taskGasStrategyInput.value = normalizeGasStrategyValue(task?.gasStrategy || "normal");
   taskGasLimitInput.value = task?.gasLimit || "";
@@ -7516,13 +7665,28 @@ function openTaskModal(task = null) {
   taskPrivateRelayOnlyToggle.checked = Boolean(task?.privateRelayOnly);
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
-  taskLatencyProfileInput.value = task ? "custom" : "low_latency";
+  taskLatencyProfileInput.value = task ? "custom" : recommendedTaskLatencyProfile("public", "onchain");
   setMintStartDetectionState({
     enabled: task?.mintStartDetectionEnabled,
     ...(task?.mintStartDetectionConfig && typeof task.mintStartDetectionConfig === "object"
       ? task.mintStartDetectionConfig
       : {})
   });
+  if (taskQuickDropTypeInput) {
+    taskQuickDropTypeInput.value = taskQuickDropTypeFromTask(task);
+  }
+  if (taskSimpleLaunchModeInput) {
+    taskSimpleLaunchModeInput.value = task ? taskQuickLaunchSignalFromTask(task) : "onchain";
+  }
+  if (taskSimpleStartTimeInput) {
+    taskSimpleStartTimeInput.value = task?.waitUntilIso ? isoStringToUtcDateTimeLocalValue(task.waitUntilIso) : "";
+  }
+  if (taskSimpleTargetBlockInput) {
+    taskSimpleTargetBlockInput.value = task?.triggerBlockNumber || "";
+  }
+  if (taskSimpleMempoolInput) {
+    taskSimpleMempoolInput.value = task?.triggerMempoolSignature || "";
+  }
   taskAbiFileInput.value = "";
   setTaskAbiOrigin(
     task?.abiJson ? "manual" : "",
@@ -7533,14 +7697,18 @@ function openTaskModal(task = null) {
   renderPhasePreview([]);
 
   if (!task) {
-    applyLatencyProfile(taskLatencyProfileInput.value);
+    applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
     if (state.settings.explorerApiKeyConfigured && isLikelyEvmAddress(taskContractInput.value)) {
       scheduleExplorerAbiFetch({ force: true });
     }
   }
 
   setTaskAdvancedVisibility(Boolean(task));
-  syncTaskSimpleLaunchFromAdvanced();
+  if (task) {
+    syncTaskSimpleLaunchFromAdvanced();
+  } else {
+    syncTaskSimpleLaunchFields();
+  }
   updateAbiStatus();
   renderWalletSelector(task?.walletIds || (!task && state.wallets.length === 1 ? [state.wallets[0].id] : []));
   renderRpcSelector(task?.rpcNodeIds || []);
@@ -7565,17 +7733,86 @@ function setTaskAdvancedVisibility(visible) {
 }
 
 function syncTaskSimpleLaunchFields() {
-  const mode = String(taskSimpleLaunchModeInput?.value || "immediate");
-  taskSimpleStartTimeField?.classList.toggle("hidden", mode !== "schedule");
+  const dropType = normalizeTaskQuickDropType(taskQuickDropTypeInput?.value);
+  const mode = normalizeTaskQuickLaunchSignal(taskSimpleLaunchModeInput?.value);
+  const profile = recommendedTaskLatencyProfile(dropType, mode);
+  const profileLabel = profile === "ultra_low_latency" ? "Ultra Low Latency" : "Low Latency";
+  const hasOnChainGate = currentMintStartDetection.enabled || Boolean(String(taskReadyFunctionInput?.value || "").trim());
+  const chips = [
+    taskQuickDropTypeLabel(dropType),
+    formatMintSourceStage(taskQuickSourceStage(dropType)),
+    taskQuickLaunchSignalLabel(mode),
+    profileLabel,
+    "Pre-Sign",
+    "Warmup RPC",
+    "Multi-RPC",
+    "Smart Replace"
+  ];
+
+  if (mode === "onchain" && hasOnChainGate) {
+    chips.push(currentMintStartDetection.enabled ? "ABI Mint-Open Detection" : "Ready Check Gate");
+  }
+  if (mode === "mempool") {
+    chips.push("WS RPC Required");
+  }
+  if (mode === "block") {
+    chips.push("Manual Block Intel");
+  }
+
+  taskSimpleStartTimeField?.classList.toggle("hidden", mode !== "utc");
   taskSimpleTargetBlockField?.classList.toggle("hidden", mode !== "block");
+  taskSimpleMempoolField?.classList.toggle("hidden", mode !== "mempool");
 
   if (taskSimpleLaunchHint) {
     taskSimpleLaunchHint.textContent =
-      mode === "schedule"
-        ? "Set the mint start time here using your browser's local time. The task is saved in UTC automatically."
+      mode === "utc"
+        ? "Enter the launch time in UTC. MintBot saves it in UTC and still waits on mint-open reads when the ABI exposes them."
         : mode === "block"
-          ? "Set the target block here and the task will wait for that block before firing."
-          : "Use Start Immediately for a normal public mint. Switch to time or block when you want precise launch control.";
+          ? "Only use Exact Block when the project gave a real block number or you derived one from trusted block intel. UTC times do not map to fixed blocks."
+          : mode === "mempool"
+            ? "Best when you know the admin opener transaction. Enter the function name or selector so the task fires as soon as that tx hits mempool."
+            : mode === "live"
+              ? "Use this only when the mint is already live right now and you want MintBot to fire through the fast path immediately."
+              : hasOnChainGate
+                ? "On-chain gating is ready. MintBot will pre-arm the task and wait for the sale-open signal before broadcasting."
+                : "Load the ABI first so MintBot can detect a sale-open read automatically, or switch to UTC Time if the project only shares a clock time.";
+  }
+
+  if (taskQuickStackSummary) {
+    const summary =
+      mode === "utc"
+        ? "MintBot will schedule the task in UTC, pre-arm the launch path, warm the RPC mesh, and broadcast through the fast route when the time lands."
+        : mode === "block"
+          ? "MintBot will wait for the target block, then fire with the aggressive launch path. Use this only when you already know the exact mint block."
+          : mode === "mempool"
+            ? "MintBot will watch pending transactions, look for the opener call, and launch as soon as that mempool signal appears."
+            : mode === "live"
+              ? "MintBot will arm the task for immediate broadcast with aggressive routing, multi-RPC fanout, and gas replacement."
+              : "MintBot will keep the task armed and wait for the contract-side sale-open signal before pushing the mint transaction.";
+
+    taskQuickStackSummary.innerHTML = `
+      <div class="task-strategy-chip-row">
+        ${chips.map((chip) => `<span class="task-strategy-chip">${escapeHtml(chip)}</span>`).join("")}
+      </div>
+      <p class="helper-copy">${escapeHtml(summary)}</p>
+    `;
+  }
+
+  if (taskQuickProofHint) {
+    let proofHint = "";
+    if (dropType === "allowlist") {
+      proofHint =
+        "If this allowlist mint needs a proof, signature, voucher, or backend payload, open Advanced Settings and fill Claims and Adapter before saving.";
+    } else if (dropType === "pass_fcfs") {
+      proofHint =
+        "If the FCFS pass only checks wallet ownership on-chain, no extra claim payload is needed. If the site returns signed mint args or proofs, add them in Advanced Settings.";
+    } else if (dropType === "gtd") {
+      proofHint =
+        "If GTD eligibility is holder or pass based, the selected wallet is usually enough. If the project serves signed payloads, add them in Advanced Settings.";
+    }
+
+    taskQuickProofHint.textContent = proofHint;
+    taskQuickProofHint.classList.toggle("hidden", !proofHint);
   }
 }
 
@@ -7584,36 +7821,63 @@ function syncTaskSimpleLaunchFromAdvanced() {
     return;
   }
 
-  let mode = "immediate";
+  let mode = "live";
   if (taskTriggerModeInput.value === "block") {
     mode = "block";
+  } else if (taskTriggerModeInput.value === "mempool") {
+    mode = "mempool";
   } else if (taskScheduleToggle.checked) {
-    mode = "schedule";
+    mode = "utc";
+  } else if (taskReadyFunctionInput.value.trim() || currentMintStartDetection.enabled) {
+    mode = "onchain";
   }
 
   taskSimpleLaunchModeInput.value = mode;
   taskSimpleStartTimeInput.value = taskStartTimeInput.value || "";
   taskSimpleTargetBlockInput.value = taskTriggerBlockInput.value || "";
+  taskSimpleMempoolInput.value = taskTriggerMempoolSignatureInput.value || "";
   syncTaskSimpleLaunchFields();
 }
 
-function applyTaskSimpleLaunchToAdvanced() {
+function applyTaskSimpleLaunchToAdvanced(options = {}) {
   if (!taskSimpleLaunchModeInput) {
     return;
   }
 
-  const mode = String(taskSimpleLaunchModeInput.value || "immediate");
-  taskScheduleToggle.checked = mode === "schedule";
-  taskStartTimeInput.value = mode === "schedule" ? String(taskSimpleStartTimeInput.value || "").trim() : "";
+  const { applyProfile = false } = options;
+  const dropType = normalizeTaskQuickDropType(taskQuickDropTypeInput?.value);
+  const mode = normalizeTaskQuickLaunchSignal(taskSimpleLaunchModeInput.value);
+  const recommendedProfile = recommendedTaskLatencyProfile(dropType, mode);
+
+  taskSourceStageInput.value = taskQuickSourceStage(dropType);
+  updateTaskSourceInputs();
+
+  if (applyProfile) {
+    taskAutoArmToggle.checked = true;
+    taskLatencyProfileInput.value = recommendedProfile;
+    applyLatencyProfile(recommendedProfile);
+  }
+
+  taskScheduleToggle.checked = mode === "utc";
+  taskStartTimeInput.value = mode === "utc" ? String(taskSimpleStartTimeInput.value || "").trim() : "";
 
   if (mode === "block") {
     taskTriggerModeInput.value = "block";
     taskTriggerBlockInput.value = String(taskSimpleTargetBlockInput.value || "").trim();
+    taskTriggerMempoolSignatureInput.value = "";
+  } else if (mode === "mempool") {
+    taskTriggerModeInput.value = "mempool";
+    taskTriggerBlockInput.value = "";
+    taskTriggerMempoolSignatureInput.value = String(taskSimpleMempoolInput.value || "").trim();
+    if (!String(taskTriggerContractInput.value || "").trim() && String(taskContractInput.value || "").trim()) {
+      taskTriggerContractInput.value = String(taskContractInput.value || "").trim();
+    }
   } else {
-    if (taskTriggerModeInput.value === "block") {
+    if (["block", "mempool"].includes(taskTriggerModeInput.value)) {
       taskTriggerModeInput.value = "standard";
     }
     taskTriggerBlockInput.value = "";
+    taskTriggerMempoolSignatureInput.value = "";
   }
 
   syncTaskSimpleLaunchFields();
@@ -7701,6 +7965,50 @@ function buildClaimTaskSettings() {
   };
 }
 
+function validateTaskQuickStrategy() {
+  const mode = normalizeTaskQuickLaunchSignal(taskSimpleLaunchModeInput?.value);
+
+  if (mode === "utc") {
+    if (!String(taskSimpleStartTimeInput?.value || "").trim()) {
+      showToast("Enter the UTC launch time before saving this task.", "info", "UTC Time Required");
+      return false;
+    }
+
+    if (!utcDateTimeLocalToIsoString(taskSimpleStartTimeInput.value)) {
+      showToast("Enter a valid UTC date and time.", "info", "Invalid UTC Time");
+      return false;
+    }
+  }
+
+  if (mode === "block") {
+    const targetBlock = Number(taskSimpleTargetBlockInput?.value || 0);
+    if (!Number.isInteger(targetBlock) || targetBlock < 1) {
+      showToast("Enter the exact target block before saving this task.", "info", "Block Required");
+      return false;
+    }
+  }
+
+  if (mode === "mempool" && !String(taskSimpleMempoolInput?.value || "").trim()) {
+    showToast(
+      "Enter the admin opener function or selector before using mempool mode.",
+      "info",
+      "Mempool Signal Required"
+    );
+    return false;
+  }
+
+  if (mode === "onchain" && !currentMintStartDetection.enabled && !String(taskReadyFunctionInput.value || "").trim()) {
+    showToast(
+      "Load the ABI first so MintBot can detect the sale-open function, or switch to UTC Time / Run ASAP.",
+      "info",
+      "On-Chain Open Needs ABI"
+    );
+    return false;
+  }
+
+  return true;
+}
+
 function buildTaskPayload() {
   applyTaskSimpleLaunchToAdvanced();
 
@@ -7748,7 +8056,7 @@ function buildTaskPayload() {
     useSchedule: taskScheduleToggle.checked,
     waitUntilIso:
       taskScheduleToggle.checked && taskStartTimeInput.value
-        ? new Date(taskStartTimeInput.value).toISOString()
+        ? utcDateTimeLocalToIsoString(taskStartTimeInput.value)
         : "",
     mintStartDetectionEnabled: currentMintStartDetection.enabled,
     mintStartDetectionConfig: currentMintStartDetection.config,
@@ -7938,11 +8246,15 @@ taskModal.addEventListener("click", (event) => {
 
 taskAdvancedToggleButton?.addEventListener("click", () => {
   setTaskAdvancedVisibility(!taskAdvancedVisible);
-  syncTaskSimpleLaunchFromAdvanced();
+  syncTaskSimpleLaunchFields();
+});
+
+taskQuickDropTypeInput?.addEventListener("change", () => {
+  applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
 });
 
 taskSimpleLaunchModeInput?.addEventListener("change", () => {
-  applyTaskSimpleLaunchToAdvanced();
+  applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
 });
 
 taskSimpleStartTimeInput?.addEventListener("change", () => {
@@ -7950,6 +8262,10 @@ taskSimpleStartTimeInput?.addEventListener("change", () => {
 });
 
 taskSimpleTargetBlockInput?.addEventListener("change", () => {
+  applyTaskSimpleLaunchToAdvanced();
+});
+
+taskSimpleMempoolInput?.addEventListener("change", () => {
   applyTaskSimpleLaunchToAdvanced();
 });
 
@@ -8795,6 +9111,14 @@ taskTriggerBlockInput.addEventListener("change", () => {
   syncTaskSimpleLaunchFromAdvanced();
 });
 
+taskTriggerMempoolSignatureInput.addEventListener("change", () => {
+  syncTaskSimpleLaunchFromAdvanced();
+});
+
+taskReadyFunctionInput.addEventListener("change", () => {
+  syncTaskSimpleLaunchFromAdvanced();
+});
+
 taskChainInput.addEventListener("change", () => {
   renderRpcSelector(
     selectedRpcIds().filter((rpcId) => {
@@ -8966,6 +9290,9 @@ abiDropzone.addEventListener("drop", async (event) => {
 
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!validateTaskQuickStrategy()) {
+    return;
+  }
   try {
     const payload = await request("/api/tasks", {
       method: "POST",

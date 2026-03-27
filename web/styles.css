@@ -2321,6 +2321,46 @@ body[data-current-view="tasks"] .empty-state p {
   white-space: nowrap;
 }
 
+.task-strategy-summary {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(124, 223, 255, 0.12);
+  background:
+    linear-gradient(180deg, rgba(113, 224, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(9, 17, 29, 0.72);
+}
+
+.task-strategy-summary:empty {
+  display: none;
+}
+
+.task-strategy-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-strategy-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 223, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: #d7ebfb;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.task-strategy-summary .helper-copy {
+  color: #c4d8eb;
+}
+
 .dropzone {
   margin-bottom: 12px;
   padding: 14px;

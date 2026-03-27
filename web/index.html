@@ -542,7 +542,7 @@
         <div class="modal-header">
           <div>
             <h3 id="modal-title">New Task</h3>
-            <p class="muted-copy">Quick mint only needs the NFT name, contract, chain, ABI, wallet, and launch timing. Open advanced settings only when you need custom claims, gas, or routing.</p>
+            <p class="muted-copy">Set the NFT details, choose the mint type and launch signal, and MintBot will arm the fastest safe path automatically. Open advanced settings only when you need custom claims, gas, or routing.</p>
           </div>
           <button id="close-modal-button" class="icon-button fx-button" type="button">+</button>
         </div>
@@ -597,12 +597,12 @@
           <div class="surface inset-surface task-builder-guidance">
             <div class="surface-header compact">
               <div>
-                <h4>Quick Mint Setup</h4>
-                <p class="helper-copy">For most public mints, fill the basics, choose a wallet, and set either a start time or a target block.</p>
+                <h4>Auto Mint ASAP</h4>
+                <p class="helper-copy">Pick the mint type and how you know it goes live. MintBot will choose the low-latency launch stack for you.</p>
               </div>
               <button id="task-advanced-toggle-button" class="ghost-button fx-button" type="button" aria-expanded="false">Show Advanced Settings</button>
             </div>
-            <p class="helper-copy">Advanced settings are optional and mainly for claims, allowlists, proof APIs, custom gas, private relays, and non-standard mint triggers.</p>
+            <p class="helper-copy">Advanced settings are optional and mainly for claim payloads, custom relays, non-standard sale-open checks, and special routing.</p>
           </div>
 
           <div class="surface inset-surface task-advanced-section hidden">
@@ -804,29 +804,48 @@
           <div class="surface inset-surface">
             <div class="surface-header compact">
               <div>
-                <h4>Launch Plan</h4>
-                <p class="helper-copy">Choose whether this mint starts now, at a specific time, or at a target block. Safe defaults handle the rest.</p>
+                <h4>Launch Strategy</h4>
+                <p class="helper-copy">Tell the app what kind of mint this is and how you know it goes live. The trigger stack and latency profile are filled in for you.</p>
               </div>
             </div>
             <div class="form-grid three">
               <label>
-                <span>Launch Mode</span>
+                <span>Drop Type</span>
+                <select id="task-quick-drop-type-input">
+                  <option value="public">Public / Open Mint</option>
+                  <option value="pass_fcfs">Pass Holder / FCFS</option>
+                  <option value="allowlist">Allowlist / Proof Mint</option>
+                  <option value="gtd">GTD / Guaranteed</option>
+                </select>
+              </label>
+              <label>
+                <span>Launch Signal</span>
                 <select id="task-simple-launch-mode-input">
-                  <option value="immediate">Start Immediately</option>
-                  <option value="schedule">Schedule by Time</option>
-                  <option value="block">Trigger at Block</option>
+                  <option value="onchain">Wait for On-Chain Open</option>
+                  <option value="utc">Schedule by UTC Time</option>
+                  <option value="live">Already Live / Run ASAP</option>
+                  <option value="mempool">Admin Tx in Mempool</option>
+                  <option value="block">Exact Block</option>
                 </select>
               </label>
               <label id="task-simple-start-time-field" class="hidden">
-                <span>Start Date and Time</span>
+                <span>UTC Start Time</span>
                 <input id="task-simple-start-time-input" type="datetime-local" />
               </label>
               <label id="task-simple-target-block-field" class="hidden">
-                <span>Target Block</span>
+                <span>Exact Block</span>
                 <input id="task-simple-target-block-input" type="number" min="1" placeholder="23456789" />
               </label>
             </div>
-            <p id="task-simple-launch-hint" class="helper-copy">Use Start Immediately for a normal public mint. Switch to time or block when you want precise launch control.</p>
+            <div class="form-grid single">
+              <label id="task-simple-mempool-field" class="hidden">
+                <span>Admin Function / Selector</span>
+                <input id="task-simple-mempool-input" type="text" placeholder="setSaleState(bool) or 0x12345678" />
+              </label>
+            </div>
+            <div id="task-quick-stack-summary" class="task-strategy-summary"></div>
+            <p id="task-simple-launch-hint" class="helper-copy">Load the ABI, then let MintBot wait for the on-chain sale-open signal by default.</p>
+            <p id="task-quick-proof-hint" class="helper-copy hidden"></p>
           </div>
 
           <div class="surface inset-surface task-advanced-section hidden">
@@ -861,7 +880,7 @@
                 </label>
               </label>
               <label>
-                <span>Start Date and Time</span>
+                <span>UTC Start Date and Time</span>
                 <input id="task-start-time-input" type="datetime-local" />
               </label>
               <label>
