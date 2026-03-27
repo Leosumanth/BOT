@@ -274,7 +274,7 @@
                     </label>
                   </div>
                   <p id="rpc-detect-status" class="helper-copy">
-                    Type an EVM chain name, choose Normal RPC or WebSockets, then import from Chainlist or Alchemy.
+                    Type an EVM chain name, choose Normal RPC or WebSockets, then import from Chainlist, Alchemy, or dRPC.
                   </p>
                   <div id="rpc-inline-summary" class="rpc-chainlist-summary hidden"></div>
                   <p id="rpc-inline-selection-status" class="helper-copy rpc-inline-selection-status hidden"></p>
@@ -298,6 +298,13 @@
                       type="button"
                     >
                       Import From Alchemy
+                    </button>
+                    <button
+                      id="rpc-import-drpc-button"
+                      class="ghost-button fx-button"
+                      type="button"
+                    >
+                      Import From dRPC
                     </button>
                     <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
                     <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Add Selected RPCs</button>
@@ -382,6 +389,24 @@
                   <div class="settings-actions">
                     <button id="delete-alchemy-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-alchemy-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card">
+                  <div class="surface-header compact settings-card-header">
+                    <div>
+                      <h4>dRPC API</h4>
+                      <p class="helper-copy">Save a dRPC API key for premium backup RPC endpoints, multichain coverage, and WebSocket subscriptions.</p>
+                    </div>
+                    <span id="drpc-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="drpc-api-key-input" type="password" placeholder="dRPC API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw dRPC API key only. Do not paste a link, command, or full RPC URL.</p>
+                  <div class="settings-actions">
+                    <button id="delete-drpc-key-button" class="ghost-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-drpc-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
                   </div>
                 </section>
 

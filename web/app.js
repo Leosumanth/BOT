@@ -123,6 +123,7 @@ const rpcCancelButton = document.getElementById("rpc-cancel-button");
 const rpcSubmitButton = document.getElementById("rpc-submit-button");
 const rpcImportChainlistButton = document.getElementById("rpc-import-chainlist-button");
 const rpcImportAlchemyButton = document.getElementById("rpc-import-alchemy-button");
+const rpcImportDrpcButton = document.getElementById("rpc-import-drpc-button");
 const rpcChainSearchField = document.getElementById("rpc-chain-search-field");
 const rpcChainSearchInput = document.getElementById("rpc-chain-search-input");
 const rpcTransportTabs = document.getElementById("rpc-transport-tabs");
@@ -181,6 +182,10 @@ const alchemyApiKeyInput = document.getElementById("alchemy-api-key-input");
 const alchemyConfigStatus = document.getElementById("alchemy-config-status");
 const deleteAlchemyKeyButton = document.getElementById("delete-alchemy-key-button");
 const testAlchemyKeyButton = document.getElementById("test-alchemy-key-button");
+const drpcApiKeyInput = document.getElementById("drpc-api-key-input");
+const drpcConfigStatus = document.getElementById("drpc-config-status");
+const deleteDrpcKeyButton = document.getElementById("delete-drpc-key-button");
+const testDrpcKeyButton = document.getElementById("test-drpc-key-button");
 const openseaApiKeyInput = document.getElementById("opensea-api-key-input");
 const openseaConfigStatus = document.getElementById("opensea-config-status");
 const deleteOpenseaKeyButton = document.getElementById("delete-opensea-key-button");
@@ -323,6 +328,8 @@ let rpcDiscoveryState = {
   query: "",
   chain: null,
   match: null,
+  providerKey: "",
+  providerLabel: "",
   candidates: [],
   selectedUrls: [],
   transportFilter: "http",
@@ -3166,7 +3173,7 @@ function isRpcEditMode() {
 function defaultRpcDetectMessage() {
   return isRpcEditMode()
     ? "Editing stored node. Update the URL to re-detect its chain."
-    : "Type any EVM chain name and the dashboard will look it up in Chainlist, then scan fast RPCs you can keep or uncheck.";
+    : "Type an EVM chain name, choose Normal RPC or WebSockets, then click Import From Chainlist, Import From Alchemy, or Import From dRPC.";
 }
 
 function setRpcDetectMessage(message) {
@@ -3259,7 +3266,7 @@ function renderRpcDiscoveryMatch(match = rpcDiscoveryState.match) {
   if (match.mode === "fuzzy") {
     chips.push("Fuzzy match");
   }
-  if (match.source === "chainlist_search") {
+  if (match.source === "chainlist_search" && (!rpcDiscoveryState.providerKey || rpcDiscoveryState.providerKey === "chainlist")) {
     chips.push("Chainlist lookup");
   }
 
@@ -3282,6 +3289,7 @@ function renderRpcDiscoverySummary() {
     rpcInlineSummary.innerHTML = "";
   } else {
     const chips = [
+      String(summary.sourceLabel || rpcDiscoveryState.providerLabel || "").trim() || null,
       `${Number(summary.published || 0)} published`,
       `${Number(summary.probed || 0)} probed`,
       `${Number(summary.healthy || 0)} healthy`,
@@ -3315,10 +3323,11 @@ function renderRpcDiscoveryCandidates() {
 
   if (rpcDiscoveryState.loading) {
     const chainLabelCopy = rpcDiscoveryState.chain?.label || "this chain";
+    const providerLabel = rpcDiscoveryState.providerLabel || "provider";
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
         <h3>Scanning ${escapeHtml(chainLabelCopy)}</h3>
-        <p>Checking Chainlist endpoints for healthy responses and low latency.</p>
+        <p>Checking ${escapeHtml(providerLabel)} endpoints for healthy responses and low latency.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -3331,7 +3340,7 @@ function renderRpcDiscoveryCandidates() {
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
         <h3>Search a chain</h3>
-        <p>Type any EVM chain name and the dashboard will look it up in Chainlist before scanning healthy RPCs.</p>
+        <p>Type an EVM chain name, choose the transport, then click Import From Chainlist, Import From Alchemy, or Import From dRPC.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -3342,8 +3351,8 @@ function renderRpcDiscoveryCandidates() {
   if (!rpcDiscoveryState.chain) {
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
-        <h3>No Chainlist match yet</h3>
-        <p>Keep typing the chain name, or try a different EVM network spelling. Non-EVM chains like Aptos will not appear in Chainlist.</p>
+        <h3>No chain match yet</h3>
+        <p>Keep typing the chain name, or try a different EVM network spelling. Non-EVM chains like Solana will not appear in this EVM RPC flow.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -3352,10 +3361,24 @@ function renderRpcDiscoveryCandidates() {
   }
 
   if (rpcDiscoveryState.error) {
+    const sourceLabel = rpcDiscoveryState.providerLabel || "Import";
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
-        <h3>Scan failed</h3>
+        <h3>${escapeHtml(sourceLabel)} failed</h3>
         <p>${escapeHtml(rpcDiscoveryState.error)}</p>
+      </div>
+    `;
+    renderRpcDiscoverySummary();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  if (!rpcDiscoveryState.summary) {
+    const transportLabel = rpcDiscoveryState.transportFilter === "ws" ? "websocket" : "normal";
+    rpcInlineCandidateList.innerHTML = `
+      <div class="empty-state">
+        <h3>Choose an import source</h3>
+        <p>${escapeHtml(rpcDiscoveryState.chain.label)} is ready. Click Import From Chainlist, Import From Alchemy, or Import From dRPC to load healthy ${escapeHtml(transportLabel)} RPCs.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -3365,10 +3388,11 @@ function renderRpcDiscoveryCandidates() {
 
   if (rpcDiscoveryState.summary?.transportUnavailable) {
     const transportLabel = rpcDiscoveryState.transportFilter === "ws" ? "websocket" : "normal";
+    const sourceLabel = rpcDiscoveryState.summary?.sourceLabel || rpcDiscoveryState.providerLabel || "This provider";
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
         <h3>No ${escapeHtml(transportLabel)} RPCs published</h3>
-        <p>Chainlist does not currently publish ${escapeHtml(transportLabel)} RPC URLs for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
+        <p>${escapeHtml(sourceLabel)} does not currently publish ${escapeHtml(transportLabel)} RPC URLs for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -3378,11 +3402,12 @@ function renderRpcDiscoveryCandidates() {
 
   const filteredCandidates = healthyVisibleRpcDiscoveryCandidates();
   if (filteredCandidates.length === 0) {
+    const sourceLabel = rpcDiscoveryState.summary?.sourceLabel || rpcDiscoveryState.providerLabel || "This source";
     if (rpcDiscoveryState.summary?.allConfigured) {
       rpcInlineCandidateList.innerHTML = `
         <div class="empty-state">
           <h3>Already configured</h3>
-          <p>All published Chainlist RPCs for ${escapeHtml(rpcDiscoveryState.chain.label)} are already saved in your dashboard.</p>
+          <p>All published ${escapeHtml(sourceLabel)} RPCs for ${escapeHtml(rpcDiscoveryState.chain.label)} are already saved in your dashboard.</p>
         </div>
       `;
       renderRpcDiscoverySummary();
@@ -3397,7 +3422,7 @@ function renderRpcDiscoveryCandidates() {
     rpcInlineCandidateList.innerHTML = `
       <div class="empty-state">
         <h3>No healthy ${escapeHtml(transportLabel)} ready</h3>
-        <p>The live probe did not find a healthy low-latency ${escapeHtml(transportLabel)} endpoint for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
+        <p>The live probe did not find a healthy low-latency ${escapeHtml(transportLabel)} endpoint from ${escapeHtml(sourceLabel)} for ${escapeHtml(rpcDiscoveryState.chain.label)}.</p>
       </div>
     `;
     renderRpcDiscoverySummary();
@@ -3411,6 +3436,7 @@ function renderRpcDiscoveryCandidates() {
       const isSelected = selectedUrls.has(candidate.url);
       const rankingChip = candidate.recommended ? "Recommended" : `Rank #${candidate.rank || "?"}`;
       const transportLabel = isSocketRpcUrl(candidate.url) ? "WebSocket" : "HTTPS";
+      const providerLabel = String(candidate.group || rpcDiscoveryState.summary?.sourceLabel || rpcDiscoveryState.providerLabel || "").trim();
 
       return `
         <label class="rpc-candidate-card ${escapeHtml(candidate.lastHealth?.status || "untested")} ${isSelected ? "selected" : ""}">
@@ -3429,6 +3455,7 @@ function renderRpcDiscoveryCandidates() {
               </div>
               <div class="chip-row">
                 <span class="queue-chip">${escapeHtml(candidate.chainLabel || rpcDiscoveryState.chain.label)}</span>
+                ${providerLabel ? `<span class="queue-chip">${escapeHtml(providerLabel)}</span>` : ""}
                 <span class="queue-chip">${escapeHtml(rankingChip)}</span>
                 <span class="queue-chip">${escapeHtml(transportLabel)}</span>
                 <span class="queue-chip">${escapeHtml(formatLatencyLabel(candidate.lastHealth?.latencyMs))}</span>
@@ -3472,6 +3499,8 @@ function clearRpcDiscoveryState(options = {}) {
     query: preserveQuery ? String(rpcChainSearchInput.value || "").trim() : "",
     chain: null,
     match: null,
+    providerKey: "",
+    providerLabel: "",
     candidates: [],
     selectedUrls: [],
     transportFilter: rpcDiscoveryState.transportFilter || "http",
@@ -3499,16 +3528,14 @@ function renderRpcTransportTabs() {
   });
 }
 
-async function runRpcDiscoveryScan(options = {}) {
-  const { forceRefresh = false, retryOnFailure = true } = options;
+function applyRpcDiscoveryQueryState() {
   if (isRpcEditMode()) {
     return;
   }
 
-  const transportFilter = String(rpcDiscoveryState.transportFilter || "http");
   const query = String(rpcChainSearchInput.value || "").trim();
   const normalizedQuery = normalizeChainSearchValue(query);
-  rpcDiscoveryState.query = query;
+  const transportFilter = String(rpcDiscoveryState.transportFilter || "http");
 
   if (!normalizedQuery) {
     clearRpcDiscoveryState();
@@ -3519,44 +3546,113 @@ async function runRpcDiscoveryScan(options = {}) {
 
   if (normalizedQuery.length < 2) {
     clearRpcDiscoveryState({ preserveQuery: true });
-    setRpcDetectMessage("Keep typing the chain name to start the Chainlist lookup.");
+    setRpcDetectMessage("Keep typing the chain name, then choose where to import RPCs from.");
     updateRpcSubmitButton();
     return;
   }
 
   const localMatch = resolveRpcChainQuery(query);
-
-  const requestId = ++rpcDiscoveryRequestId;
   const provisionalChain = localMatch?.chain || null;
-  const priorSelection =
-    provisionalChain && provisionalChain.key === rpcDiscoveryState.chain?.key
-      ? new Set(rpcDiscoveryState.selectedUrls || [])
-      : new Set();
+  rpcDiscoveryRequestId += 1;
   rpcDiscoveryState = {
     query,
     chain: provisionalChain,
     match: localMatch || null,
+    providerKey: "",
+    providerLabel: "",
     candidates: [],
     selectedUrls: [],
-    transportFilter: rpcDiscoveryState.transportFilter || "http",
+    transportFilter,
+    loading: false,
+    summary: null,
+    error: ""
+  };
+
+  if (provisionalChain?.key) {
+    rpcChainInput.value = provisionalChain.key;
+  }
+
+  const transportLabel = transportFilter === "ws" ? "websocket" : "normal";
+  setRpcDetectMessage(
+    provisionalChain?.label
+      ? `${provisionalChain.label} matched. Click Import From Chainlist, Import From Alchemy, or Import From dRPC to load healthy ${transportLabel} RPCs.`
+      : `Ready to look up "${query}". Click Import From Chainlist, Import From Alchemy, or Import From dRPC to load healthy RPCs.`
+  );
+
+  renderRpcTransportTabs();
+  renderRpcDiscoveryMatch();
+  renderRpcDiscoveryCandidates();
+}
+
+async function loadRpcDiscoveryCandidates(providerKey, options = {}) {
+  const { forceRefresh = true } = options;
+  if (isRpcEditMode()) {
+    return;
+  }
+
+  const providerLabel =
+    providerKey === "alchemy" ? "Alchemy" : providerKey === "drpc" ? "dRPC" : "Chainlist";
+  const transportFilter = String(rpcDiscoveryState.transportFilter || "http");
+  const query = String(rpcChainSearchInput.value || "").trim();
+  const normalizedQuery = normalizeChainSearchValue(query);
+
+  if (!normalizedQuery) {
+    clearRpcDiscoveryState();
+    setRpcDetectMessage();
+    updateRpcSubmitButton();
+    return;
+  }
+
+  if (normalizedQuery.length < 2) {
+    applyRpcDiscoveryQueryState();
+    return;
+  }
+
+  const localMatch = resolveRpcChainQuery(query);
+  const provisionalChain = localMatch?.chain || null;
+  const requestId = ++rpcDiscoveryRequestId;
+  const priorSelection =
+    providerKey === rpcDiscoveryState.providerKey &&
+    provisionalChain &&
+    provisionalChain.key === rpcDiscoveryState.chain?.key
+      ? new Set(rpcDiscoveryState.selectedUrls || [])
+      : new Set();
+
+  rpcDiscoveryState = {
+    query,
+    chain: provisionalChain,
+    match: localMatch || null,
+    providerKey,
+    providerLabel,
+    candidates: [],
+    selectedUrls: [],
+    transportFilter,
     loading: true,
     summary: null,
     error: ""
   };
+
   if (provisionalChain?.key) {
     rpcChainInput.value = provisionalChain.key;
   }
-  rpcFormGroup = "Chainlist";
+
   setRpcDetectMessage(
     provisionalChain?.label
-      ? `Scanning fast Chainlist RPCs for ${provisionalChain.label}...`
-      : `Looking up "${query}" in Chainlist and scanning healthy RPCs...`
+      ? `Scanning ${providerLabel} ${transportFilter === "ws" ? "websocket" : "normal"} RPCs for ${provisionalChain.label}...`
+      : `Looking up "${query}" in ${providerLabel} and scanning healthy RPCs...`
   );
+  renderRpcTransportTabs();
   renderRpcDiscoveryMatch();
   renderRpcDiscoveryCandidates();
 
   try {
-    const payload = await request("/api/rpc-nodes/chainlist-candidates", {
+    const endpoint =
+      providerKey === "alchemy"
+        ? "/api/rpc-nodes/alchemy-candidates"
+        : providerKey === "drpc"
+          ? "/api/rpc-nodes/drpc-candidates"
+          : "/api/rpc-nodes/chainlist-candidates";
+    const payload = await request(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3580,6 +3676,7 @@ async function runRpcDiscoveryScan(options = {}) {
       ensureChainOption(resolvedChain);
       rpcChainInput.value = resolvedChain.key;
     }
+
     const healthyUrls = candidates
       .filter((candidate) => candidate.lastHealth?.status === "healthy")
       .map((candidate) => candidate.url);
@@ -3599,6 +3696,8 @@ async function runRpcDiscoveryScan(options = {}) {
       query,
       chain: resolvedChain,
       match,
+      providerKey,
+      providerLabel: String(payload.sourceLabel || providerLabel).trim() || providerLabel,
       candidates,
       selectedUrls: selectedUrls.length > 0 ? selectedUrls : healthyUrls,
       transportFilter,
@@ -3608,61 +3707,41 @@ async function runRpcDiscoveryScan(options = {}) {
     };
 
     const healthyCount = Number(payload.healthy || 0);
+    const transportLabel = transportFilter === "ws" ? "websocket" : "normal";
     setRpcDetectMessage(
       payload.transportUnavailable
-        ? `${resolvedChain.label} matched, but Chainlist does not currently publish ${transportFilter === "ws" ? "websocket" : "normal"} RPC URLs for this chain.`
+        ? `${resolvedChain.label} matched, but ${providerLabel} does not currently publish ${transportLabel} RPC URLs for this chain.`
         : payload.allConfigured
-        ? `${resolvedChain.label} matched. All published Chainlist RPCs for this chain are already configured.`
-        : healthyCount > 0
-        ? `${resolvedChain.label} matched. The recommended RPC is highlighted, and all healthy results are preselected so you can uncheck any you do not want.`
-        : `${resolvedChain.label} matched, but no healthy RPC endpoints passed the live probe.`
+          ? `${resolvedChain.label} matched. All published ${providerLabel} RPCs for this chain are already configured.`
+          : healthyCount > 0
+            ? `${resolvedChain.label} matched. ${providerLabel} results are loaded below and preselected so you can uncheck any you do not want.`
+            : `${resolvedChain.label} matched, but no healthy ${providerLabel} RPC endpoints passed the live probe.`
     );
   } catch (error) {
     if (requestId !== rpcDiscoveryRequestId) {
       return;
     }
 
-    const message = error.message || `Chainlist scan failed for "${query}". Try Refresh in a moment.`;
+    const message = error.message || `${providerLabel} scan failed for "${query}". Try again in a moment.`;
     rpcDiscoveryState = {
       query,
       chain: provisionalChain,
       match: localMatch || null,
+      providerKey,
+      providerLabel,
       candidates: [],
       selectedUrls: [],
-      transportFilter: rpcDiscoveryState.transportFilter || "http",
+      transportFilter,
       loading: false,
       summary: null,
       error: message
     };
-    if (retryOnFailure && !forceRefresh) {
-      await runRpcDiscoveryScan({ forceRefresh: true, retryOnFailure: false });
-      return;
-    }
-
     setRpcDetectMessage(message);
   }
 
   renderRpcTransportTabs();
   renderRpcDiscoveryMatch();
   renderRpcDiscoveryCandidates();
-}
-
-function scheduleRpcDiscoveryScan(options = {}) {
-  const { immediate = false, forceRefresh = false } = options;
-  if (rpcChainSearchTimer) {
-    clearTimeout(rpcChainSearchTimer);
-    rpcChainSearchTimer = null;
-  }
-
-  if (immediate) {
-    void runRpcDiscoveryScan({ forceRefresh });
-    return;
-  }
-
-  rpcChainSearchTimer = window.setTimeout(() => {
-    rpcChainSearchTimer = null;
-    void runRpcDiscoveryScan({ forceRefresh });
-  }, 450);
 }
 
 async function submitRpcDiscoverySelection() {
@@ -3688,7 +3767,7 @@ async function submitRpcDiscoverySelection() {
           name: candidate.name,
           chainKey: candidate.chainKey,
           url: candidate.url,
-          group: "Chainlist"
+          group: candidate.group || rpcDiscoveryState.providerLabel || "Custom"
         }),
         quiet: true
       });
@@ -3703,8 +3782,8 @@ async function submitRpcDiscoverySelection() {
     populateChainSelectors();
   } catch {}
 
-  if (rpcChainSearchInput.value.trim()) {
-    await runRpcDiscoveryScan();
+  if (rpcChainSearchInput.value.trim() && rpcDiscoveryState.providerKey) {
+    await loadRpcDiscoveryCandidates(rpcDiscoveryState.providerKey, { forceRefresh: true });
   } else {
     renderRpcDiscoveryCandidates();
   }
@@ -3713,8 +3792,13 @@ async function submitRpcDiscoverySelection() {
   rpcSubmitButton.textContent = buttonLabel;
   updateRpcSubmitButton();
 
+  const providerLabel = rpcDiscoveryState.providerLabel || "RPC";
   if (savedCount > 0 && failures.length === 0) {
-    showToast(`${savedCount} RPC node${savedCount === 1 ? "" : "s"} added from the live scan.`, "success", "RPC Added");
+    showToast(
+      `${savedCount} ${providerLabel} RPC node${savedCount === 1 ? "" : "s"} added from the current selection.`,
+      "success",
+      "RPC Added"
+    );
     return;
   }
 
@@ -3741,6 +3825,8 @@ function resetRpcForm(options = {}) {
   rpcFormBadge.classList.add("hidden");
   rpcCancelButton.classList.add("hidden");
   rpcImportChainlistButton.classList.remove("hidden");
+  rpcImportAlchemyButton?.classList.remove("hidden");
+  rpcImportDrpcButton?.classList.remove("hidden");
   rpcImportChainlistButton.textContent = "Import From Chainlist";
   rpcChainSearchField.classList.remove("hidden");
   rpcManualFields.classList.add("hidden");
@@ -3756,7 +3842,7 @@ function resetRpcForm(options = {}) {
   } else {
     clearRpcDiscoveryState({ preserveQuery: true });
     if (rpcChainSearchInput.value.trim()) {
-      void runRpcDiscoveryScan();
+      applyRpcDiscoveryQueryState();
     }
   }
 
@@ -3777,6 +3863,8 @@ function startRpcEdit(node) {
   rpcFormBadge.classList.remove("hidden");
   rpcCancelButton.classList.remove("hidden");
   rpcImportChainlistButton.classList.add("hidden");
+  rpcImportAlchemyButton?.classList.add("hidden");
+  rpcImportDrpcButton?.classList.add("hidden");
   rpcChainSearchField.classList.add("hidden");
   rpcSearchMatch.classList.add("hidden");
   rpcManualFields.classList.remove("hidden");
@@ -4691,6 +4779,18 @@ function syncRpcImportButtons() {
     : !configured
       ? "Save an Alchemy API key in Settings first."
       : `Import healthy ${transportLabel} Alchemy RPCs for the typed chain.`;
+
+  if (!rpcImportDrpcButton) {
+    return;
+  }
+
+  const drpcConfigured = Boolean(state.settings.drpcApiKeyConfigured);
+  rpcImportDrpcButton.disabled = isEditing || rpcDiscoveryState.loading || !hasQuery || !drpcConfigured;
+  rpcImportDrpcButton.title = !hasQuery
+    ? "Type an EVM chain name first."
+    : !drpcConfigured
+      ? "Save a dRPC API key in Settings first."
+      : `Import healthy ${transportLabel} dRPC endpoints for the typed chain.`;
 }
 
 async function importChainlistRpcs() {
@@ -4699,28 +4799,7 @@ async function importChainlistRpcs() {
     throw new Error("Type an EVM chain name before importing Chainlist RPCs.");
   }
 
-  const response = await request("/api/rpc-nodes/import-chainlist", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chainKey: payload.chainKey,
-      query: payload.query,
-      transportFilter: payload.transportFilter,
-      limit: payload.transportFilter === "ws" ? 4 : 6,
-      forceRefresh: true
-    })
-  });
-
-  await loadState();
-
-  const imported = Number(response.imported || 0);
-  const chainLabelCopy = response.chain?.label || payload.query || "selected chain";
-  const transportLabel = payload.transportFilter === "ws" ? "websocket" : "normal";
-  showToast(
-    `${pluralize(imported, "Chainlist RPC")} imported for ${chainLabelCopy} (${transportLabel}).`,
-    "success",
-    "Chainlist Import"
-  );
+  await loadRpcDiscoveryCandidates("chainlist", { forceRefresh: true });
 }
 
 async function importAlchemyRpcs() {
@@ -4729,29 +4808,16 @@ async function importAlchemyRpcs() {
     throw new Error("Type an EVM chain name before importing Alchemy RPCs.");
   }
 
-  const response = await request("/api/rpc-nodes/import-alchemy", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chainKey: payload.chainKey,
-      query: payload.query,
-      transportFilter: payload.transportFilter
-    })
-  });
+  await loadRpcDiscoveryCandidates("alchemy", { forceRefresh: true });
+}
 
-  await loadState();
+async function importDrpcRpcs() {
+  const payload = currentRpcImportRequestPayload();
+  if (!payload.query && !payload.chainKey) {
+    throw new Error("Type an EVM chain name before importing dRPC endpoints.");
+  }
 
-  const imported = Number(response.imported || 0);
-  const chainLabelCopy = response.chain?.label || payload.query || "selected chain";
-  const healthySocketCount = Number(response.healthySocketCount || 0);
-  const skippedExisting = Number(response.skippedExisting || 0);
-  const transportLabel = payload.transportFilter === "ws" ? "websocket" : "normal";
-
-  showToast(
-    `${pluralize(imported, "Alchemy RPC")} imported for ${chainLabelCopy} (${transportLabel}).${healthySocketCount > 0 ? ` ${healthySocketCount} websocket endpoint${healthySocketCount === 1 ? "" : "s"} ready.` : ""}${skippedExisting > 0 ? ` ${skippedExisting} already saved.` : ""}`,
-    "success",
-    "Alchemy Import"
-  );
+  await loadRpcDiscoveryCandidates("drpc", { forceRefresh: true });
 }
 
 function renderRpcNodes() {
@@ -5021,6 +5087,29 @@ function syncAlchemyKeyControls() {
   });
 }
 
+function setDrpcKeyStatus(message = null) {
+  setApiKeyStatus({
+    input: drpcApiKeyInput,
+    statusNode: drpcConfigStatus,
+    source: state.settings.drpcApiKeySource,
+    message
+  });
+}
+
+function syncDrpcKeyControls() {
+  syncApiKeyControls({
+    input: drpcApiKeyInput,
+    deleteButton: deleteDrpcKeyButton,
+    source: state.settings.drpcApiKeySource,
+    placeholders: {
+      saved: "Saved on server. Enter a new key to replace it.",
+      env: "Loaded from .env. Enter a new key to override it.",
+      empty: "dRPC API key"
+    },
+    deleteLabel: "Delete the saved dRPC API key"
+  });
+}
+
 function setOpenseaKeyStatus(message = null) {
   setApiKeyStatus({
     input: openseaApiKeyInput,
@@ -5065,6 +5154,7 @@ function renderSettings() {
   explorerApiKeyInput.value = "";
   openaiApiKeyInput.value = "";
   alchemyApiKeyInput.value = "";
+  drpcApiKeyInput.value = "";
   openseaApiKeyInput.value = "";
 
   syncExplorerKeyControls();
@@ -5073,6 +5163,8 @@ function renderSettings() {
   setOpenaiKeyStatus();
   syncAlchemyKeyControls();
   setAlchemyKeyStatus();
+  syncDrpcKeyControls();
+  setDrpcKeyStatus();
   syncOpenseaKeyControls();
   setOpenseaKeyStatus();
 }
@@ -6448,8 +6540,16 @@ rpcPagePulseButton.addEventListener("click", async () => {
 
 rpcImportAlchemyButton?.addEventListener("click", async () => {
   try {
-    await withButtonBusyState(rpcImportAlchemyButton, "Importing...", async () => {
+    await withButtonBusyState(rpcImportAlchemyButton, "Loading...", async () => {
       await importAlchemyRpcs();
+    });
+  } catch {}
+});
+
+rpcImportDrpcButton?.addEventListener("click", async () => {
+  try {
+    await withButtonBusyState(rpcImportDrpcButton, "Loading...", async () => {
+      await importDrpcRpcs();
     });
   } catch {}
 });
@@ -6587,7 +6687,7 @@ rpcImportChainlistButton.addEventListener("click", async () => {
   }
 
   try {
-    await withButtonBusyState(rpcImportChainlistButton, "Importing...", async () => {
+    await withButtonBusyState(rpcImportChainlistButton, "Loading...", async () => {
       await importChainlistRpcs();
     });
   } catch {}
@@ -6657,24 +6757,15 @@ rpcChainSearchInput.addEventListener("input", () => {
     return;
   }
 
-  const query = rpcChainSearchInput.value.trim();
-  if (!query) {
-    clearRpcDiscoveryState();
-    setRpcDetectMessage();
-    updateRpcSubmitButton();
-    return;
-  }
-
-  syncRpcImportButtons();
-  scheduleRpcDiscoveryScan();
+  applyRpcDiscoveryQueryState();
 });
 
 rpcChainSearchInput.addEventListener("blur", () => {
-  if (isRpcEditMode() || !rpcChainSearchInput.value.trim()) {
+  if (isRpcEditMode()) {
     return;
   }
 
-  scheduleRpcDiscoveryScan({ immediate: true });
+  applyRpcDiscoveryQueryState();
 });
 
 if (walletAssetsRefreshButton) {
@@ -6708,13 +6799,7 @@ if (rpcTransportTabs) {
       rpcDiscoveryState.transportFilter = nextFilter;
       renderRpcTransportTabs();
       syncRpcImportButtons();
-      if (rpcChainSearchInput.value.trim()) {
-        void runRpcDiscoveryScan();
-        return;
-      }
-
-      renderRpcDiscoverySummary();
-      renderRpcDiscoveryCandidates();
+      applyRpcDiscoveryQueryState();
     });
   });
 }
@@ -6724,9 +6809,10 @@ settingsForm.addEventListener("submit", async (event) => {
   const explorerApiKeyValue = explorerApiKeyInput.value.trim();
   const openaiApiKeyValue = openaiApiKeyInput.value.trim();
   const alchemyApiKeyValue = alchemyApiKeyInput.value.trim();
+  const drpcApiKeyValue = drpcApiKeyInput.value.trim();
   const openseaApiKeyValue = openseaApiKeyInput.value.trim();
 
-  if (!explorerApiKeyValue && !openaiApiKeyValue && !alchemyApiKeyValue && !openseaApiKeyValue) {
+  if (!explorerApiKeyValue && !openaiApiKeyValue && !alchemyApiKeyValue && !drpcApiKeyValue && !openseaApiKeyValue) {
     showToast("Enter a new API key before saving settings.", "info", "No Changes");
     return;
   }
@@ -6740,6 +6826,9 @@ settingsForm.addEventListener("submit", async (event) => {
   }
   if (alchemyApiKeyValue) {
     updatedKeys.push("Alchemy");
+  }
+  if (drpcApiKeyValue) {
+    updatedKeys.push("dRPC");
   }
   if (openseaApiKeyValue) {
     updatedKeys.push("OpenSea");
@@ -6756,6 +6845,7 @@ settingsForm.addEventListener("submit", async (event) => {
           explorerApiKey: explorerApiKeyValue,
           openaiApiKey: openaiApiKeyValue,
           alchemyApiKey: alchemyApiKeyValue,
+          drpcApiKey: drpcApiKeyValue,
           openseaApiKey: openseaApiKeyValue
         })
       });
@@ -6765,6 +6855,7 @@ settingsForm.addEventListener("submit", async (event) => {
       explorerApiKeyInput.value = "";
       openaiApiKeyInput.value = "";
       alchemyApiKeyInput.value = "";
+      drpcApiKeyInput.value = "";
       openseaApiKeyInput.value = "";
       showToast(
         `${updatedKeys.join(" and ")} API ${updatedKeys.length === 1 ? "key" : "keys"} updated.`,
@@ -6798,6 +6889,10 @@ openaiApiKeyInput.addEventListener("input", () => {
 
 alchemyApiKeyInput.addEventListener("input", () => {
   setAlchemyKeyStatus();
+});
+
+drpcApiKeyInput.addEventListener("input", () => {
+  setDrpcKeyStatus();
 });
 
 openseaApiKeyInput.addEventListener("input", () => {
@@ -6909,6 +7004,42 @@ deleteAlchemyKeyButton.addEventListener("click", async () => {
   } finally {
     deleteAlchemyKeyButton.textContent = buttonLabel;
     syncAlchemyKeyControls();
+  }
+});
+
+deleteDrpcKeyButton.addEventListener("click", async () => {
+  if (state.settings.drpcApiKeySource !== "saved") {
+    showToast("There is no saved dRPC dashboard key to delete.", "info", "No Saved Key");
+    return;
+  }
+
+  if (!window.confirm("Delete the saved dRPC API key?")) {
+    return;
+  }
+
+  const buttonLabel = deleteDrpcKeyButton.textContent;
+  deleteDrpcKeyButton.disabled = true;
+  deleteDrpcKeyButton.textContent = "Deleting...";
+
+  try {
+    const payload = await request("/api/settings/drpc-key", {
+      method: "DELETE"
+    });
+
+    if (payload.settings) {
+      state.settings = payload.settings;
+    }
+
+    drpcApiKeyInput.value = "";
+    syncDrpcKeyControls();
+    setDrpcKeyStatus();
+    showToast("Saved dRPC API key deleted.", "success", "dRPC Key Deleted");
+  } catch {
+    syncDrpcKeyControls();
+    setDrpcKeyStatus();
+  } finally {
+    deleteDrpcKeyButton.textContent = buttonLabel;
+    syncDrpcKeyControls();
   }
 });
 
@@ -7083,6 +7214,52 @@ testAlchemyKeyButton.addEventListener("click", async () => {
   } finally {
     testAlchemyKeyButton.disabled = false;
     testAlchemyKeyButton.textContent = buttonLabel;
+  }
+});
+
+testDrpcKeyButton.addEventListener("click", async () => {
+  const buttonLabel = testDrpcKeyButton.textContent;
+  const drpcApiKeyValue = drpcApiKeyInput.value.trim();
+
+  if (!drpcApiKeyValue && !state.settings.drpcApiKeyConfigured) {
+    setDrpcKeyStatus("No key to test");
+    showToast("Paste a dRPC key first, or save one before testing.", "info", "dRPC Key Required");
+    return;
+  }
+
+  testDrpcKeyButton.disabled = true;
+  testDrpcKeyButton.textContent = "Testing...";
+
+  try {
+    const payload = await request("/api/control/test-drpc-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        drpcApiKey: drpcApiKeyValue
+      })
+    });
+
+    const statusMessage =
+      payload.source === "input"
+        ? "Typed key verified"
+        : payload.source === "env"
+          ? "Environment key verified"
+          : "Saved key verified";
+    setDrpcKeyStatus(statusMessage);
+    showToast(
+      payload.source === "input"
+        ? "dRPC API key is valid. Save settings to replace the current key."
+        : payload.source === "env"
+          ? "Environment dRPC API key is valid. Save a new key if you want to override it in the dashboard."
+          : "Saved dRPC API key is valid.",
+      "success",
+      "dRPC Key Valid"
+    );
+  } catch {
+    setDrpcKeyStatus("Key test failed");
+  } finally {
+    testDrpcKeyButton.disabled = false;
+    testDrpcKeyButton.textContent = buttonLabel;
   }
 });
 

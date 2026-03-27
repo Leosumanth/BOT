@@ -22,6 +22,7 @@ const {
 const {
   buildClientSettings,
   fetchAlchemyBlockNumber,
+  fetchDrpcBlockNumber,
   fetchAbiFromExplorer,
   fetchOpenSeaCollectionBySlug,
   normalizeDashboardSettings,
@@ -142,6 +143,14 @@ const alchemyRpcImportCatalog = [
   { chainKey: "zora", chainId: 7777777, endpointKey: "zora-mainnet", label: "Zora Mainnet" },
   { chainKey: "shape", chainId: 360, endpointKey: "shape-mainnet", label: "Shape Mainnet" },
   { chainKey: "plasma", chainId: 9745, endpointKey: "plasma-mainnet", label: "Plasma Mainnet" }
+];
+const drpcRpcImportCatalog = [
+  { chainKey: "ethereum", chainId: 1, networkKey: "ethereum", label: "Ethereum Mainnet" },
+  { chainKey: "bsc", chainId: 56, networkKey: "bsc", label: "BNB Smart Chain Mainnet" },
+  { chainKey: "optimism", chainId: 10, networkKey: "optimism", label: "Optimism Mainnet" },
+  { chainKey: "polygon", chainId: 137, networkKey: "polygon", label: "Polygon Mainnet" },
+  { chainKey: "base", chainId: 8453, networkKey: "base", label: "Base Mainnet" },
+  { chainKey: "arbitrum", chainId: 42161, networkKey: "arbitrum", label: "Arbitrum Mainnet" }
 ];
 const rpcProviderNamePatterns = [
   { pattern: /alchemy/i, label: "Alchemy" },
@@ -1545,6 +1554,7 @@ function buildAssistantStateSnapshot() {
       explorerApiKeyConfigured: Boolean(settings.explorerApiKeyConfigured),
       openaiApiKeyConfigured: Boolean(settings.openaiApiKeyConfigured),
       alchemyApiKeyConfigured: Boolean(settings.alchemyApiKeyConfigured),
+      drpcApiKeyConfigured: Boolean(settings.drpcApiKeyConfigured),
       openseaApiKeyConfigured: Boolean(settings.openseaApiKeyConfigured),
       queueMode: queueModeEnabled() ? "redis" : "local",
       operatorAssistantModel
@@ -5440,6 +5450,12 @@ function buildAlchemyRpcUrl(endpointKey, apiKey, transport = "http") {
   return `${protocol}://${endpointKey}.g.alchemy.com/v2/${encodeURIComponent(apiKey)}`;
 }
 
+function buildDrpcRpcUrl(networkKey, apiKey, transport = "http") {
+  const protocol = transport === "ws" ? "wss" : "https";
+  const hostname = transport === "ws" ? "lb.drpc.org" : "lb.drpc.live";
+  return `${protocol}://${hostname}/${networkKey}/${encodeURIComponent(apiKey)}`;
+}
+
 function findAlchemyRpcImportEntry(chain) {
   if (!chain) {
     return null;
@@ -5466,6 +5482,38 @@ function findAlchemyRpcImportEntry(chain) {
   );
   return (
     alchemyRpcImportCatalog.find((entry) =>
+      normalizedTerms.has(normalizeChainSearchQuery(entry.chainKey)) ||
+      normalizedTerms.has(normalizeChainSearchQuery(entry.label))
+    ) || null
+  );
+}
+
+function findDrpcRpcImportEntry(chain) {
+  if (!chain) {
+    return null;
+  }
+
+  const normalizedChainId = Number(chain.chainId);
+  if (Number.isFinite(normalizedChainId)) {
+    const byChainId = drpcRpcImportCatalog.find((entry) => Number(entry.chainId) === normalizedChainId);
+    if (byChainId) {
+      return byChainId;
+    }
+  }
+
+  const normalizedKey = String(chain.key || "").trim();
+  if (normalizedKey) {
+    const byKey = drpcRpcImportCatalog.find((entry) => String(entry.chainKey || "").trim() === normalizedKey);
+    if (byKey) {
+      return byKey;
+    }
+  }
+
+  const normalizedTerms = new Set(
+    [chain.key, chain.label].map((value) => normalizeChainSearchQuery(value)).filter(Boolean)
+  );
+  return (
+    drpcRpcImportCatalog.find((entry) =>
       normalizedTerms.has(normalizeChainSearchQuery(entry.chainKey)) ||
       normalizedTerms.has(normalizeChainSearchQuery(entry.label))
     ) || null
@@ -7416,6 +7464,7 @@ async function handleChainlistRpcCandidates(request, response) {
       allConfigured: preview.allConfigured,
       transportFilter: preview.transportFilter,
       transportUnavailable: preview.transportUnavailable,
+      sourceLabel: "Chainlist",
       candidates: preview.candidates
     });
   } catch (error) {
@@ -7563,6 +7612,175 @@ async function handleAlchemyRpcImport(request, response) {
       skippedExisting: preview.skippedExistingCount,
       healthySocketCount: preview.healthySocketCount,
       rpcNodes: nodesToPersist
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function handleAlchemyRpcCandidates(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const resolvedChain = await resolveChainlistRequestChain(payload);
+    const chain = resolvedChain.chain;
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const apiKey = String(resolvedSecrets.alchemyApiKey || "").trim();
+
+    if (!apiKey) {
+      throw new Error("Save an Alchemy API key in Settings or ALCHEMY_API_KEY in .env first.");
+    }
+
+    const preview = await collectAlchemyRpcCandidates(apiKey, {
+      chain,
+      transportFilter: payload.transportFilter
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      chain: {
+        key: chain.key,
+        label: chain.label,
+        chainId: chain.chainId
+      },
+      resolution: resolvedChain.resolution,
+      published: preview.totalCount,
+      publishedSocketCount:
+        preview.transportFilter === "ws" ? preview.totalCount : preview.healthySocketCount,
+      skippedExisting: preview.skippedExistingCount,
+      skippedProbeBudget: 0,
+      probed: preview.totalCount,
+      probedSocketCount:
+        preview.transportFilter === "ws" ? preview.totalCount : preview.healthySocketCount,
+      healthy: preview.healthyCount,
+      healthySocketCount: preview.healthySocketCount,
+      allConfigured: preview.allConfigured,
+      transportFilter: preview.transportFilter,
+      transportUnavailable: false,
+      sourceLabel: "Alchemy",
+      candidates: preview.candidates
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
+async function collectDrpcRpcCandidates(apiKey, options = {}) {
+  const { chain = null, timeoutMs = 8000 } = options;
+  if (!chain?.chainId) {
+    throw new Error("Choose a chain before importing dRPC endpoints.");
+  }
+
+  const importEntry = findDrpcRpcImportEntry(chain);
+  if (!importEntry) {
+    throw new Error(`dRPC import is not configured for ${chain.label} yet.`);
+  }
+
+  const transportFilter = normalizeRpcTransportFilter(options.transportFilter);
+  const transports =
+    transportFilter === "ws" ? ["ws"] : transportFilter === "all" ? ["http", "ws"] : ["http"];
+  const existingUrls = new Set(appState.rpcNodes.map((node) => String(node.url || "").trim()));
+  const candidates = [];
+  let skippedExistingCount = 0;
+
+  transports.forEach((transport) => {
+    const url = buildDrpcRpcUrl(importEntry.networkKey, apiKey, transport);
+    if (existingUrls.has(url)) {
+      skippedExistingCount += 1;
+      return;
+    }
+
+    candidates.push({
+      id: createId("rpc_probe"),
+      name: transport === "ws" ? `dRPC ${chain.label} WS` : `dRPC ${chain.label}`,
+      url,
+      chainKey: chain.key,
+      chainId: chain.chainId,
+      chainLabel: chain.label,
+      enabled: true,
+      group: "dRPC",
+      source: "preview",
+      lastHealth: null
+    });
+  });
+
+  if (candidates.length === 0) {
+    return {
+      chain,
+      importEntry,
+      transportFilter,
+      totalCount: 0,
+      skippedExistingCount,
+      allConfigured: skippedExistingCount > 0,
+      healthyCount: 0,
+      healthySocketCount: 0,
+      candidates: []
+    };
+  }
+
+  await Promise.all(
+    candidates.map(async (candidate) => {
+      await testRpcNodeHealth(candidate, timeoutMs);
+      return candidate;
+    })
+  );
+
+  const healthyCandidates = rankRpcNodesByLatency(
+    candidates.filter((candidate) => candidate.lastHealth?.status === "healthy")
+  );
+
+  return {
+    chain,
+    importEntry,
+    transportFilter,
+    totalCount: candidates.length,
+    skippedExistingCount,
+    allConfigured: false,
+    healthyCount: healthyCandidates.length,
+    healthySocketCount: healthyCandidates.filter((candidate) => isSocketRpcUrl(candidate.url)).length,
+    candidates: healthyCandidates
+  };
+}
+
+async function handleDrpcRpcCandidates(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const resolvedChain = await resolveChainlistRequestChain(payload);
+    const chain = resolvedChain.chain;
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const apiKey = String(resolvedSecrets.drpcApiKey || "").trim();
+
+    if (!apiKey) {
+      throw new Error("Save a dRPC API key in Settings or DRPC_API_KEY in .env first.");
+    }
+
+    const preview = await collectDrpcRpcCandidates(apiKey, {
+      chain,
+      transportFilter: payload.transportFilter
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      chain: {
+        key: chain.key,
+        label: chain.label,
+        chainId: chain.chainId
+      },
+      resolution: resolvedChain.resolution,
+      published: preview.totalCount,
+      publishedSocketCount:
+        preview.transportFilter === "ws" ? preview.totalCount : preview.healthySocketCount,
+      skippedExisting: preview.skippedExistingCount,
+      skippedProbeBudget: 0,
+      probed: preview.totalCount,
+      probedSocketCount:
+        preview.transportFilter === "ws" ? preview.totalCount : preview.healthySocketCount,
+      healthy: preview.healthyCount,
+      healthySocketCount: preview.healthySocketCount,
+      allConfigured: preview.allConfigured,
+      transportFilter: preview.transportFilter,
+      transportUnavailable: false,
+      sourceLabel: "dRPC",
+      candidates: preview.candidates
     });
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
@@ -7907,6 +8125,23 @@ async function verifyAlchemyApiKey(apiKey) {
   };
 }
 
+async function verifyDrpcApiKey(apiKey) {
+  if (/^https?:\/\//i.test(apiKey) || /drpc/i.test(apiKey) || /^curl\b/i.test(apiKey)) {
+    throw new Error("Paste the raw dRPC API key only, not a link, command, or full RPC URL.");
+  }
+
+  if (/\s/.test(apiKey)) {
+    throw new Error("dRPC API key must be a single token with no spaces.");
+  }
+
+  const result = await fetchDrpcBlockNumber({ apiKey });
+
+  return {
+    network: "Ethereum Mainnet",
+    blockNumber: result.blockNumber
+  };
+}
+
 async function verifyOpenSeaApiKey(apiKey) {
   if (/^https?:\/\//i.test(apiKey) || /x-api-key/i.test(apiKey) || /^curl\b/i.test(apiKey)) {
     throw new Error("Paste the raw OpenSea API key only, not a link, command, or header.");
@@ -8000,6 +8235,30 @@ async function handleAlchemyKeyTest(request, response) {
   }
 }
 
+async function handleDrpcKeyTest(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const inputKey = String(payload.drpcApiKey || "").trim();
+    const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+    const savedKey = String(integrationSecrets.drpcApiKey || "").trim();
+    const apiKey = inputKey || resolvedSecrets.drpcApiKey;
+
+    if (!apiKey) {
+      throw new Error("Add a dRPC API key first.");
+    }
+
+    const result = await verifyDrpcApiKey(apiKey);
+
+    sendJson(response, 200, {
+      ok: true,
+      source: inputKey ? "input" : savedKey ? "saved" : "env",
+      ...result
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleOpenSeaKeyTest(request, response) {
   try {
     const payload = await readJsonBody(request);
@@ -8057,6 +8316,17 @@ async function handleAlchemyKeyDelete(response) {
   }
 }
 
+async function handleDrpcKeyDelete(response) {
+  try {
+    await database.deleteSecret(secretStorageKeys.drpcApiKey);
+    delete integrationSecrets.drpcApiKey;
+    emitState();
+    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function handleOpenSeaKeyDelete(response) {
   try {
     await database.deleteSecret(secretStorageKeys.openseaApiKey);
@@ -8089,6 +8359,7 @@ async function handleSettingsSave(request, response) {
       explorerApiKey: String(payload.explorerApiKey || "").trim(),
       openaiApiKey: String(payload.openaiApiKey || "").trim(),
       alchemyApiKey: String(payload.alchemyApiKey || "").trim(),
+      drpcApiKey: String(payload.drpcApiKey || "").trim(),
       openseaApiKey: String(payload.openseaApiKey || "").trim()
     };
 
@@ -8100,6 +8371,9 @@ async function handleSettingsSave(request, response) {
     }
     if (secretInputs.alchemyApiKey) {
       await verifyAlchemyApiKey(secretInputs.alchemyApiKey);
+    }
+    if (secretInputs.drpcApiKey) {
+      await verifyDrpcApiKey(secretInputs.drpcApiKey);
     }
     if (secretInputs.openseaApiKey) {
       await verifyOpenSeaApiKey(secretInputs.openseaApiKey);
@@ -8452,6 +8726,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/control/test-drpc-key") {
+      await handleDrpcKeyTest(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/control/test-opensea-key") {
       await handleOpenSeaKeyTest(request, response);
       return;
@@ -8489,6 +8768,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/rpc-nodes/chainlist-candidates") {
       await handleChainlistRpcCandidates(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/alchemy-candidates") {
+      await handleAlchemyRpcCandidates(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/rpc-nodes/drpc-candidates") {
+      await handleDrpcRpcCandidates(request, response);
       return;
     }
 
@@ -8544,6 +8833,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "DELETE" && url.pathname === "/api/settings/alchemy-key") {
       await handleAlchemyKeyDelete(response);
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/settings/drpc-key") {
+      await handleDrpcKeyDelete(response);
       return;
     }
 
