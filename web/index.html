@@ -223,6 +223,7 @@
                   <p class="helper-copy">
                     Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
                   </p>
+                  <p id="rpc-health-sync-status" class="helper-copy"></p>
                 </div>
                 <div class="queue-actions">
                   <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Refresh</button>
@@ -461,10 +462,20 @@
         aria-expanded="false"
         aria-controls="assistant-panel"
       >
-        <span class="assistant-fab-mark">AI</span>
+        <span class="assistant-fab-mark" aria-hidden="true">
+          <span class="assistant-avatar assistant-avatar-robot">
+            <span class="assistant-avatar-orbit"></span>
+            <span class="assistant-avatar-antenna"></span>
+            <span class="assistant-avatar-head">
+              <span class="assistant-avatar-eye"></span>
+              <span class="assistant-avatar-eye"></span>
+              <span class="assistant-avatar-mouth"></span>
+            </span>
+          </span>
+        </span>
         <span class="assistant-fab-copy">
           <strong>Operator AI</strong>
-          <span id="assistant-fab-status">Ready via gpt-5-mini</span>
+          <span id="assistant-fab-status">Live copilot ready</span>
         </span>
       </button>
 
@@ -489,7 +500,7 @@
             <textarea
               id="assistant-input"
               rows="4"
-              placeholder="Send a message to Operator AI"
+              placeholder="Tell Operator AI what you want to change"
             ></textarea>
           </label>
           <div class="assistant-composer-actions">

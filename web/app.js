@@ -142,6 +142,7 @@ const rpcInlineCandidateList = document.getElementById("rpc-inline-candidate-lis
 const rpcPagePulseButton = document.getElementById("rpc-page-pulse-button");
 const rpcOpsOverview = document.getElementById("rpc-ops-overview");
 const rpcBroadcastAdvisor = document.getElementById("rpc-broadcast-advisor");
+const rpcHealthSyncStatus = document.getElementById("rpc-health-sync-status");
 const rpcAlertList = document.getElementById("rpc-alert-list");
 const rpcList = document.getElementById("rpc-list");
 const rpcChainlistModal = document.getElementById("rpc-chainlist-modal");
@@ -406,6 +407,7 @@ let walletAssetsAutoSyncKickTimer = null;
 let rpcHealthAutoPulseInFlight = false;
 let rpcHealthAutoPulseTimer = null;
 let rpcHealthAutoPulseKickTimer = null;
+let rpcHealthNotificationPrimed = false;
 let walletAssetInspector = createWalletAssetInspector(
   loadPersistedSelectedWalletAssetId(),
   walletAssetSnapshots[loadPersistedSelectedWalletAssetId()] || null
@@ -1094,9 +1096,188 @@ function ensureRpcHealthAutoPulse() {
 
   rpcHealthAutoPulseTimer = window.setInterval(() => {
     if (shouldAutoSyncRpcHealth()) {
-      void pulseRpcMesh({ silent: true });
+      void pulseRpcMesh({ silent: true }).catch(() => {});
     }
   }, rpcHealthAutoPulseIntervalMs);
+}
+
+function rpcHealthCadenceLabel(intervalMs = rpcHealthAutoPulseIntervalMs) {
+  const totalSeconds = Math.max(1, Math.round(Number(intervalMs || 0) / 1000));
+  if (totalSeconds % 60 === 0) {
+    return `${Math.round(totalSeconds / 60)}m`;
+  }
+  if (totalSeconds >= 60) {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${totalSeconds}s`;
+}
+
+function latestRpcHealthCheckedAt(rpcNodes = state.rpcNodes) {
+  return (
+    (rpcNodes || [])
+      .map((node) => String(node?.lastHealth?.checkedAt || "").trim())
+      .filter(Boolean)
+      .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || ""
+  );
+}
+
+function rpcHealthNotificationLabel(node) {
+  const nodeLabel = rpcAlertNodeLabel(node);
+  const chain = node?.chainLabel || chainLabel(node?.chainKey);
+  return chain ? `${nodeLabel} on ${chain}` : nodeLabel;
+}
+
+function describeRpcHealthNodes(nodes = [], maxItems = 2) {
+  const labels = nodes.map((node) => rpcHealthNotificationLabel(node)).filter(Boolean);
+  const preview = labels.slice(0, maxItems);
+  if (!preview.length) {
+    return "RPC node";
+  }
+  return `${formatLabelList(preview)}${labels.length > maxItems ? ` +${labels.length - maxItems} more` : ""}`;
+}
+
+function renderRpcHealthSyncStatus(rpcNodes = state.rpcNodes) {
+  if (rpcPagePulseButton) {
+    rpcPagePulseButton.disabled = state.rpcNodes.length === 0 || rpcHealthAutoPulseInFlight;
+    rpcPagePulseButton.textContent = rpcHealthAutoPulseInFlight ? "Refreshing..." : "Refresh";
+  }
+
+  if (rpcPulseButton) {
+    rpcPulseButton.disabled = state.rpcNodes.length === 0 || rpcHealthAutoPulseInFlight;
+  }
+
+  if (!rpcHealthSyncStatus) {
+    return;
+  }
+
+  if (!state.session.authenticated) {
+    rpcHealthSyncStatus.textContent = "";
+    return;
+  }
+
+  const enabledNodes = (rpcNodes || []).filter((node) => node.enabled !== false);
+  if (rpcHealthAutoPulseInFlight) {
+    rpcHealthSyncStatus.textContent = "Auto-sync is refreshing RPC health now...";
+    return;
+  }
+
+  if (!enabledNodes.length) {
+    rpcHealthSyncStatus.textContent = `Auto-sync on - add an RPC endpoint to start health checks every ${rpcHealthCadenceLabel()}.`;
+    return;
+  }
+
+  const latestCheckedAt = latestRpcHealthCheckedAt(enabledNodes);
+  rpcHealthSyncStatus.textContent = latestCheckedAt
+    ? `Auto-sync on - checks every ${rpcHealthCadenceLabel()}. Last mesh pulse ${relativeTime(latestCheckedAt)}.`
+    : `Auto-sync on - waiting for the first mesh pulse. Checks run every ${rpcHealthCadenceLabel()}.`;
+}
+
+function notifyRpcHealthTransitions(previousNodes = [], nextNodes = []) {
+  if (!state.session.authenticated) {
+    rpcHealthNotificationPrimed = false;
+    return;
+  }
+
+  const enabledNodes = (nextNodes || []).filter((node) => node.enabled !== false);
+  if (!rpcHealthNotificationPrimed) {
+    rpcHealthNotificationPrimed = true;
+    const downNodes = enabledNodes.filter((node) => node.lastHealth?.status === "error");
+    if (downNodes.length > 0) {
+      showToast(
+        `${describeRpcHealthNodes(downNodes)} failed the latest health check. Open RPC Nodes to repair the endpoint${downNodes.length === 1 ? "" : "s"}.`,
+        "error",
+        downNodes.length === 1 ? "RPC Failure Detected" : "RPC Failures Detected"
+      );
+    }
+    return;
+  }
+
+  const previousById = new Map((previousNodes || []).map((node) => [node.id, node]));
+  const newlyDown = enabledNodes.filter(
+    (node) => node.lastHealth?.status === "error" && previousById.get(node.id)?.lastHealth?.status !== "error"
+  );
+  const recovered = enabledNodes.filter(
+    (node) => node.lastHealth?.status === "healthy" && previousById.get(node.id)?.lastHealth?.status === "error"
+  );
+
+  if (newlyDown.length > 0) {
+    showToast(
+      `${describeRpcHealthNodes(newlyDown)} failed the latest health check. Open RPC Nodes to repair the endpoint${newlyDown.length === 1 ? "" : "s"}.`,
+      "error",
+      newlyDown.length === 1 ? "RPC Failure Detected" : "RPC Failures Detected"
+    );
+  }
+
+  if (recovered.length > 0) {
+    const remainingDownCount = enabledNodes.filter((node) => node.lastHealth?.status === "error").length;
+    showToast(
+      remainingDownCount === 0
+        ? `${describeRpcHealthNodes(recovered)} recovered. The tracked RPC mesh is back online.`
+        : `${describeRpcHealthNodes(recovered)} recovered, but ${pluralize(remainingDownCount, "RPC node")} still need attention.`,
+      "success",
+      remainingDownCount === 0
+        ? "RPC Mesh Recovered"
+        : recovered.length === 1
+          ? "RPC Recovered"
+          : "RPCs Recovered"
+    );
+  }
+}
+
+function renderRpcHealthSurfaces() {
+  renderShellTelemetry();
+  renderDashboard();
+  renderRpcNodes();
+
+  if (!taskModal.classList.contains("hidden")) {
+    renderRpcSelector(selectedRpcIds());
+  }
+}
+
+function applyRpcHealthProbeResults(results = [], options = {}) {
+  const { notifyTransitions = true } = options;
+  if (!Array.isArray(results) || results.length === 0 || state.rpcNodes.length === 0) {
+    renderRpcHealthSyncStatus();
+    return false;
+  }
+
+  const healthById = new Map(
+    results
+      .filter((entry) => entry && entry.id)
+      .map((entry) => [entry.id, entry.health && typeof entry.health === "object" ? { ...entry.health } : null])
+  );
+
+  if (!healthById.size) {
+    renderRpcHealthSyncStatus();
+    return false;
+  }
+
+  const previousRpcNodes = state.rpcNodes;
+  let updated = false;
+  state.rpcNodes = state.rpcNodes.map((node) => {
+    if (!healthById.has(node.id)) {
+      return node;
+    }
+    updated = true;
+    return {
+      ...node,
+      lastHealth: healthById.get(node.id)
+    };
+  });
+
+  if (!updated) {
+    renderRpcHealthSyncStatus();
+    return false;
+  }
+
+  if (notifyTransitions) {
+    notifyRpcHealthTransitions(previousRpcNodes, state.rpcNodes);
+  }
+
+  renderRpcHealthSurfaces();
+  return true;
 }
 
 function scheduleWalletAssetAutoSync(options = {}) {
@@ -1142,7 +1323,7 @@ function scheduleRpcHealthAutoPulse(options = {}) {
   rpcHealthAutoPulseKickTimer = window.setTimeout(() => {
     rpcHealthAutoPulseKickTimer = null;
     if (shouldAutoSyncRpcHealth()) {
-      void pulseRpcMesh({ silent: true });
+      void pulseRpcMesh({ silent: true }).catch(() => {});
     }
   }, 1200);
 }
@@ -1168,6 +1349,10 @@ function setAuthState(authenticated, user = null, authRequired = true) {
   if (!authenticated && authRequired) {
     stopWalletAssetAutoSync();
     stopRpcHealthAutoPulse();
+    rpcHealthNotificationPrimed = false;
+    if (rpcHealthSyncStatus) {
+      rpcHealthSyncStatus.textContent = "";
+    }
     assistantState = {
       open: false,
       loading: false,
@@ -1736,7 +1921,7 @@ function assistantAvailability() {
       fab: "OpenAI key required",
       status: "Add an OpenAI API key in Settings to enable the live operator assistant.",
       emptyTitle: "OpenAI key missing",
-      emptyCopy: "Save an OpenAI API key in Settings, then I can answer questions and create or run tasks."
+      emptyCopy: "Save an OpenAI API key in Settings, then I can manage tasks, RPCs, and dashboard controls for you."
     };
   }
 
@@ -1746,7 +1931,7 @@ function assistantAvailability() {
       fab: "Saved key required",
       status: "Save an OpenAI API key in Settings to enable the live operator assistant.",
       emptyTitle: "Saved key required",
-      emptyCopy: "Operator AI uses the OpenAI key saved in the dashboard settings."
+      emptyCopy: "Operator AI uses the OpenAI key saved in the dashboard settings for live control."
     };
   }
 
@@ -1756,14 +1941,14 @@ function assistantAvailability() {
       fab: "OpenAI key invalid",
       status: "The saved OpenAI API key failed validation. Replace it in Settings to re-enable the live operator assistant.",
       emptyTitle: "OpenAI key invalid",
-      emptyCopy: "Replace the saved OpenAI API key in Settings, then I can answer questions and control the app again."
+      emptyCopy: "Replace the saved OpenAI API key in Settings, then I can control tasks, RPCs, and settings again."
     };
   }
 
   return {
     ready: true,
-    fab: `Ready via ${assistantModelLabel()}`,
-    status: `Live via ${assistantModelLabel()}.`,
+    fab: "Live copilot ready",
+    status: `Live control for tasks, RPCs, and settings via ${assistantModelLabel()}.`,
     emptyTitle: "",
     emptyCopy: ""
   };
@@ -2045,23 +2230,11 @@ function scrollAssistantMessagesToBottom() {
 }
 
 function renderAssistantWelcomeState() {
-  const examples = [
-    "Show dashboard",
-    "Create a mint task for 0x...",
-    "Run task MyMintTask",
-    "Delete task MyMintTask"
-  ];
-
   return `
     <div class="assistant-empty-state welcome">
-      <h4>Hello. I'm MintBot Operator.</h4>
-      <p>I can check your dashboard and help create, update, schedule, run, stop, or delete tasks.</p>
-      <p>Try one of these:</p>
-      <div class="assistant-empty-state-examples">
-        ${examples
-          .map((example) => `<span class="assistant-empty-state-example">${escapeHtml(example)}</span>`)
-          .join("")}
-      </div>
+      <h4>Your live MintBot copilot is ready.</h4>
+      <p>Ask naturally. I can inspect the dashboard, manage tasks, delete saved API keys, add or remove RPCs, run RPC health checks, and rebuild failed RPC nodes for you.</p>
+      <p>I work on the live app, so I'll tell you exactly what changed.</p>
     </div>
   `;
 }
@@ -2073,7 +2246,7 @@ function renderAssistant() {
   assistantFabButton.setAttribute("aria-expanded", panelOpen ? "true" : "false");
   assistantFabStatus.textContent = assistantState.loading ? "Thinking..." : availability.fab;
   assistantStatus.textContent = assistantState.loading
-    ? "Working through your request and checking live app state."
+    ? "Working on the live app now."
     : availability.status;
   assistantPanel.classList.toggle("open", panelOpen);
 
@@ -2277,8 +2450,15 @@ async function sendAssistantMessage() {
       }
     ];
 
+    if (payload.navigateTo) {
+      setView(payload.navigateTo);
+    }
+
     if (payload.changedState) {
       await loadState().catch(() => {});
+      if (payload.navigateTo) {
+        setView(payload.navigateTo);
+      }
       showToast("Operator AI updated the app state.", "success", "AI Operator");
     }
   } catch (error) {
@@ -4724,9 +4904,40 @@ function buildRpcAlertEntries(rpcNodes = state.rpcNodes) {
 }
 
 async function runRpcNodeTest(rpcId) {
-  await request(`/api/rpc-nodes/${rpcId}/test`, { method: "POST" });
-  await loadState().catch(() => {});
-  showToast("RPC health test completed.", "success", "RPC Pulse");
+  const node = state.rpcNodes.find((entry) => entry.id === rpcId);
+  const payload = await request(`/api/rpc-nodes/${rpcId}/test`, { method: "POST" });
+  applyRpcHealthProbeResults([{ id: rpcId, health: payload.health }], { notifyTransitions: false });
+
+  const severity = rpcHealthAlertSeverity({ lastHealth: payload.health });
+  const nodeLabel = node?.name || "RPC node";
+  if (payload.health?.status === "error") {
+    showToast(
+      `${nodeLabel} failed the latest health check. ${payload.health.error || "Review the RPC alert card for details."}`,
+      "error",
+      "RPC Failure Detected"
+    );
+    return;
+  }
+
+  if (severity === "critical") {
+    showToast(
+      `${nodeLabel} responded, but latency is ${formatLatencyLabel(payload.health?.latencyMs)} and is outside the mint-safe target.`,
+      "error",
+      "RPC Critical Latency"
+    );
+    return;
+  }
+
+  if (severity === "warning") {
+    showToast(
+      `${nodeLabel} is online, but latency is elevated at ${formatLatencyLabel(payload.health?.latencyMs)}.`,
+      "info",
+      "RPC Latency Warning"
+    );
+    return;
+  }
+
+  showToast(`${nodeLabel} is healthy at ${formatLatencyLabel(payload.health?.latencyMs)}.`, "success", "RPC Healthy");
 }
 
 async function fixRpcNode(rpcId) {
@@ -4740,9 +4951,24 @@ async function fixRpcNode(rpcId) {
     return;
   }
 
-  await request(`/api/rpc-nodes/${rpcId}/fix`, { method: "POST" });
-  await loadState().catch(() => {});
-  showToast(`${node.name || "RPC node"} was re-added and re-tested.`, "success", "RPC Repair");
+  const payload = await request(`/api/rpc-nodes/${rpcId}/fix`, { method: "POST" });
+  if (payload.rpcNode?.chainKey && payload.rpcNode?.chainLabel && payload.rpcNode?.chainId != null) {
+    ensureChainOption({
+      key: payload.rpcNode.chainKey,
+      label: payload.rpcNode.chainLabel,
+      chainId: payload.rpcNode.chainId
+    });
+  }
+
+  state.rpcNodes = state.rpcNodes.map((entry) => (entry.id === rpcId ? payload.rpcNode || entry : entry));
+  renderRpcHealthSurfaces();
+  showToast(
+    `${payload.rpcNode?.name || node.name || "RPC node"} recovered at ${formatLatencyLabel(
+      payload.rpcNode?.lastHealth?.latencyMs
+    )}.`,
+    "success",
+    "RPC Repair"
+  );
 }
 
 function renderRpcAlerts(rpcNodes = state.rpcNodes) {
@@ -4777,7 +5003,7 @@ function renderRpcAlerts(rpcNodes = state.rpcNodes) {
             <span class="queue-chip">Awaiting Pulse</span>
           </div>
           <strong>No live RPC probe data yet</strong>
-          <p>Click Refresh to run health checks and fill this alert box with live endpoint status.</p>
+          <p>Auto-sync runs every ${escapeHtml(rpcHealthCadenceLabel())} while your session is active. Click Refresh to pulse the mesh now.</p>
         </article>
       `;
       return;
@@ -5288,22 +5514,32 @@ async function pulseRpcMesh(options = {}) {
   }
 
   rpcHealthAutoPulseInFlight = true;
+  renderRpcHealthSyncStatus();
   try {
     const payload = await request("/api/control/test-rpc-pool", {
       method: "POST",
       quiet: silent
     });
+    applyRpcHealthProbeResults(payload.results, { notifyTransitions: silent });
     const summary = payload.summary || {};
+    const slowCount = Array.isArray(payload.results)
+      ? payload.results.filter(
+          (entry) =>
+            entry?.health?.status === "healthy" && Boolean(rpcHealthAlertSeverity({ lastHealth: entry.health }))
+        ).length
+      : 0;
     if (!silent) {
       showToast(
-        `${summary.healthy || 0} healthy · ${summary.error || 0} error · ${summary.total || 0} total`,
-        "success",
-        "RPC Refreshed"
+        `${summary.healthy || 0} healthy, ${summary.error || 0} down, ${slowCount} slow, ${summary.total || 0} total`,
+        summary.error > 0 ? "error" : slowCount > 0 ? "info" : "success",
+        summary.error > 0 ? "RPC Failures Detected" : slowCount > 0 ? "RPC Warnings Found" : "RPC Refreshed"
       );
+      return payload;
     }
     return payload;
   } finally {
     rpcHealthAutoPulseInFlight = false;
+    renderRpcHealthSyncStatus();
   }
 
 }
@@ -5387,6 +5623,7 @@ function renderRpcNodes() {
   }
 
   syncRpcImportButtons();
+  renderRpcHealthSyncStatus();
   renderRpcAlerts();
 
   const chainGroups = buildRpcChainGroups();
@@ -6038,7 +6275,9 @@ function renderAll() {
   initializeMotionSurfaces(document);
 }
 
-function applyAppState(payload) {
+function applyAppState(payload, options = {}) {
+  const { notifyRpcTransitions = true } = options;
+  const previousRpcNodes = state.rpcNodes || [];
   state.tasks = payload.tasks || [];
   state.wallets = mergeWalletBalanceState(payload.wallets || []);
   state.rpcNodes = payload.rpcNodes || [];
@@ -6050,6 +6289,10 @@ function applyAppState(payload) {
   state.session.authRequired = payload.authRequired !== false;
   hydrateWalletAssetSnapshotsForCurrentState();
   populateMintSourceSelectors(taskSourceTypeInput?.value || "generic_contract");
+
+  if (notifyRpcTransitions) {
+    notifyRpcHealthTransitions(previousRpcNodes, state.rpcNodes);
+  }
 
   renderAll();
   scheduleWalletAssetAutoSync({ immediate: true });

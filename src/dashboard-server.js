@@ -1591,10 +1591,20 @@ function buildAssistantStateSnapshot() {
     generatedAt: new Date().toISOString(),
     settings: {
       explorerApiKeyConfigured: Boolean(settings.explorerApiKeyConfigured),
+      explorerApiKeySource: settings.explorerApiKeySource || "",
+      explorerApiKeyHealthStatus: settings.explorerApiKeyHealthStatus || "missing",
       openaiApiKeyConfigured: Boolean(settings.openaiApiKeyConfigured),
+      openaiApiKeySource: settings.openaiApiKeySource || "",
+      openaiApiKeyHealthStatus: settings.openaiApiKeyHealthStatus || "missing",
       alchemyApiKeyConfigured: Boolean(settings.alchemyApiKeyConfigured),
+      alchemyApiKeySource: settings.alchemyApiKeySource || "",
+      alchemyApiKeyHealthStatus: settings.alchemyApiKeyHealthStatus || "missing",
       drpcApiKeyConfigured: Boolean(settings.drpcApiKeyConfigured),
+      drpcApiKeySource: settings.drpcApiKeySource || "",
+      drpcApiKeyHealthStatus: settings.drpcApiKeyHealthStatus || "missing",
       openseaApiKeyConfigured: Boolean(settings.openseaApiKeyConfigured),
+      openseaApiKeySource: settings.openseaApiKeySource || "",
+      openseaApiKeyHealthStatus: settings.openseaApiKeyHealthStatus || "missing",
       queueMode: queueModeEnabled() ? "redis" : "local",
       operatorAssistantModel
     },
@@ -2066,6 +2076,152 @@ function resolveAssistantTask(taskRef) {
   throw new Error(`Task "${ref}" was not found.`);
 }
 
+const assistantApiKeyDefinitions = {
+  explorerApiKey: {
+    label: "Explorer API key",
+    aliases: ["explorer", "explorer api", "etherscan", "etherscan api", "abi key"]
+  },
+  openaiApiKey: {
+    label: "OpenAI API key",
+    aliases: ["openai", "openai api", "operator ai key", "assistant key", "ai key"]
+  },
+  alchemyApiKey: {
+    label: "Alchemy API key",
+    aliases: ["alchemy", "alchemy api", "alchemy key"]
+  },
+  drpcApiKey: {
+    label: "dRPC API key",
+    aliases: ["drpc", "drpc api", "drpc key", "d rpc", "d rpc api"]
+  },
+  openseaApiKey: {
+    label: "OpenSea API key",
+    aliases: ["opensea", "opensea api", "opensea key", "open sea", "open sea api"]
+  }
+};
+
+function resolveAssistantOptionalChainKey(requestedChain = "") {
+  const normalized = normalizeAssistantRef(requestedChain);
+  if (!normalized) {
+    return "";
+  }
+
+  const chains = getAvailableChains();
+  const exact =
+    chains.find((chain) => normalizeAssistantRef(chain.key) === normalized) ||
+    chains.find((chain) => normalizeAssistantRef(chain.label) === normalized) ||
+    chains.find((chain) => String(chain.chainId) === normalized);
+
+  if (exact) {
+    return exact.key;
+  }
+
+  throw new Error(
+    `Chain "${requestedChain}" was not recognized. Available chains: ${chains.map((chain) => chain.label).join(", ")}.`
+  );
+}
+
+function assistantRpcSearchCandidates(node) {
+  const chainName = node?.chainLabel || chainLabel(node?.chainKey);
+  return [
+    node?.id,
+    node?.name,
+    node?.url,
+    chainName,
+    `${node?.name || ""} ${chainName || ""}`.trim(),
+    `${chainName || ""} ${node?.name || ""}`.trim()
+  ].filter(Boolean);
+}
+
+function resolveAssistantRpcNode(rpcRef, options = {}) {
+  const { chainKey = "", includeEnv = true, failedOnly = false } = options;
+  const ref = String(rpcRef || "").trim();
+  const scopedNodes = appState.rpcNodes.filter(
+    (node) =>
+      (!chainKey || node.chainKey === chainKey) &&
+      (includeEnv || node.source !== "env") &&
+      (!failedOnly || node.lastHealth?.status === "error")
+  );
+
+  if (!ref) {
+    if (scopedNodes.length === 1) {
+      return scopedNodes[0];
+    }
+
+    if (failedOnly) {
+      throw new Error(
+        scopedNodes.length
+          ? `More than one failed RPC is available${chainKey ? ` on ${chainLabel(chainKey)}` : ""}. Name the RPC you want repaired.`
+          : `No failed RPCs are currently detected${chainKey ? ` on ${chainLabel(chainKey)}` : ""}.`
+      );
+    }
+
+    throw new Error(`RPC reference is required${chainKey ? ` on ${chainLabel(chainKey)}` : ""}.`);
+  }
+
+  const normalized = normalizeAssistantRef(ref);
+  const exact = scopedNodes.filter((node) =>
+    assistantRpcSearchCandidates(node).some((candidate) => normalizeAssistantRef(candidate) === normalized)
+  );
+  if (exact.length === 1) {
+    return exact[0];
+  }
+
+  if (exact.length > 1) {
+    throw new Error(`RPC reference "${ref}" is ambiguous${chainKey ? ` on ${chainLabel(chainKey)}` : ""}.`);
+  }
+
+  const partial = scopedNodes.filter((node) =>
+    assistantRpcSearchCandidates(node).some((candidate) => normalizeAssistantRef(candidate).includes(normalized))
+  );
+  if (partial.length === 1) {
+    return partial[0];
+  }
+
+  if (partial.length > 1) {
+    throw new Error(`RPC reference "${ref}" is ambiguous${chainKey ? ` on ${chainLabel(chainKey)}` : ""}.`);
+  }
+
+  throw new Error(`RPC "${ref}" was not found${chainKey ? ` on ${chainLabel(chainKey)}` : ""}.`);
+}
+
+function resolveAssistantApiKeySecretName(secretRef) {
+  const ref = String(secretRef || "").trim();
+  if (!ref) {
+    throw new Error("API key reference is required.");
+  }
+
+  const normalized = normalizeAssistantRef(ref);
+  const exactMatches = Object.entries(assistantApiKeyDefinitions).filter(([secretName, definition]) =>
+    [secretName, definition.label, ...(definition.aliases || [])]
+      .filter(Boolean)
+      .some((candidate) => normalizeAssistantRef(candidate) === normalized)
+  );
+
+  if (exactMatches.length === 1) {
+    return exactMatches[0][0];
+  }
+
+  if (exactMatches.length > 1) {
+    throw new Error(`API key reference "${ref}" is ambiguous.`);
+  }
+
+  const partialMatches = Object.entries(assistantApiKeyDefinitions).filter(([secretName, definition]) =>
+    [secretName, definition.label, ...(definition.aliases || [])]
+      .filter(Boolean)
+      .some((candidate) => normalizeAssistantRef(candidate).includes(normalized))
+  );
+
+  if (partialMatches.length === 1) {
+    return partialMatches[0][0];
+  }
+
+  if (partialMatches.length > 1) {
+    throw new Error(`API key reference "${ref}" is ambiguous.`);
+  }
+
+  throw new Error(`API key "${ref}" was not recognized.`);
+}
+
 function normalizeAssistantJsonString(value, fallback = "") {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -2245,7 +2401,7 @@ function buildAssistantToolDefinitions() {
     {
       type: "function",
       name: "get_dashboard_state",
-      description: "Read the live dashboard state including recommended default wallet, fastest RPC choices, tasks, alerts, and recent logs.",
+      description: "Read the live dashboard state including task status, API key status, RPC health, alerts, recommended defaults, and recent logs.",
       parameters: {
         type: "object",
         properties: {},
@@ -2348,6 +2504,75 @@ function buildAssistantToolDefinitions() {
           taskRef: { type: "string", description: "Task id or task name." }
         },
         required: ["taskRef"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "delete_api_key",
+      description: "Delete a saved dashboard API key such as Explorer, OpenAI, Alchemy, dRPC, or OpenSea. Use only when the user clearly asks to delete the key.",
+      parameters: {
+        type: "object",
+        properties: {
+          keyRef: { type: "string", description: "API key name like OpenAI, Explorer, Alchemy, dRPC, or OpenSea." }
+        },
+        required: ["keyRef"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "add_rpc_node",
+      description: "Add a new RPC node from a raw URL. The app will inspect the endpoint, detect the chain, and save the node.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Full RPC URL such as https://... or wss://..." },
+          name: { type: "string", description: "Optional display name for the RPC node." },
+          group: { type: "string", description: "Optional group label like Custom, Assistant, Backup, or Primary." },
+          enabled: { type: "boolean" }
+        },
+        required: ["url"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "remove_rpc_node",
+      description: "Remove a stored RPC node by name, id, or URL. Use only when the user clearly asks to remove or delete the RPC.",
+      parameters: {
+        type: "object",
+        properties: {
+          rpcRef: { type: "string", description: "RPC name, id, or URL." },
+          chainKey: { type: "string", description: "Optional chain key to disambiguate similarly named RPCs." }
+        },
+        required: ["rpcRef"],
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "test_rpc_node",
+      description: "Run a live RPC health test. If rpcRef is omitted, pulse the full RPC mesh.",
+      parameters: {
+        type: "object",
+        properties: {
+          rpcRef: { type: "string", description: "Optional RPC name, id, or URL." },
+          chainKey: { type: "string", description: "Optional chain key to disambiguate similarly named RPCs." }
+        },
+        additionalProperties: false
+      }
+    },
+    {
+      type: "function",
+      name: "fix_failed_rpc",
+      description: "Repair a failed stored RPC by re-inspecting its URL and re-adding the endpoint cleanly. If rpcRef is omitted, repair all currently failed stored RPCs.",
+      parameters: {
+        type: "object",
+        properties: {
+          rpcRef: { type: "string", description: "Optional RPC name, id, or URL. Leave empty to repair all currently failed stored RPCs." },
+          chainKey: { type: "string", description: "Optional chain key to narrow the repair scope." }
+        },
         additionalProperties: false
       }
     }
@@ -2515,6 +2740,141 @@ async function executeAssistantToolCall(call) {
       };
     }
 
+    if (call.name === "delete_api_key") {
+      const secretName = resolveAssistantApiKeySecretName(parsedArgs.keyRef);
+      const result = await deleteSavedApiKey(secretName);
+      return {
+        ok: true,
+        changedState: true,
+        navigateTo: "settings",
+        action:
+          result.sourceAfter === "env"
+            ? `Deleted saved ${result.label}; environment fallback is now active`
+            : `Deleted ${result.label}`,
+        result
+      };
+    }
+
+    if (call.name === "add_rpc_node") {
+      const result = await saveRpcNodePayload({
+        url: parsedArgs.url,
+        name: parsedArgs.name,
+        group: parsedArgs.group || "Assistant",
+        enabled: parsedArgs.enabled
+      });
+      return {
+        ok: true,
+        changedState: true,
+        navigateTo: "rpc",
+        action: `Added RPC ${result.rpcNode.name}`,
+        result: {
+          rpcId: result.rpcNode.id,
+          rpcName: result.rpcNode.name,
+          chainKey: result.rpcNode.chainKey,
+          chainLabel: result.rpcNode.chainLabel,
+          latencyMs: result.rpcNode.lastHealth?.latencyMs ?? null,
+          url: result.rpcNode.url
+        }
+      };
+    }
+
+    if (call.name === "remove_rpc_node") {
+      const chainKey = resolveAssistantOptionalChainKey(parsedArgs.chainKey || "");
+      const rpcNode = resolveAssistantRpcNode(parsedArgs.rpcRef, { chainKey });
+      const result = await deleteRpcNodeById(rpcNode.id);
+      return {
+        ok: true,
+        changedState: true,
+        navigateTo: "rpc",
+        action: `Removed RPC ${rpcNode.name}`,
+        result: {
+          rpcId: rpcNode.id,
+          rpcName: rpcNode.name,
+          chainKey: rpcNode.chainKey,
+          chainLabel: rpcNode.chainLabel || chainLabel(rpcNode.chainKey),
+          ...result
+        }
+      };
+    }
+
+    if (call.name === "test_rpc_node") {
+      const chainKey = resolveAssistantOptionalChainKey(parsedArgs.chainKey || "");
+      if (!String(parsedArgs.rpcRef || "").trim()) {
+        const result = await testRpcMesh();
+        return {
+          ok: true,
+          changedState: true,
+          navigateTo: "rpc",
+          action: `Tested ${result.summary.total} RPC node${result.summary.total === 1 ? "" : "s"}`,
+          result
+        };
+      }
+
+      const rpcNode = resolveAssistantRpcNode(parsedArgs.rpcRef, { chainKey });
+      const result = await testRpcNodeById(rpcNode.id);
+      return {
+        ok: true,
+        changedState: true,
+        navigateTo: "rpc",
+        action:
+          result.health?.status === "healthy"
+            ? `Checked RPC health for ${rpcNode.name}`
+            : `Detected RPC failure on ${rpcNode.name}`,
+        result: {
+          rpcId: rpcNode.id,
+          rpcName: rpcNode.name,
+          chainKey: rpcNode.chainKey,
+          chainLabel: rpcNode.chainLabel || chainLabel(rpcNode.chainKey),
+          health: result.health
+        }
+      };
+    }
+
+    if (call.name === "fix_failed_rpc") {
+      const chainKey = resolveAssistantOptionalChainKey(parsedArgs.chainKey || "");
+      let targetNodes = [];
+
+      if (String(parsedArgs.rpcRef || "").trim()) {
+        targetNodes = [resolveAssistantRpcNode(parsedArgs.rpcRef, { chainKey, includeEnv: false })];
+      } else {
+        targetNodes = appState.rpcNodes.filter(
+          (node) =>
+            node.source !== "env" &&
+            node.lastHealth?.status === "error" &&
+            (!chainKey || node.chainKey === chainKey)
+        );
+        if (!targetNodes.length) {
+          throw new Error(`No failed stored RPCs are currently detected${chainKey ? ` on ${chainLabel(chainKey)}` : ""}.`);
+        }
+      }
+
+      const repaired = [];
+      for (const rpcNode of targetNodes) {
+        const result = await repairStoredRpcNode(rpcNode.id);
+        repaired.push({
+          rpcId: result.rpcNode.id,
+          rpcName: result.rpcNode.name,
+          chainKey: result.rpcNode.chainKey,
+          chainLabel: result.rpcNode.chainLabel || chainLabel(result.rpcNode.chainKey),
+          latencyMs: result.rpcNode.lastHealth?.latencyMs ?? null,
+          url: result.rpcNode.url
+        });
+      }
+
+      return {
+        ok: true,
+        changedState: true,
+        navigateTo: "rpc",
+        action:
+          repaired.length === 1
+            ? `Rebuilt failed RPC ${repaired[0].rpcName}`
+            : `Rebuilt ${repaired.length} failed RPCs`,
+        result: {
+          repaired
+        }
+      };
+    }
+
     return {
       ok: false,
       changedState: false,
@@ -2542,14 +2902,16 @@ async function requestOperatorAssistantReply({ message, previousResponseId = "" 
 
   const instructions = [
     "You are MintBot Operator, a floating in-app AI assistant with authenticated live control over the mint dashboard.",
-    "You can inspect the live dashboard state and use tools to create, update, schedule, run, stop, and delete tasks.",
+    "You can inspect the live dashboard state and use tools to create, update, schedule, run, stop, and delete tasks, manage saved API keys, and add, remove, test, or repair RPC nodes.",
     "Use tools whenever the user asks about current app state or wants actions performed.",
+    "Prefer taking the action yourself instead of giving manual dashboard instructions when the request is specific and safe.",
     "When the user gives a contract address plus ABI and asks to schedule or mint, create a real task instead of only explaining.",
-    "Be concise, operational, and explicit about what changed.",
+    "If the user asks to delete a saved API key, remove it. If the user asks to fix a failed RPC, use the repair tool so the endpoint is re-added cleanly.",
+    "Sound like a sharp human operations copilot: natural, concise, fast, and explicit about what changed.",
     "Do not invent wallets, RPC nodes, or chains. If wallet choice or chain choice is ambiguous, ask a brief clarifying question.",
     "Default behavior: if exactly one wallet exists, you may use it automatically. If multiple wallets exist and none are specified, ask which one to use.",
     "You may use all enabled RPC nodes on the chosen chain by default.",
-    "For destructive actions like deleting a task, only do it when the user clearly asked.",
+    "For destructive actions like deleting tasks, deleting saved API keys, or removing RPC nodes, only do it when the user clearly asked.",
     "Assume the app's validation rules are authoritative. If a tool fails, explain the actual failure and what the user needs to fix."
   ].join(" ");
 
@@ -7403,65 +7765,180 @@ async function handleWalletAssets(walletId, response) {
   }
 }
 
+async function saveRpcNodePayload(payload = {}) {
+  if (!payload.url) {
+    throw new Error("RPC URL is required");
+  }
+
+  if (payload.id && String(payload.id).startsWith("rpc_env_")) {
+    throw new Error("Env RPC nodes cannot be overwritten from the dashboard");
+  }
+
+  const inspection = await inspectRpcEndpoint(payload.url);
+  const resolvedChainKey = inspection.chainKey;
+  const resolvedName = String(payload.name || "").trim() || inspection.nameSuggestion || "Custom RPC";
+
+  const duplicateNode = appState.rpcNodes.find(
+    (node) => node.id !== payload.id && String(node.url || "").trim() === inspection.url
+  );
+  if (duplicateNode) {
+    throw new Error(`${duplicateNode.name || "Another RPC node"} already uses this RPC URL`);
+  }
+
+  const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
+  const rpcNode = {
+    id: payload.id || createId("rpc"),
+    name: resolvedName,
+    url: inspection.url,
+    chainKey: resolvedChainKey,
+    chainId: inspection.chainId,
+    chainLabel: inspection.chainLabel,
+    enabled: payload.enabled !== false,
+    group: payload.group || "Custom",
+    source: "stored",
+    lastHealth: {
+      status: "healthy",
+      latencyMs: inspection.latencyMs,
+      blockNumber: inspection.blockNumber,
+      checkedAt: inspection.checkedAt || new Date().toISOString()
+    }
+  };
+
+  const existingIndex = storedNodes.findIndex((node) => node.id === rpcNode.id);
+  if (existingIndex === -1) {
+    storedNodes.unshift(rpcNode);
+  } else {
+    storedNodes[existingIndex] = rpcNode;
+  }
+
+  appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
+  appState.chains = getAvailableChains();
+  await persistAppState();
+  emitState();
+
+  return {
+    ok: true,
+    rpcNode,
+    inspection
+  };
+}
+
+async function testRpcNodeById(rpcId) {
+  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+  if (!rpcNode) {
+    throw createHttpError("RPC node not found", 404);
+  }
+
+  const health = await testRpcNodeHealth(rpcNode);
+  await persistAppState();
+  emitState();
+  return {
+    ok: true,
+    rpcNode,
+    health
+  };
+}
+
+async function testRpcMesh() {
+  if (appState.rpcNodes.length === 0) {
+    throw createHttpError("No RPC nodes configured", 400);
+  }
+
+  const results = await Promise.all(
+    appState.rpcNodes.map(async (rpcNode) => ({
+      id: rpcNode.id,
+      name: rpcNode.name,
+      chainKey: rpcNode.chainKey,
+      health: await testRpcNodeHealth(rpcNode)
+    }))
+  );
+
+  await persistAppState();
+  emitState();
+  return {
+    ok: true,
+    summary: {
+      total: results.length,
+      healthy: results.filter((entry) => entry.health.status === "healthy").length,
+      error: results.filter((entry) => entry.health.status === "error").length
+    },
+    results
+  };
+}
+
+async function repairStoredRpcNode(rpcId) {
+  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+  if (!rpcNode) {
+    throw createHttpError("RPC node not found", 404);
+  }
+
+  if (rpcNode.source === "env") {
+    throw createHttpError("Env RPC nodes are managed through environment variables", 400);
+  }
+
+  const inspection = await inspectRpcEndpoint(rpcNode.url);
+  const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
+  const existingIndex = storedNodes.findIndex((node) => node.id === rpcId);
+  if (existingIndex === -1) {
+    throw new Error("Stored RPC node could not be found for repair");
+  }
+
+  storedNodes[existingIndex] = {
+    ...rpcNode,
+    url: inspection.url,
+    chainKey: inspection.chainKey,
+    chainId: inspection.chainId,
+    chainLabel: inspection.chainLabel,
+    lastHealth: {
+      status: "healthy",
+      latencyMs: inspection.latencyMs,
+      blockNumber: inspection.blockNumber,
+      checkedAt: inspection.checkedAt || new Date().toISOString()
+    }
+  };
+
+  appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
+  appState.chains = getAvailableChains();
+  await persistAppState();
+  emitState();
+
+  return {
+    ok: true,
+    rpcNode: storedNodes[existingIndex],
+    inspection
+  };
+}
+
+async function deleteRpcNodeById(rpcId) {
+  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
+  if (!rpcNode) {
+    throw createHttpError("RPC node not found", 404);
+  }
+
+  if (rpcNode.source === "env") {
+    throw createHttpError("Env RPC nodes are managed through environment variables", 400);
+  }
+
+  appState.rpcNodes = appState.rpcNodes.filter((node) => node.id !== rpcId);
+  appState.tasks = appState.tasks.map((task) => ({
+    ...task,
+    rpcNodeIds: (task.rpcNodeIds || []).filter((id) => id !== rpcId)
+  }));
+  await persistAppState();
+  await reloadAppState();
+  emitState();
+
+  return {
+    ok: true,
+    rpcNode
+  };
+}
+
 async function handleRpcSave(request, response) {
   try {
     const payload = await readJsonBody(request);
-
-    if (!payload.url) {
-      throw new Error("RPC URL is required");
-    }
-
-    if (payload.id && String(payload.id).startsWith("rpc_env_")) {
-      throw new Error("Env RPC nodes cannot be overwritten from the dashboard");
-    }
-
-    const inspection = await inspectRpcEndpoint(payload.url);
-    const resolvedChainKey = inspection.chainKey;
-    const resolvedName =
-      String(payload.name || "").trim() || inspection.nameSuggestion || "Custom RPC";
-
-    const duplicateNode = appState.rpcNodes.find(
-      (node) => node.id !== payload.id && String(node.url || "").trim() === inspection.url
-    );
-    if (duplicateNode) {
-      throw new Error(`${duplicateNode.name || "Another RPC node"} already uses this RPC URL`);
-    }
-
-    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
-    const rpcNode = {
-      id: payload.id || createId("rpc"),
-      name: resolvedName,
-      url: inspection.url,
-      chainKey: resolvedChainKey,
-      chainId: inspection.chainId,
-      chainLabel: inspection.chainLabel,
-      enabled: payload.enabled !== false,
-      group: payload.group || "Custom",
-      source: "stored",
-      lastHealth: {
-        status: "healthy",
-        latencyMs: inspection.latencyMs,
-        blockNumber: inspection.blockNumber,
-        checkedAt: inspection.checkedAt || new Date().toISOString()
-      }
-    };
-
-    const existingIndex = storedNodes.findIndex((node) => node.id === rpcNode.id);
-    if (existingIndex === -1) {
-      storedNodes.unshift(rpcNode);
-    } else {
-      storedNodes[existingIndex] = rpcNode;
-    }
-
-    appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
-    appState.chains = getAvailableChains();
-    await persistAppState();
-    emitState();
-    sendJson(response, 200, {
-      ok: true,
-      rpcNode,
-      inspection
-    });
+    const result = await saveRpcNodePayload(payload);
+    sendJson(response, 200, result);
   } catch (error) {
     sendJson(response, 400, { error: formatError(error) });
   }
@@ -7469,49 +7946,10 @@ async function handleRpcSave(request, response) {
 
 async function handleRpcFix(rpcId, response) {
   try {
-    const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
-    if (!rpcNode) {
-      sendJson(response, 404, { error: "RPC node not found" });
-      return;
-    }
-
-    if (rpcNode.source === "env") {
-      sendJson(response, 400, { error: "Env RPC nodes are managed through environment variables" });
-      return;
-    }
-
-    const inspection = await inspectRpcEndpoint(rpcNode.url);
-    const storedNodes = appState.rpcNodes.filter((node) => node.source !== "env");
-    const existingIndex = storedNodes.findIndex((node) => node.id === rpcId);
-    if (existingIndex === -1) {
-      throw new Error("Stored RPC node could not be found for repair");
-    }
-
-    storedNodes[existingIndex] = {
-      ...rpcNode,
-      url: inspection.url,
-      chainKey: inspection.chainKey,
-      chainId: inspection.chainId,
-      chainLabel: inspection.chainLabel,
-      lastHealth: {
-        status: "healthy",
-        latencyMs: inspection.latencyMs,
-        blockNumber: inspection.blockNumber,
-        checkedAt: inspection.checkedAt || new Date().toISOString()
-      }
-    };
-
-    appState.rpcNodes = mergeRpcInventories(storedNodes, buildEnvRpcNodes());
-    appState.chains = getAvailableChains();
-    await persistAppState();
-    emitState();
-    sendJson(response, 200, {
-      ok: true,
-      rpcNode: storedNodes[existingIndex],
-      inspection
-    });
+    const result = await repairStoredRpcNode(rpcId);
+    sendJson(response, 200, result);
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
@@ -8056,6 +8494,8 @@ async function handleAssistantChat(request, response) {
       reply: result.reply,
       actions: result.actions || [],
       changedState: Boolean(result.changedState),
+      navigateTo: result.navigateTo || "",
+      focusTaskId: result.focusTaskId || "",
       model: operatorAssistantModel
     });
   } catch (error) {
@@ -8064,45 +8504,21 @@ async function handleAssistantChat(request, response) {
 }
 
 async function handleRpcTest(rpcId, response) {
-  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
-  if (!rpcNode) {
-    sendJson(response, 404, { error: "RPC node not found" });
-    return;
+  try {
+    const result = await testRpcNodeById(rpcId);
+    sendJson(response, 200, { ok: true, health: result.health, rpcNode: result.rpcNode });
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
-
-  const health = await testRpcNodeHealth(rpcNode);
-  await persistAppState();
-  emitState();
-  sendJson(response, 200, { ok: true, health });
 }
 
 async function handleRpcPoolTest(response) {
-  if (appState.rpcNodes.length === 0) {
-    sendJson(response, 400, { error: "No RPC nodes configured" });
-    return;
+  try {
+    const result = await testRpcMesh();
+    sendJson(response, 200, result);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
-
-  const results = [];
-  for (const rpcNode of appState.rpcNodes) {
-    results.push({
-      id: rpcNode.id,
-      name: rpcNode.name,
-      chainKey: rpcNode.chainKey,
-      health: await testRpcNodeHealth(rpcNode)
-    });
-  }
-
-  await persistAppState();
-  emitState();
-  sendJson(response, 200, {
-    ok: true,
-    summary: {
-      total: results.length,
-      healthy: results.filter((entry) => entry.health.status === "healthy").length,
-      error: results.filter((entry) => entry.health.status === "error").length
-    },
-    results
-  });
 }
 
 async function handleExplorerAbiLookup(url, response) {
@@ -8559,63 +8975,83 @@ async function handleOpenSeaKeyTest(request, response) {
   }
 }
 
+async function deleteSavedApiKey(secretName) {
+  const definition = assistantApiKeyDefinitions[secretName];
+  if (!definition) {
+    throw createHttpError(`API key "${secretName}" is unavailable`, 400);
+  }
+
+  const settingsBefore = buildPublicSettings();
+  const sourceProperty = `${secretName}Source`;
+  const configuredProperty = `${secretName}Configured`;
+  const sourceBefore = String(settingsBefore[sourceProperty] || "").trim();
+
+  if (!sourceBefore) {
+    throw createHttpError(`${definition.label} is not configured`, 404);
+  }
+
+  if (sourceBefore !== "saved") {
+    throw createHttpError(`${definition.label} is managed through environment variables`, 400);
+  }
+
+  await database.deleteSecret(secretStorageKeys[secretName]);
+  delete integrationSecrets[secretName];
+  setIntegrationHealth(secretName, "missing");
+  emitState();
+
+  const settingsAfter = buildPublicSettings();
+  return {
+    ok: true,
+    secretName,
+    label: definition.label,
+    sourceBefore,
+    sourceAfter: String(settingsAfter[sourceProperty] || "").trim(),
+    configuredAfter: Boolean(settingsAfter[configuredProperty])
+  };
+}
+
 async function handleExplorerKeyDelete(response) {
   try {
-    await database.deleteSecret(secretStorageKeys.explorerApiKey);
-    delete integrationSecrets.explorerApiKey;
-    setIntegrationHealth("explorerApiKey", "missing");
-    emitState();
-    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+    const result = await deleteSavedApiKey("explorerApiKey");
+    sendJson(response, 200, { ...result, settings: buildPublicSettings() });
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
 async function handleOpenAiKeyDelete(response) {
   try {
-    await database.deleteSecret(secretStorageKeys.openaiApiKey);
-    delete integrationSecrets.openaiApiKey;
-    setIntegrationHealth("openaiApiKey", "missing");
-    emitState();
-    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+    const result = await deleteSavedApiKey("openaiApiKey");
+    sendJson(response, 200, { ...result, settings: buildPublicSettings() });
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
 async function handleAlchemyKeyDelete(response) {
   try {
-    await database.deleteSecret(secretStorageKeys.alchemyApiKey);
-    delete integrationSecrets.alchemyApiKey;
-    setIntegrationHealth("alchemyApiKey", "missing");
-    emitState();
-    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+    const result = await deleteSavedApiKey("alchemyApiKey");
+    sendJson(response, 200, { ...result, settings: buildPublicSettings() });
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
 async function handleDrpcKeyDelete(response) {
   try {
-    await database.deleteSecret(secretStorageKeys.drpcApiKey);
-    delete integrationSecrets.drpcApiKey;
-    setIntegrationHealth("drpcApiKey", "missing");
-    emitState();
-    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+    const result = await deleteSavedApiKey("drpcApiKey");
+    sendJson(response, 200, { ...result, settings: buildPublicSettings() });
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
 async function handleOpenSeaKeyDelete(response) {
   try {
-    await database.deleteSecret(secretStorageKeys.openseaApiKey);
-    delete integrationSecrets.openseaApiKey;
-    setIntegrationHealth("openseaApiKey", "missing");
-    emitState();
-    sendJson(response, 200, { ok: true, settings: buildPublicSettings() });
+    const result = await deleteSavedApiKey("openseaApiKey");
+    sendJson(response, 200, { ...result, settings: buildPublicSettings() });
   } catch (error) {
-    sendJson(response, 400, { error: formatError(error) });
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
 
@@ -8682,26 +9118,12 @@ async function handleSettingsSave(request, response) {
 }
 
 async function handleRpcDelete(rpcId, response) {
-  const rpcNode = appState.rpcNodes.find((node) => node.id === rpcId);
-  if (!rpcNode) {
-    sendJson(response, 404, { error: "RPC node not found" });
-    return;
+  try {
+    const result = await deleteRpcNodeById(rpcId);
+    sendJson(response, 200, result);
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
-
-  if (rpcNode.source === "env") {
-    sendJson(response, 400, { error: "Env RPC nodes are managed through environment variables" });
-    return;
-  }
-
-  appState.rpcNodes = appState.rpcNodes.filter((node) => node.id !== rpcId);
-  appState.tasks = appState.tasks.map((task) => ({
-    ...task,
-    rpcNodeIds: (task.rpcNodeIds || []).filter((id) => id !== rpcId)
-  }));
-  await persistAppState();
-  await reloadAppState();
-  emitState();
-  sendJson(response, 200, { ok: true });
 }
 
 function findPriorityTaskForRun() {
