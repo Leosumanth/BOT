@@ -3432,7 +3432,7 @@ function defaultTaskState() {
     chainKey: "base_sepolia",
     sourceType: defaultMintSourceType,
     sourceTarget: "",
-    sourceStage: defaultMintSourceStage,
+    sourceStage: "public",
     sourceConfigJson: "",
     quantityPerWallet: 1,
     priceEth: "",
@@ -3456,12 +3456,12 @@ function defaultTaskState() {
     claimFetchBodyJson: "",
     claimResponseMappingJson: "",
     claimResponseRoot: "",
-    gasStrategy: "normal",
+    gasStrategy: "aggressive",
     gasLimit: "",
     maxFeeGwei: "",
     maxPriorityFeeGwei: "",
-    gasBoostPercent: "0",
-    priorityBoostPercent: "0",
+    gasBoostPercent: "8",
+    priorityBoostPercent: "10",
     simulateTransaction: true,
     dryRun: false,
     waitForReceipt: true,
@@ -3473,7 +3473,7 @@ function defaultTaskState() {
     useSchedule: false,
     waitUntilIso: "",
     preSignTransactions: true,
-    multiRpcBroadcast: false,
+    multiRpcBroadcast: true,
     schedulePending: false,
     mintStartDetectionEnabled: false,
     mintStartDetectionConfig: null,
@@ -3482,17 +3482,17 @@ function defaultTaskState() {
     readyCheckMode: "truthy",
     readyCheckExpected: "",
     readyCheckIntervalMs: "1000",
-    pollIntervalMs: "1000",
-    txTimeoutMs: "",
+    pollIntervalMs: "150",
+    txTimeoutMs: "25000",
     maxRetries: "1",
-    retryDelayMs: "1000",
-    retryWindowMs: "1800000",
+    retryDelayMs: "250",
+    retryWindowMs: "300000",
     startJitterMs: "0",
     minBalanceEth: "",
     nonceOffset: "0",
-    smartGasReplacement: false,
-    replacementBumpPercent: "12",
-    replacementMaxAttempts: "2",
+    smartGasReplacement: true,
+    replacementBumpPercent: "15",
+    replacementMaxAttempts: "3",
     privateRelayEnabled: false,
     privateRelayUrl: "",
     privateRelayMethod: "eth_sendRawTransaction",
@@ -3532,13 +3532,13 @@ function sanitizeTaskInput(payload, existingTask = null) {
   const sourceSelection = normalizeMintSourceSelection({
     sourceType: payload.sourceType ?? base.sourceType ?? defaultMintSourceType,
     sourceTarget: payload.sourceTarget ?? base.sourceTarget ?? "",
-    sourceStage: payload.sourceStage ?? base.sourceStage ?? defaultMintSourceStage,
+    sourceStage: "public",
     sourceConfig: payload.sourceConfigJson ?? base.sourceConfigJson ?? ""
   });
-  const autoArm = Boolean(payload.autoArm ?? base.autoArm ?? true);
+  const autoArm = true;
   const useSchedule = Boolean(payload.useSchedule ?? base.useSchedule ?? false);
   const waitUntilIso = String(payload.waitUntilIso ?? base.waitUntilIso ?? "").trim();
-  const retryWindowMs = String(payload.retryWindowMs ?? base.retryWindowMs ?? "1800000").trim() || "1800000";
+  const retryWindowMs = String(payload.retryWindowMs ?? base.retryWindowMs ?? "300000").trim() || "300000";
   const scheduleConfigChanged =
     !existingTask ||
     useSchedule !== Boolean(base.useSchedule) ||
@@ -3565,7 +3565,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     chainKey: String(payload.chainKey || base.chainKey || "base_sepolia"),
     sourceType: sourceSelection.sourceType,
     sourceTarget: sourceSelection.sourceTarget,
-    sourceStage: sourceSelection.sourceStage,
+    sourceStage: "public",
     sourceConfigJson: sourceSelection.sourceConfigJson,
     quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || base.quantityPerWallet || 1)),
     priceEth: String(payload.priceEth ?? base.priceEth ?? "").trim(),
@@ -3583,46 +3583,37 @@ function sanitizeTaskInput(payload, existingTask = null) {
     rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : base.rpcNodeIds || [],
     mintFunction: String(payload.mintFunction ?? base.mintFunction ?? "").trim(),
     mintArgs: String(payload.mintArgs ?? base.mintArgs ?? "").trim(),
-    claimIntegrationEnabled: Boolean(
-      payload.claimIntegrationEnabled ?? base.claimIntegrationEnabled ?? false
-    ),
-    claimProjectKey: String(payload.claimProjectKey ?? base.claimProjectKey ?? "").trim(),
-    walletClaimsJson: String(payload.walletClaimsJson ?? base.walletClaimsJson ?? "").trim(),
-    claimFetchEnabled: Boolean(payload.claimFetchEnabled ?? base.claimFetchEnabled ?? false),
-    claimFetchUrl: String(payload.claimFetchUrl ?? base.claimFetchUrl ?? "").trim(),
-    claimFetchMethod:
-      String(payload.claimFetchMethod ?? base.claimFetchMethod ?? "GET").trim().toUpperCase() || "GET",
-    claimFetchHeadersJson: String(
-      payload.claimFetchHeadersJson ?? base.claimFetchHeadersJson ?? ""
-    ).trim(),
-    claimFetchCookiesJson: String(
-      payload.claimFetchCookiesJson ?? base.claimFetchCookiesJson ?? ""
-    ).trim(),
-    claimFetchBodyJson: String(payload.claimFetchBodyJson ?? base.claimFetchBodyJson ?? "").trim(),
-    claimResponseMappingJson: String(
-      payload.claimResponseMappingJson ?? base.claimResponseMappingJson ?? ""
-    ).trim(),
-    claimResponseRoot: String(payload.claimResponseRoot ?? base.claimResponseRoot ?? "").trim(),
-    gasStrategy: normalizeGasStrategyValue(payload.gasStrategy || base.gasStrategy || "normal"),
+    claimIntegrationEnabled: false,
+    claimProjectKey: "",
+    walletClaimsJson: "",
+    claimFetchEnabled: false,
+    claimFetchUrl: "",
+    claimFetchMethod: "GET",
+    claimFetchHeadersJson: "",
+    claimFetchCookiesJson: "",
+    claimFetchBodyJson: "",
+    claimResponseMappingJson: "",
+    claimResponseRoot: "",
+    gasStrategy: normalizeGasStrategyValue(payload.gasStrategy || base.gasStrategy || "aggressive"),
     gasLimit: String(payload.gasLimit ?? base.gasLimit ?? "").trim(),
     maxFeeGwei: String(payload.maxFeeGwei ?? base.maxFeeGwei ?? "").trim(),
     maxPriorityFeeGwei: String(payload.maxPriorityFeeGwei ?? base.maxPriorityFeeGwei ?? "").trim(),
-    gasBoostPercent: String(payload.gasBoostPercent ?? base.gasBoostPercent ?? "0").trim() || "0",
+    gasBoostPercent: String(payload.gasBoostPercent ?? base.gasBoostPercent ?? "8").trim() || "8",
     priorityBoostPercent: String(
-      payload.priorityBoostPercent ?? base.priorityBoostPercent ?? "0"
-    ).trim() || "0",
+      payload.priorityBoostPercent ?? base.priorityBoostPercent ?? "10"
+    ).trim() || "10",
     simulateTransaction: Boolean(payload.simulateTransaction ?? base.simulateTransaction ?? true),
     dryRun: Boolean(payload.dryRun ?? base.dryRun ?? false),
     waitForReceipt: Boolean(payload.waitForReceipt ?? base.waitForReceipt ?? true),
-    warmupRpc: Boolean(payload.warmupRpc ?? base.warmupRpc ?? true),
+    warmupRpc: true,
     continueOnError: Boolean(payload.continueOnError ?? base.continueOnError ?? false),
-    walletMode: String(payload.walletMode || base.walletMode || "parallel"),
+    walletMode: "parallel",
     autoArm,
     autoArmPending: Boolean(payload.autoArmPending ?? base.autoArmPending ?? false),
     useSchedule,
     waitUntilIso,
     preSignTransactions: true,
-    multiRpcBroadcast: Boolean(payload.multiRpcBroadcast ?? base.multiRpcBroadcast ?? false),
+    multiRpcBroadcast: true,
     schedulePending,
     mintStartDetectionEnabled: Boolean(
       payload.mintStartDetectionEnabled ?? base.mintStartDetectionEnabled ?? false
@@ -3635,21 +3626,21 @@ function sanitizeTaskInput(payload, existingTask = null) {
     readyCheckIntervalMs: String(
       payload.readyCheckIntervalMs ?? base.readyCheckIntervalMs ?? "1000"
     ).trim() || "1000",
-    pollIntervalMs: String(payload.pollIntervalMs ?? base.pollIntervalMs ?? "1000").trim() || "1000",
-    txTimeoutMs: String(payload.txTimeoutMs ?? base.txTimeoutMs ?? "").trim(),
+    pollIntervalMs: String(payload.pollIntervalMs ?? base.pollIntervalMs ?? "150").trim() || "150",
+    txTimeoutMs: String(payload.txTimeoutMs ?? base.txTimeoutMs ?? "25000").trim() || "25000",
     maxRetries: String(payload.maxRetries ?? base.maxRetries ?? "1").trim() || "1",
-    retryDelayMs: String(payload.retryDelayMs ?? base.retryDelayMs ?? "1000").trim() || "1000",
+    retryDelayMs: String(payload.retryDelayMs ?? base.retryDelayMs ?? "250").trim() || "250",
     retryWindowMs,
     startJitterMs: String(payload.startJitterMs ?? base.startJitterMs ?? "0").trim() || "0",
     minBalanceEth: String(payload.minBalanceEth ?? base.minBalanceEth ?? "").trim(),
     nonceOffset: String(payload.nonceOffset ?? base.nonceOffset ?? "0").trim() || "0",
-    smartGasReplacement: Boolean(payload.smartGasReplacement ?? base.smartGasReplacement ?? false),
+    smartGasReplacement: true,
     replacementBumpPercent: String(
-      payload.replacementBumpPercent ?? base.replacementBumpPercent ?? "12"
-    ).trim() || "12",
+      payload.replacementBumpPercent ?? base.replacementBumpPercent ?? "15"
+    ).trim() || "15",
     replacementMaxAttempts: String(
-      payload.replacementMaxAttempts ?? base.replacementMaxAttempts ?? "2"
-    ).trim() || "2",
+      payload.replacementMaxAttempts ?? base.replacementMaxAttempts ?? "3"
+    ).trim() || "3",
     privateRelayEnabled: Boolean(payload.privateRelayEnabled ?? base.privateRelayEnabled ?? false),
     privateRelayUrl: String(payload.privateRelayUrl ?? base.privateRelayUrl ?? "").trim(),
     privateRelayMethod:
@@ -3676,8 +3667,8 @@ function sanitizeTaskInput(payload, existingTask = null) {
     ).trim(),
     triggerBlockNumber: String(payload.triggerBlockNumber ?? base.triggerBlockNumber ?? "").trim(),
     triggerTimeoutMs: String(payload.triggerTimeoutMs ?? base.triggerTimeoutMs ?? "").trim(),
-    transferAfterMinted: Boolean(payload.transferAfterMinted ?? base.transferAfterMinted ?? false),
-    transferAddress: String(payload.transferAddress ?? base.transferAddress ?? "").trim(),
+    transferAfterMinted: false,
+    transferAddress: "",
     status: payload.status || base.status || "draft",
     progress: base.progress || { phase: "Ready", percent: 0 },
     summary: base.summary || { total: 0, success: 0, failed: 0, stopped: 0, hashes: [] },
@@ -8471,7 +8462,7 @@ function validateAndPrepareTask(task, existingTask, payload) {
   return {
     abiEntries,
     preparedTask: applyTaskAutoLaunchState(task, abiEntries),
-    autoGeneratePhaseTasks: !existingTask && Boolean(payload.autoGeneratePhaseTasks)
+    autoGeneratePhaseTasks: false
   };
 }
 

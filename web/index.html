@@ -85,7 +85,6 @@
               <strong id="live-clock">--:--:--</strong>
             </div>
             <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
-            <button id="quick-gummiez-task-button" class="ghost-button fx-button" type="button">1-Click Gummiez</button>
             <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Launch Task Builder</button>
           </div>
         </header>
@@ -649,12 +648,42 @@
                 <input id="task-source-target-input" type="text" placeholder="https://opensea.io/collection/example-drop" />
               </label>
             </div>
-            <p id="task-source-hint" class="helper-copy">Paste a collection link and wait a second for auto-discovery, or leave it empty and fill the contract + ABI manually.</p>
+            <p id="task-source-hint" class="helper-copy">Paste a collection link and MintBot will auto-discover the public mint route. Manual contract and ABI recovery tools live in Advanced Settings.</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Mint Summary</h4>
+                <p class="helper-copy">This shows the collection, the actual mint route, and the wallet that will receive the NFT.</p>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Collection</span>
+                <input id="task-discovery-collection-input" type="text" placeholder="Waiting for OpenSea discovery" readonly />
+              </label>
+              <label>
+                <span>Destination Wallet</span>
+                <input id="task-destination-wallet-input" type="text" placeholder="Select the wallet that should receive the NFT" readonly />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>NFT Collection Contract</span>
+                <input id="task-discovery-nft-contract-input" type="text" placeholder="Waiting for collection contract discovery" readonly />
+              </label>
+              <label>
+                <span>Mint Route Contract</span>
+                <input id="task-discovery-route-contract-input" type="text" placeholder="Waiting for mint route discovery" readonly />
+              </label>
+            </div>
+            <p id="task-mint-route-hint" class="helper-copy">Paste a collection link and MintBot will discover the mint path for you. Minted NFTs go directly to the selected wallet.</p>
           </div>
 
           <div class="form-grid two">
             <label>
-              <span>Contract Address</span>
+              <span>Mint Route Contract</span>
               <input id="task-contract-input" type="text" placeholder="0x... or leave blank for auto-fill from the collection link" />
             </label>
             <label>
@@ -678,14 +707,14 @@
             <div class="surface-header compact">
               <div>
                 <h4>Public Mint Fast Path</h4>
-                <p class="helper-copy">This task builder is currently narrowed to public mints only. Pick how the public sale goes live and MintBot will choose the low-latency launch stack for you.</p>
+                <p class="helper-copy">This task builder is narrowed to public mints only. Pick how the public sale goes live and MintBot will auto-arm the ultra-low-latency launch stack for you.</p>
               </div>
               <button id="task-advanced-toggle-button" class="ghost-button fx-button" type="button" aria-expanded="false">Show Advanced Settings</button>
             </div>
-            <p class="helper-copy">Advanced settings are optional and mainly for explorer/source discovery, gas tuning, relay routing, and custom sale-open checks.</p>
+            <p class="helper-copy">Advanced settings are now mostly recovery tools for manual ABI loading, route inspection, relay routing, and custom sale-open checks.</p>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <div>
                 <h4>Discovery Details</h4>
@@ -713,7 +742,7 @@
             <p class="helper-copy">OpenSea public mints work best with a collection link plus saved OpenSea and Explorer API keys.</p>
           </div>
 
-          <div class="form-grid single">
+          <div class="form-grid single task-advanced-section hidden">
             <label>
               <span>Contract ABI</span>
               <input id="task-abi-file-input" type="file" accept=".json,application/json" />
@@ -732,7 +761,7 @@
             </label>
           </div>
 
-          <div class="surface inset-surface">
+          <div class="surface inset-surface task-advanced-section hidden">
             <div class="surface-header compact">
               <h4>ABI JSON</h4>
               <div class="surface-actions">
@@ -851,7 +880,10 @@
 
           <div class="surface inset-surface">
             <div class="surface-header compact">
-              <h4>Wallets</h4>
+              <div>
+                <h4>Mint Wallets</h4>
+                <p class="helper-copy">Minted NFTs go directly to the selected wallet. Transfer-after-mint is only needed for advanced setups.</p>
+              </div>
               <button id="select-all-wallets-button" class="ghost-button fx-button" type="button">Select All</button>
             </div>
             <div id="wallet-group-tabs" class="group-tabs"></div>

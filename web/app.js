@@ -70,22 +70,6 @@ const fallbackMintSources = [
     }
   }
 ];
-const featuredMintPresets = Object.freeze({
-  gummiezPublic: {
-    key: "gummiez_public",
-    taskName: "Gummiez OpenSea Public Mint",
-    chainKey: "ethereum",
-    sourceType: "opensea",
-    sourceTarget: "https://opensea.io/collection/gummiez",
-    sourceStage: "public",
-    quantityPerWallet: "1",
-    priceEth: "0.0026",
-    quickDropType: "public",
-    quickLaunchMode: "onchain",
-    notes:
-      "Loaded from the OpenSea Gummiez preset. OpenSea currently lists this as an Ethereum mint with a public stage at 0.0026 ETH and limit 5 per wallet. MintBot will try to auto-discover the live contract and ABI from the OpenSea source immediately."
-  }
-});
 const walletAssetSnapshotStorageKey = "mintbot.wallet-assets.snapshots.v1";
 const walletAssetSelectedStorageKey = "mintbot.wallet-assets.selected.v1";
 const walletAssetAutoSyncIntervalMs = 2 * 60 * 1000;
@@ -118,7 +102,6 @@ const runtimeOutput = document.getElementById("runtime-output");
 const clearLogsButton = document.getElementById("clear-logs-button");
 const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
-const quickGummiezTaskButton = document.getElementById("quick-gummiez-task-button");
 const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
 const runPriorityButton = document.getElementById("run-priority-button");
 const rpcPulseButton = document.getElementById("rpc-pulse-button");
@@ -361,6 +344,11 @@ const taskSourceTargetInput = document.getElementById("task-source-target-input"
 const taskSourceStageInput = document.getElementById("task-source-stage-input");
 const taskSourceConfigInput = document.getElementById("task-source-config-input");
 const taskSourceHint = document.getElementById("task-source-hint");
+const taskDiscoveryCollectionInput = document.getElementById("task-discovery-collection-input");
+const taskDestinationWalletInput = document.getElementById("task-destination-wallet-input");
+const taskDiscoveryNftContractInput = document.getElementById("task-discovery-nft-contract-input");
+const taskDiscoveryRouteContractInput = document.getElementById("task-discovery-route-contract-input");
+const taskMintRouteHint = document.getElementById("task-mint-route-hint");
 const taskFunctionInput = document.getElementById("task-function-input");
 const taskArgsInput = document.getElementById("task-args-input");
 const taskClaimIntegrationToggle = document.getElementById("task-claim-integration-toggle");
@@ -507,6 +495,8 @@ let currentTaskLaunchRecommendation = {
   reason: ""
 };
 let currentTaskExecutionBlocker = "";
+let currentTaskSourceDiscovery = null;
+let currentTaskMintAutofill = null;
 let assistantState = {
   loading: false,
   messages: []
@@ -1103,6 +1093,10 @@ function recommendedTaskLatencyProfile(dropType, launchSignal) {
   const normalizedDropType = normalizeTaskQuickDropType(dropType);
   const normalizedLaunchSignal = normalizeTaskQuickLaunchSignal(launchSignal);
 
+  if (normalizedDropType === "public") {
+    return "ultra_low_latency";
+  }
+
   if (normalizedLaunchSignal === "mempool" || normalizedLaunchSignal === "block") {
     return "ultra_low_latency";
   }
@@ -1211,6 +1205,53 @@ function enforcePublicMintTaskDefaults() {
     taskQuickProofHint.textContent = "";
     taskQuickProofHint.classList.add("hidden");
   }
+
+  if (taskAutoArmToggle) {
+    taskAutoArmToggle.checked = true;
+    taskAutoArmToggle.disabled = true;
+  }
+
+  if (taskWalletModeInput) {
+    taskWalletModeInput.value = "parallel";
+    taskWalletModeInput.disabled = true;
+  }
+
+  if (taskTransferToggle) {
+    taskTransferToggle.checked = false;
+    taskTransferToggle.disabled = true;
+  }
+
+  if (taskTransferAddressInput) {
+    taskTransferAddressInput.value = "";
+    taskTransferAddressInput.disabled = true;
+  }
+
+  if (taskGasStrategyInput) {
+    taskGasStrategyInput.value = "aggressive";
+    taskGasStrategyInput.disabled = true;
+  }
+
+  if (taskWarmupToggle) {
+    taskWarmupToggle.checked = true;
+    taskWarmupToggle.disabled = true;
+  }
+
+  if (taskMultiRpcBroadcastToggle) {
+    taskMultiRpcBroadcastToggle.checked = true;
+    taskMultiRpcBroadcastToggle.disabled = true;
+  }
+
+  if (taskSmartReplaceToggle) {
+    taskSmartReplaceToggle.checked = true;
+    taskSmartReplaceToggle.disabled = true;
+  }
+
+  if (taskLatencyProfileInput) {
+    taskLatencyProfileInput.value = "ultra_low_latency";
+    taskLatencyProfileInput.disabled = true;
+  }
+
+  applyLatencyProfile("ultra_low_latency");
 }
 
 function relativeTime(isoString) {
@@ -1978,9 +2019,95 @@ function selectedRpcIds() {
   );
 }
 
+function currentTaskCollectionFallbackLabel() {
+  const target = String(taskSourceTargetInput?.value || "").trim();
+  if (!target) {
+    return "";
+  }
+
+  try {
+    const url = new URL(target);
+    const slugMatch = String(url.pathname || "").match(/\/collection\/([^/?#]+)/i);
+    if (slugMatch?.[1]) {
+      return slugMatch[1];
+    }
+
+    const normalizedPath = String(url.pathname || "").replace(/^\/+|\/+$/g, "");
+    return normalizedPath || target;
+  } catch {
+    const slugMatch = target.match(/collection\/([^/?#]+)/i);
+    return slugMatch?.[1] || target;
+  }
+}
+
+function selectedTaskWalletRecords() {
+  const selectedIds = selectedWalletIds();
+  return state.wallets.filter((wallet) => selectedIds.includes(wallet.id));
+}
+
+function updateTaskMintSummary() {
+  if (
+    !taskDiscoveryCollectionInput ||
+    !taskDestinationWalletInput ||
+    !taskDiscoveryNftContractInput ||
+    !taskDiscoveryRouteContractInput ||
+    !taskMintRouteHint
+  ) {
+    return;
+  }
+
+  const collectionName =
+    String(currentTaskSourceDiscovery?.collection?.name || "").trim() ||
+    currentTaskCollectionFallbackLabel();
+  const nftContract = String(currentTaskSourceDiscovery?.contractAddress || "").trim();
+  const mintRouteContract = String(taskContractInput?.value || "").trim();
+  const selectedWallets = selectedTaskWalletRecords();
+  const livePrice = String(taskPriceInput?.value || "").trim();
+
+  let destinationLabel = "";
+  if (selectedWallets.length === 1) {
+    const wallet = selectedWallets[0];
+    destinationLabel = `${wallet.label || "Wallet"} · ${wallet.addressShort || truncateMiddle(wallet.address || "", 10, 6)}`;
+  } else if (selectedWallets.length > 1) {
+    destinationLabel = `${selectedWallets.length} wallets selected`;
+  } else if (state.wallets.length === 0) {
+    destinationLabel = "Import a wallet first";
+  } else {
+    destinationLabel = "Select the wallet that should receive the NFT";
+  }
+
+  taskDiscoveryCollectionInput.value = collectionName;
+  taskDiscoveryNftContractInput.value = nftContract;
+  taskDiscoveryRouteContractInput.value = mintRouteContract;
+  taskDestinationWalletInput.value = destinationLabel;
+
+  let hint = "";
+  if (currentTaskExecutionBlocker) {
+    hint = currentTaskExecutionBlocker;
+  } else if (!collectionName) {
+    hint = "Paste an OpenSea collection link and MintBot will discover the mint path for you.";
+  } else if (!mintRouteContract) {
+    hint = "MintBot is still discovering the correct mint route and ABI from the collection link.";
+  } else if (nftContract && mintRouteContract && nftContract.toLowerCase() !== mintRouteContract.toLowerCase()) {
+    hint =
+      "This collection uses a separate mint route contract. MintBot sends the transaction there, but the NFT still mints into the selected wallet.";
+  } else if (selectedWallets.length > 1) {
+    hint = "Minted NFTs go directly to each selected wallet.";
+  } else {
+    hint = "Minted NFTs go directly to the selected wallet.";
+  }
+
+  if (livePrice) {
+    hint += ` Live mint price: ${livePrice} ETH.`;
+  }
+
+  taskMintRouteHint.textContent = hint;
+}
+
 function setWalletSelectionCount() {
   const count = selectedWalletIds().length;
   walletSelectionCount.textContent = `${pluralize(count, "wallet")} selected`;
+  updateTaskMintSummary();
 }
 
 function setRpcSelectionCount() {
@@ -6777,7 +6904,6 @@ function setView(viewName) {
   views.forEach((view) => {
     view.classList.toggle("active", view.dataset.viewPanel === viewName);
   });
-  quickGummiezTaskButton?.classList.toggle("hidden", viewName !== "dashboard");
   dashboardOpenTaskButton.classList.toggle("hidden", viewName !== "dashboard");
   if (viewName === "wallets") {
     renderWallets();
@@ -6952,11 +7078,17 @@ async function requestTaskSourceDiscovery(options = {}) {
     if (force) {
       setTaskSourceDiscoveryStatus("");
     }
+    currentTaskSourceDiscovery = null;
+    currentTaskMintAutofill = null;
+    updateTaskMintSummary();
     return null;
   }
 
   if (!payload.sourceTarget) {
     setTaskSourceDiscoveryStatus("Waiting for an OpenSea collection URL or slug.");
+    currentTaskSourceDiscovery = null;
+    currentTaskMintAutofill = null;
+    updateTaskMintSummary();
     return null;
   }
 
@@ -6979,6 +7111,7 @@ async function requestTaskSourceDiscovery(options = {}) {
     if (!discovery) {
       return null;
     }
+    currentTaskSourceDiscovery = discovery;
 
     if (discovery.chainKey && discovery.chainLabel && Number.isFinite(Number(discovery.chainId))) {
       ensureChainOption({
@@ -7024,6 +7157,7 @@ async function requestTaskSourceDiscovery(options = {}) {
 
     const autofill = response.autofill || discovery.autofill || null;
     if (autofill) {
+      currentTaskMintAutofill = autofill;
       applyAutofillRouting(autofill, { sourceLabel: "OpenSea auto-discovery" });
       setMintStartDetectionState(autofill.mintStartDetection || null);
       renderPhasePreview(autofill.phasePreview || []);
@@ -7036,6 +7170,7 @@ async function requestTaskSourceDiscovery(options = {}) {
       });
       updateAbiStatus(buildAbiStatusSourceLabel("OpenSea auto-discovery", autofill));
     } else if (abiEntries.length > 0) {
+      currentTaskMintAutofill = null;
       setTaskLaunchRecommendation(null);
       setTaskExecutionBlocker("");
       applyAbiAutofillFromCurrentInput({
@@ -7047,6 +7182,10 @@ async function requestTaskSourceDiscovery(options = {}) {
         includePlatform: true,
         remote: false
       });
+    }
+
+    if (!String(taskNameInput.value || "").trim() && discovery.collection?.name) {
+      taskNameInput.value = `${discovery.collection.name} Public Mint`;
     }
 
     const statusParts = [];
@@ -7071,11 +7210,14 @@ async function requestTaskSourceDiscovery(options = {}) {
       showToast(successToastMessage, "success", successToastTitle);
     }
 
+    updateTaskMintSummary();
+
     return response;
   } catch (error) {
     if (requestId === sourceDiscoveryRequestId) {
       setTaskSourceDiscoveryStatus(`Discovery unavailable: ${error.message || "request failed"}`);
     }
+    updateTaskMintSummary();
     return null;
   }
 }
@@ -7139,6 +7281,7 @@ function setTaskLaunchRecommendation(value = null) {
 function setTaskExecutionBlocker(value = "") {
   currentTaskExecutionBlocker = String(value || "").trim();
   syncTaskSimpleLaunchFields();
+  updateTaskMintSummary();
 }
 
 function applyRecommendedLaunchPlan(options = {}) {
@@ -7193,12 +7336,15 @@ function applyRecommendedLaunchPlan(options = {}) {
 
 function applyAutofillRouting(autofill, options = {}) {
   if (!autofill || typeof autofill !== "object") {
+    currentTaskMintAutofill = null;
     setTaskLaunchRecommendation(null);
     setTaskExecutionBlocker("");
+    updateTaskMintSummary();
     return false;
   }
 
   const { sourceLabel = "" } = options;
+  currentTaskMintAutofill = autofill;
   let routeChanged = false;
   const nextContractAddress = String(autofill.contractAddressOverride || "").trim();
   const nextAbiEntries = Array.isArray(autofill.abiOverride) ? autofill.abiOverride : null;
@@ -7234,6 +7380,7 @@ function applyAutofillRouting(autofill, options = {}) {
     );
   }
 
+  updateTaskMintSummary();
   return routeChanged;
 }
 
@@ -7603,6 +7750,8 @@ function applyMintAutofill(autofill, options = {}) {
   ) {
     taskPlatformInput.value = autofill.platform;
   }
+
+  updateTaskMintSummary();
 }
 
 function formatPhasePreviewTime(isoString) {
@@ -8006,6 +8155,8 @@ function openTaskModal(task = null) {
   window.clearTimeout(sourceDiscoveryTimer);
   sourceDiscoveryRequestId += 1;
   taskSourceDiscoveryStatus = "";
+  currentTaskSourceDiscovery = null;
+  currentTaskMintAutofill = null;
 
   taskIdInput.value = task?.id || "";
   taskNameInput.value = task?.name || "";
@@ -8026,7 +8177,6 @@ function openTaskModal(task = null) {
   updateTaskSourceInputs();
   taskFunctionInput.value = task?.mintFunction || "";
   taskArgsInput.value = task?.mintArgs || "";
-  enforcePublicMintTaskDefaults();
   taskAutoArmToggle.checked = task?.autoArm ?? true;
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
   taskStartTimeInput.value = task?.waitUntilIso ? isoStringToUtcDateTimeLocalValue(task.waitUntilIso) : "";
@@ -8074,6 +8224,7 @@ function openTaskModal(task = null) {
   taskTransferToggle.checked = Boolean(task?.transferAfterMinted);
   taskNotesInput.value = task?.notes || "";
   taskLatencyProfileInput.value = task ? "custom" : recommendedTaskLatencyProfile("public", "onchain");
+  enforcePublicMintTaskDefaults();
   setMintStartDetectionState({
     enabled: task?.mintStartDetectionEnabled,
     ...(task?.mintStartDetectionConfig && typeof task.mintStartDetectionConfig === "object"
@@ -8131,6 +8282,7 @@ function openTaskModal(task = null) {
   updateAbiStatus();
   renderWalletSelector(task?.walletIds || (!task && state.wallets.length === 1 ? [state.wallets[0].id] : []));
   renderRpcSelector(task?.rpcNodeIds || []);
+  updateTaskMintSummary();
   taskModal.classList.remove("hidden");
   initializeMotionSurfaces(taskModal);
 
@@ -8139,57 +8291,6 @@ function openTaskModal(task = null) {
   } else {
     updateTaskSourceInputs();
   }
-}
-
-function loadFeaturedMintPreset(preset) {
-  if (!preset) {
-    return;
-  }
-
-  setView("tasks");
-  openTaskModal();
-  setTaskAdvancedVisibility(true);
-
-  taskNameInput.value = preset.taskName || "";
-  taskChainInput.value = state.chains.some((chain) => chain.key === preset.chainKey)
-    ? preset.chainKey
-    : taskChainInput.value;
-  taskSourceTypeInput.value = preset.sourceTarget ? preset.sourceType || "opensea" : preset.sourceType || "opensea";
-  taskSourceTargetInput.value = preset.sourceTarget || "";
-  taskSourceStageInput.value = "public";
-  taskQuantityInput.value = preset.quantityPerWallet || "1";
-  taskPriceInput.value = preset.priceEth || "";
-  taskNotesInput.value = preset.notes || "";
-
-  if (taskQuickDropTypeInput) {
-    taskQuickDropTypeInput.value = "public";
-  }
-
-  if (taskSimpleLaunchModeInput) {
-    taskSimpleLaunchModeInput.value = preset.quickLaunchMode || "onchain";
-  }
-
-  syncTaskSourceTypeFromTarget();
-  updateTaskSourceInputs();
-  enforcePublicMintTaskDefaults();
-  applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
-  syncTaskSimpleLaunchFields();
-  requestTaskSourceDiscovery({
-    force: true,
-    quiet: false,
-    successToastTitle: "Preset Loaded",
-    successToastMessage:
-      "Gummiez preset loaded and OpenSea auto-discovery has started."
-  })
-    .then((response) => {
-      if (response?.discovery?.contractAddress) {
-        taskContractInput.focus();
-        return;
-      }
-
-      taskSourceTargetInput.focus();
-    })
-    .catch(() => {});
 }
 
 function closeTaskModal() {
@@ -8710,9 +8811,6 @@ dashboardRefreshButton?.addEventListener("click", () => {
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());
-quickGummiezTaskButton?.addEventListener("click", () => {
-  loadFeaturedMintPreset(featuredMintPresets.gummiezPublic);
-});
 dashboardOpenTaskButton.addEventListener("click", () => {
   setView("tasks");
 });
@@ -9624,8 +9722,11 @@ taskSourceStageInput?.addEventListener("change", () => {
 });
 
 taskSourceTargetInput?.addEventListener("input", () => {
+  currentTaskSourceDiscovery = null;
+  currentTaskMintAutofill = null;
   syncTaskSourceTypeFromTarget();
   updateTaskSourceInputs();
+  updateTaskMintSummary();
   scheduleTaskSourceDiscovery({ quiet: true });
 });
 
@@ -9706,6 +9807,7 @@ taskContractInput.addEventListener("input", () => {
   scheduleExplorerAbiFetch({
     force: currentTaskAbiOrigin() === "explorer" || !taskAbiInput.value.trim()
   });
+  updateTaskMintSummary();
 });
 
 taskContractInput.addEventListener("change", () => {
@@ -9723,6 +9825,12 @@ taskContractInput.addEventListener("change", () => {
       includePlatform: false
     });
   }
+
+  updateTaskMintSummary();
+});
+
+taskPriceInput?.addEventListener("input", () => {
+  updateTaskMintSummary();
 });
 
 taskFunctionInput.addEventListener("change", () => {
