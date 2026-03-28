@@ -19,7 +19,8 @@ const state = {
     limitation: "",
     warnings: [],
     filter: "all",
-    chainFilter: "all"
+    chainFilter: "all",
+    searchQuery: ""
   }
 };
 const fallbackMintSources = [
@@ -99,6 +100,7 @@ const navButtons = [...document.querySelectorAll(".nav-button")];
 const views = [...document.querySelectorAll(".view")];
 const dashboardRunHistory = document.getElementById("dashboard-run-history");
 const taskGrid = document.getElementById("task-grid");
+const mintRadarSearchInput = document.getElementById("mint-radar-search-input");
 const mintRadarChainInput = document.getElementById("mint-radar-chain-input");
 const mintRadarRefreshButton = document.getElementById("mint-radar-refresh-button");
 const mintRadarFilterInput = document.getElementById("mint-radar-filter-input");
@@ -3433,6 +3435,7 @@ function mintRadarChainOptions() {
 function filteredMintRadarItems() {
   const filter = String(state.mintRadar.filter || "all").trim().toLowerCase();
   const chainFilter = String(state.mintRadar.chainFilter || "all").trim();
+  const searchQuery = String(state.mintRadar.searchQuery || "").trim().toLowerCase();
   const items = Array.isArray(state.mintRadar.items) ? state.mintRadar.items : [];
   return items
     .filter((entry) => filter === "all" || entry.status === filter)
@@ -3442,6 +3445,26 @@ function filteredMintRadarItems() {
       }
 
       return mintRadarChainValue(entry) === chainFilter;
+    })
+    .filter((entry) => {
+      if (!searchQuery) {
+        return true;
+      }
+
+      const haystack = [
+        entry.collectionName,
+        entry.name,
+        entry.creator,
+        entry.slug,
+        entry.chainLabel,
+        entry.chainKey,
+        entry.summary
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(searchQuery);
     });
 }
 
@@ -3499,6 +3522,7 @@ function renderMintRadar() {
 
   const filter = String(state.mintRadar.filter || "all").trim().toLowerCase() || "all";
   const chainFilter = String(state.mintRadar.chainFilter || "all").trim() || "all";
+  const searchQuery = String(state.mintRadar.searchQuery || "").trim();
   const items = filteredMintRadarItems();
   const allItems = Array.isArray(state.mintRadar.items) ? state.mintRadar.items : [];
   const warnings = Array.isArray(state.mintRadar.warnings) ? state.mintRadar.warnings : [];
@@ -3513,6 +3537,10 @@ function renderMintRadar() {
     mintRadarChainInput.value = chainFilter;
   }
 
+  if (mintRadarSearchInput && mintRadarSearchInput.value !== searchQuery) {
+    mintRadarSearchInput.value = searchQuery;
+  }
+
   if (mintRadarFilterInput && mintRadarFilterInput.value !== filter) {
     mintRadarFilterInput.value = filter;
   }
@@ -3524,7 +3552,7 @@ function renderMintRadar() {
       mintRadarStatus.textContent = state.mintRadar.error;
     } else if (allItems.length > 0) {
       mintRadarStatus.textContent =
-        "OpenSea drops loaded. Filter by chain, review live or upcoming mints, and send any collection straight into the public mint builder.";
+        "OpenSea drops loaded. Search, filter by chain, review live or upcoming mints, and send any collection straight into the public mint builder.";
     } else {
       mintRadarStatus.textContent = "Refresh the OpenSea drops feed to load live and upcoming mints.";
     }
@@ -3532,9 +3560,10 @@ function renderMintRadar() {
 
   if (mintRadarCount) {
     const chainCopy = chainFilter === "all" ? "" : ` on ${mintRadarChainLabelForValue(chainFilter)}`;
+    const searchCopy = searchQuery ? ` matching "${searchQuery}"` : "";
     mintRadarCount.textContent =
       allItems.length > 0
-        ? `Showing ${items.length} of ${allItems.length} tracked ${allItems.length === 1 ? "drop" : "drops"}${chainCopy}.`
+        ? `Showing ${items.length} of ${allItems.length} tracked ${allItems.length === 1 ? "drop" : "drops"}${chainCopy}${searchCopy}.`
         : "No tracked drops yet.";
   }
 
@@ -3573,9 +3602,9 @@ function renderMintRadar() {
       ? state.mintRadar.error
       : state.mintRadar.loading
         ? "OpenSea radar data is loading."
-        : filter === "all" && chainFilter === "all"
+        : filter === "all" && chainFilter === "all" && !searchQuery
           ? "No live or upcoming drops were returned by OpenSea yet."
-          : `No ${filter === "all" ? "tracked" : filter} drops are visible for ${mintRadarChainLabelForValue(chainFilter)} right now.`;
+          : `No ${filter === "all" ? "tracked" : filter} drops are visible for ${mintRadarChainLabelForValue(chainFilter)}${searchQuery ? ` matching "${searchQuery}"` : ""} right now.`;
     mintRadarList.innerHTML = `<div class="empty-state"><h3>${escapeHtml(emptyTitle)}</h3><p>${escapeHtml(emptyMessage)}</p></div>`;
     return;
   }
@@ -3684,7 +3713,7 @@ async function loadMintRadar(options = {}) {
 
   try {
     const query = new URLSearchParams();
-    query.set("limit", "48");
+    query.set("limit", "160");
     if (forceRefresh) {
       query.set("refresh", "1");
     }
@@ -9276,6 +9305,11 @@ mintRadarChainInput?.addEventListener("change", () => {
   if (state.currentView === "mint-radar") {
     ensureMintRadarLoaded();
   }
+});
+
+mintRadarSearchInput?.addEventListener("input", () => {
+  state.mintRadar.searchQuery = String(mintRadarSearchInput.value || "").trim();
+  renderMintRadar();
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());

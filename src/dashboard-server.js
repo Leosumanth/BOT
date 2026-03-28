@@ -305,7 +305,7 @@ const nativeUsdPriceUrl =
 const openSeaDropsBaseUrl = String(process.env.OPENSEA_DROPS_BASE_URL || "https://opensea.io").trim();
 const openSeaMintRadarCacheTtlMs = Math.max(
   30_000,
-  Number(process.env.OPENSEA_MINT_RADAR_CACHE_TTL_MS || 90_000)
+  Number(process.env.OPENSEA_MINT_RADAR_CACHE_TTL_MS || 5 * 60 * 1000)
 );
 const openSeaMintRadarFetchTimeoutMs = Math.max(
   5_000,
@@ -313,14 +313,14 @@ const openSeaMintRadarFetchTimeoutMs = Math.max(
 );
 const openSeaMintRadarMaxPages = Math.max(
   1,
-  Math.min(4, Number(process.env.OPENSEA_MINT_RADAR_MAX_PAGES || 2))
+  Math.min(12, Number(process.env.OPENSEA_MINT_RADAR_MAX_PAGES || 8))
 );
 const openSeaMintRadarMaxItems = Math.max(
-  6,
-  Math.min(48, Number(process.env.OPENSEA_MINT_RADAR_MAX_ITEMS || 48))
+  12,
+  Math.min(240, Number(process.env.OPENSEA_MINT_RADAR_MAX_ITEMS || 160))
 );
 const openSeaMintRadarLimitation =
-  "Tracks the live and upcoming drops surfaced by OpenSea, not every NFT mint on every launch site.";
+  "Tracks the live and upcoming drops OpenSea is surfacing in its curated Drops calendar, not every NFT mint on every launch site.";
 
 function createIntegrationHealthEntry(status = "missing", details = {}) {
   return {
@@ -6899,25 +6899,40 @@ async function enrichOpenSeaMintRadarEntries(entries = [], apiKey = "") {
 }
 
 function buildOpenSeaMintRadarPageUrls() {
-  const urls = [
-    {
-      url: new URL("/drops", openSeaDropsBaseUrl).toString(),
-      label: "Live & Upcoming"
+  const urls = new Map();
+
+  function addTarget(url, label) {
+    const key = String(url || "").trim();
+    if (!key || urls.has(key)) {
+      return;
     }
-  ];
+
+    urls.set(key, {
+      url: key,
+      label
+    });
+  }
+
+  addTarget(new URL("/drops", openSeaDropsBaseUrl).toString(), "Live & Upcoming");
+  addTarget(new URL("/drops/?tab=upcoming", openSeaDropsBaseUrl).toString(), "Upcoming Tab");
 
   for (let page = 1; page <= openSeaMintRadarMaxPages; page += 1) {
     const upcomingUrl = new URL("/drops/upcoming/", openSeaDropsBaseUrl);
     if (page > 1) {
       upcomingUrl.searchParams.set("page", String(page));
     }
-    urls.push({
-      url: upcomingUrl.toString(),
-      label: page === 1 ? "Upcoming" : `Upcoming Page ${page}`
-    });
+
+    const upcomingTabUrl = new URL("/drops/", openSeaDropsBaseUrl);
+    upcomingTabUrl.searchParams.set("tab", "upcoming");
+    if (page > 1) {
+      upcomingTabUrl.searchParams.set("page", String(page));
+    }
+
+    addTarget(upcomingUrl.toString(), page === 1 ? "Upcoming" : `Upcoming Page ${page}`);
+    addTarget(upcomingTabUrl.toString(), page === 1 ? "Upcoming Tab" : `Upcoming Tab Page ${page}`);
   }
 
-  return urls;
+  return [...urls.values()];
 }
 
 function sortOpenSeaMintRadarEntries(entries = []) {
