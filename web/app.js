@@ -1145,6 +1145,60 @@ function taskQuickLaunchSignalFromTask(task = null) {
   return "live";
 }
 
+function enforcePublicMintTaskDefaults() {
+  if (taskQuickDropTypeInput) {
+    taskQuickDropTypeInput.value = "public";
+  }
+
+  if (taskSourceStageInput) {
+    taskSourceStageInput.value = "public";
+  }
+
+  if (taskAutoPhaseToggle) {
+    taskAutoPhaseToggle.checked = false;
+    taskAutoPhaseToggle.disabled = true;
+  }
+
+  if (taskClaimIntegrationToggle) {
+    taskClaimIntegrationToggle.checked = false;
+  }
+  if (taskClaimProjectKeyInput) {
+    taskClaimProjectKeyInput.value = "";
+  }
+  if (taskClaimFetchToggle) {
+    taskClaimFetchToggle.checked = false;
+  }
+  if (taskClaimFetchUrlInput) {
+    taskClaimFetchUrlInput.value = "";
+  }
+  if (taskClaimFetchMethodInput) {
+    taskClaimFetchMethodInput.value = "GET";
+  }
+  if (taskClaimResponseRootInput) {
+    taskClaimResponseRootInput.value = "";
+  }
+  if (taskWalletClaimsInput) {
+    taskWalletClaimsInput.value = "";
+  }
+  if (taskClaimFetchHeadersInput) {
+    taskClaimFetchHeadersInput.value = "";
+  }
+  if (taskClaimFetchCookiesInput) {
+    taskClaimFetchCookiesInput.value = "";
+  }
+  if (taskClaimFetchBodyInput) {
+    taskClaimFetchBodyInput.value = "";
+  }
+  if (taskClaimResponseMappingInput) {
+    taskClaimResponseMappingInput.value = "";
+  }
+
+  if (taskQuickProofHint) {
+    taskQuickProofHint.textContent = "";
+    taskQuickProofHint.classList.add("hidden");
+  }
+}
+
 function relativeTime(isoString) {
   if (!isoString) {
     return "Never";
@@ -7951,24 +8005,12 @@ function openTaskModal(task = null) {
   populateMintSourceSelectors(task?.sourceType || "generic_contract");
   taskSourceTypeInput.value = task?.sourceType || "generic_contract";
   taskSourceTargetInput.value = task?.sourceTarget || "";
-  taskSourceStageInput.value = task?.sourceStage || "auto";
+  taskSourceStageInput.value = "public";
   taskSourceConfigInput.value = task?.sourceConfigJson || "";
   updateTaskSourceInputs();
   taskFunctionInput.value = task?.mintFunction || "";
   taskArgsInput.value = task?.mintArgs || "";
-  taskClaimIntegrationToggle.checked = Boolean(task?.claimIntegrationEnabled);
-  taskClaimProjectKeyInput.value = task?.claimProjectKey || "";
-  taskClaimFetchToggle.checked = Boolean(task?.claimFetchEnabled);
-  taskClaimFetchUrlInput.value = task?.claimFetchUrl || "";
-  taskClaimFetchMethodInput.value = task?.claimFetchMethod || "GET";
-  taskClaimResponseRootInput.value = task?.claimResponseRoot || "";
-  taskWalletClaimsInput.value = task?.walletClaimsJson || "";
-  taskClaimFetchHeadersInput.value = task?.claimFetchHeadersJson || "";
-  taskClaimFetchCookiesInput.value = task?.claimFetchCookiesJson || "";
-  taskClaimFetchBodyInput.value = task?.claimFetchBodyJson || "";
-  taskClaimResponseMappingInput.value = task?.claimResponseMappingJson || "";
-  taskAutoPhaseToggle.checked = false;
-  taskAutoPhaseToggle.disabled = Boolean(task);
+  enforcePublicMintTaskDefaults();
   taskAutoArmToggle.checked = task?.autoArm ?? true;
   taskScheduleToggle.checked = Boolean(task?.useSchedule);
   taskStartTimeInput.value = task?.waitUntilIso ? isoStringToUtcDateTimeLocalValue(task.waitUntilIso) : "";
@@ -8033,7 +8075,7 @@ function openTaskModal(task = null) {
   );
   setTaskExecutionBlocker("");
   if (taskQuickDropTypeInput) {
-    taskQuickDropTypeInput.value = taskQuickDropTypeFromTask(task);
+    taskQuickDropTypeInput.value = "public";
   }
   if (taskSimpleLaunchModeInput) {
     taskSimpleLaunchModeInput.value = task ? taskQuickLaunchSignalFromTask(task) : "onchain";
@@ -8057,6 +8099,7 @@ function openTaskModal(task = null) {
   renderPhasePreview([]);
 
   if (!task) {
+    enforcePublicMintTaskDefaults();
     applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
     if (state.settings.explorerApiKeyConfigured && isLikelyEvmAddress(taskContractInput.value)) {
       scheduleExplorerAbiFetch({ force: true });
@@ -8097,13 +8140,13 @@ function loadFeaturedMintPreset(preset) {
     : taskChainInput.value;
   taskSourceTypeInput.value = preset.sourceType || "generic_contract";
   taskSourceTargetInput.value = preset.sourceTarget || "";
-  taskSourceStageInput.value = preset.sourceStage || "auto";
+  taskSourceStageInput.value = "public";
   taskQuantityInput.value = preset.quantityPerWallet || "1";
   taskPriceInput.value = preset.priceEth || "";
   taskNotesInput.value = preset.notes || "";
 
   if (taskQuickDropTypeInput) {
-    taskQuickDropTypeInput.value = preset.quickDropType || "public";
+    taskQuickDropTypeInput.value = "public";
   }
 
   if (taskSimpleLaunchModeInput) {
@@ -8111,6 +8154,7 @@ function loadFeaturedMintPreset(preset) {
   }
 
   updateTaskSourceInputs();
+  enforcePublicMintTaskDefaults();
   applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
   syncTaskSimpleLaunchFields();
   requestTaskSourceDiscovery({
@@ -8372,17 +8416,17 @@ async function submitTaskDelete() {
 
 function buildClaimTaskSettings() {
   return {
-    claimIntegrationEnabled: taskClaimIntegrationToggle.checked,
-    claimProjectKey: taskClaimProjectKeyInput.value,
-    walletClaimsJson: taskWalletClaimsInput.value,
-    claimFetchEnabled: taskClaimFetchToggle.checked,
-    claimFetchUrl: taskClaimFetchUrlInput.value,
-    claimFetchMethod: taskClaimFetchMethodInput.value,
-    claimFetchHeadersJson: taskClaimFetchHeadersInput.value,
-    claimFetchCookiesJson: taskClaimFetchCookiesInput.value,
-    claimFetchBodyJson: taskClaimFetchBodyInput.value,
-    claimResponseMappingJson: taskClaimResponseMappingInput.value,
-    claimResponseRoot: taskClaimResponseRootInput.value
+    claimIntegrationEnabled: false,
+    claimProjectKey: "",
+    walletClaimsJson: "",
+    claimFetchEnabled: false,
+    claimFetchUrl: "",
+    claimFetchMethod: "GET",
+    claimFetchHeadersJson: "",
+    claimFetchCookiesJson: "",
+    claimFetchBodyJson: "",
+    claimResponseMappingJson: "",
+    claimResponseRoot: ""
   };
 }
 
@@ -8452,7 +8496,7 @@ function buildTaskPayload() {
     chainKey: taskChainInput.value,
     sourceType: taskSourceTypeInput.value,
     sourceTarget: taskSourceTypeInput.value === "generic_contract" ? "" : taskSourceTargetInput.value,
-    sourceStage: taskSourceStageInput.value,
+    sourceStage: "public",
     sourceConfigJson: taskSourceConfigInput.value.trim(),
     quantityPerWallet: taskQuantityInput.value,
     priceEth: taskPriceInput.value,
@@ -8463,7 +8507,7 @@ function buildTaskPayload() {
     mintFunction: taskFunctionInput.value,
     mintArgs: taskArgsInput.value,
     ...buildClaimTaskSettings(),
-    autoGeneratePhaseTasks: !taskIdInput.value && taskAutoPhaseToggle.checked,
+    autoGeneratePhaseTasks: false,
     autoArm: taskAutoArmToggle.checked,
     gasStrategy: taskGasStrategyInput.value,
     gasLimit: taskGasLimitInput.value,

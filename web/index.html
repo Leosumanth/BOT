@@ -62,6 +62,14 @@
         </div>
 
         <div class="sidebar-footer">
+          <div class="account-card hud-panel" data-tilt>
+            <div class="account-avatar" aria-hidden="true">OP</div>
+            <div>
+              <strong id="account-label">Secure Operator</strong>
+              <p id="account-status">Sign in required</p>
+            </div>
+            <span class="status-dot" aria-hidden="true"></span>
+          </div>
           <button id="logout-button" class="danger-button fx-button" type="button">Sign Out</button>
         </div>
       </aside>
@@ -89,6 +97,20 @@
             </div>
           </div>
 
+          <section class="surface" data-tilt>
+            <div class="surface-header compact">
+              <div>
+                <h3>Command Surface</h3>
+                <p class="helper-copy">Launch the highest-priority task, refresh the RPC mesh, or capture a runtime snapshot without leaving the dashboard.</p>
+              </div>
+              <div class="surface-actions">
+                <button id="run-priority-button" class="ghost-button fx-button" type="button">Run Priority Task</button>
+                <button id="rpc-pulse-button" class="ghost-button fx-button" type="button">Pulse RPC Mesh</button>
+                <button id="snapshot-button" class="primary-button fx-button" type="button">Capture Snapshot</button>
+              </div>
+            </div>
+          </section>
+
           <div class="content-grid dashboard-focus-grid">
             <section class="surface dashboard-history-surface" data-tilt>
               <div class="surface-header">
@@ -109,6 +131,43 @@
               </div>
               <div id="system-alerts" class="alert-stack"></div>
             </section>
+          </div>
+
+          <div class="content-grid dashboard-focus-grid">
+            <section class="surface" data-tilt>
+              <div class="surface-header compact">
+                <div>
+                  <h3>Live Logs</h3>
+                  <p class="helper-copy">Streaming run logs from the active session and the latest operator actions.</p>
+                </div>
+                <div class="surface-actions">
+                  <button id="clear-logs-button" class="ghost-button fx-button" type="button">Clear Logs</button>
+                </div>
+              </div>
+              <pre id="log-output" class="code-panel">Waiting for live logs...</pre>
+            </section>
+
+            <div class="stack-list">
+              <section class="surface" data-tilt>
+                <div class="surface-header compact">
+                  <div>
+                    <h3>Runtime Snapshot</h3>
+                    <p class="helper-copy">Current shell telemetry, run state, and task counts.</p>
+                  </div>
+                </div>
+                <pre id="runtime-output" class="code-panel">Awaiting runtime snapshot...</pre>
+              </section>
+
+              <section class="surface" data-tilt>
+                <div class="surface-header compact">
+                  <div>
+                    <h3>Latest Result</h3>
+                    <p class="helper-copy">Most recent completed task result payload.</p>
+                  </div>
+                </div>
+                <pre id="results-output" class="code-panel">No results yet.</pre>
+              </section>
+            </div>
           </div>
         </section>
 
@@ -543,7 +602,7 @@
         <div class="modal-header">
           <div>
             <h3 id="modal-title">New Task</h3>
-            <p class="muted-copy">Set the NFT details, choose the mint type and launch signal, and MintBot will arm the fastest safe path automatically. Open advanced settings only when you need custom claims, gas, or routing.</p>
+            <p class="muted-copy">Set the NFT details for a public mint and choose how MintBot should detect the launch. Advanced settings are now focused on timing, gas, and routing only.</p>
           </div>
           <button id="close-modal-button" class="icon-button fx-button" type="button">+</button>
         </div>
@@ -598,12 +657,12 @@
           <div class="surface inset-surface task-builder-guidance">
             <div class="surface-header compact">
               <div>
-                <h4>Auto Mint ASAP</h4>
-                <p class="helper-copy">Pick the mint type and how you know it goes live. MintBot will choose the low-latency launch stack for you.</p>
+                <h4>Public Mint Fast Path</h4>
+                <p class="helper-copy">This task builder is currently narrowed to public mints only. Pick how the public sale goes live and MintBot will choose the low-latency launch stack for you.</p>
               </div>
               <button id="task-advanced-toggle-button" class="ghost-button fx-button" type="button" aria-expanded="false">Show Advanced Settings</button>
             </div>
-            <p class="helper-copy">Advanced settings are optional and mainly for claim payloads, custom relays, non-standard sale-open checks, and special routing.</p>
+            <p class="helper-copy">Advanced settings are optional and mainly for explorer/source discovery, gas tuning, relay routing, and custom sale-open checks.</p>
           </div>
 
           <div class="surface inset-surface task-advanced-section hidden">
@@ -622,28 +681,24 @@
                 <span>Source Target</span>
                 <input id="task-source-target-input" type="text" placeholder="Optional drop URL or identifier" />
               </label>
-              <label>
+              <label hidden>
                 <span>Source Stage</span>
                 <select id="task-source-stage-input">
-                  <option value="auto">Auto Detect</option>
                   <option value="public">Public</option>
-                  <option value="allowlist">Allowlist</option>
-                  <option value="gtd">GTD</option>
-                  <option value="custom">Custom</option>
                 </select>
               </label>
             </div>
-            <div class="form-grid single">
+            <div class="form-grid single" hidden>
               <label>
                 <span>Source Config JSON</span>
                 <textarea
                   id="task-source-config-input"
                   rows="4"
-                  placeholder='{"target":"https://opensea.io/collection/example-drop","stage":"allowlist"}'
+                  placeholder='{"target":"https://opensea.io/collection/example-drop","stage":"public"}'
                 ></textarea>
               </label>
             </div>
-            <p id="task-source-hint" class="helper-copy">Generic contract tasks can leave source target and source config empty.</p>
+            <p id="task-source-hint" class="helper-copy">Generic contract public mints can leave source target empty. OpenSea public mints work best with the collection URL.</p>
           </div>
 
           <div class="form-grid single">
@@ -688,7 +743,7 @@
             </label>
           </div>
 
-          <div class="surface inset-surface task-advanced-section hidden">
+          <div class="surface inset-surface task-advanced-section hidden" hidden>
             <div class="surface-header compact">
               <div>
                 <h4>Claims and Adapter</h4>
@@ -764,7 +819,7 @@
             <p class="helper-copy">Use `{{wallet}}`, `{{index}}`, `{{contract}}`, `{{quantity}}`, and `{{claim.someKey}}` placeholders in the API request block.</p>
           </div>
 
-          <div class="surface inset-surface task-advanced-section hidden">
+          <div class="surface inset-surface task-advanced-section hidden" hidden>
             <div class="surface-header compact">
               <div>
                 <h4>Phase Planner</h4>
@@ -806,21 +861,21 @@
             <div class="surface-header compact">
               <div>
                 <h4>Launch Strategy</h4>
-                <p class="helper-copy">Tell the app what kind of mint this is and how you know it goes live. The trigger stack and latency profile are filled in for you.</p>
+                <p class="helper-copy">Tell the app how the public mint goes live. The trigger stack and latency profile are filled in for you.</p>
               </div>
+            </div>
+            <select id="task-quick-drop-type-input" hidden>
+              <option value="public">Public / Open Mint</option>
+            </select>
+            <div class="form-grid single">
+              <label>
+                <span>Mint Type</span>
+                <input type="text" value="Public / Open Mint" readonly />
+              </label>
             </div>
             <div class="form-grid three">
               <label>
-                <span>Drop Type</span>
-                <select id="task-quick-drop-type-input">
-                  <option value="public">Public / Open Mint</option>
-                  <option value="pass_fcfs">Pass Holder / FCFS</option>
-                  <option value="allowlist">Allowlist / Proof Mint</option>
-                  <option value="gtd">GTD / Guaranteed</option>
-                </select>
-              </label>
-              <label>
-                <span>Launch Signal</span>
+                <span>Public Launch Signal</span>
                 <select id="task-simple-launch-mode-input">
                   <option value="onchain">Wait for On-Chain Open</option>
                   <option value="utc">Schedule by UTC Time</option>
@@ -846,7 +901,7 @@
             </div>
             <div id="task-quick-stack-summary" class="task-strategy-summary"></div>
             <p id="task-simple-launch-hint" class="helper-copy">Load the ABI, then let MintBot wait for the on-chain sale-open signal by default.</p>
-            <p id="task-quick-proof-hint" class="helper-copy hidden"></p>
+            <p id="task-quick-proof-hint" class="helper-copy hidden" hidden></p>
           </div>
 
           <div class="surface inset-surface task-advanced-section hidden">

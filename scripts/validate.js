@@ -35,6 +35,7 @@ function validateWebAssets() {
   const stylesPath = path.join(webDir, "styles.css");
   const appPath = path.join(webDir, "app.js");
   const html = fs.readFileSync(indexPath, "utf8");
+  const appSource = fs.readFileSync(appPath, "utf8");
 
   assertFileExists(indexPath);
   assertFileExists(stylesPath);
@@ -46,6 +47,30 @@ function validateWebAssets() {
 
   if (!html.includes('src="/app.js"')) {
     throw new Error("web/index.html is missing the /app.js reference");
+  }
+
+  const htmlIdMatches = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
+  const duplicateHtmlIds = htmlIdMatches.filter(
+    (id, index, values) => values.indexOf(id) !== index && values.indexOf(id) === index
+  );
+  if (duplicateHtmlIds.length > 0) {
+    throw new Error(`web/index.html has duplicate id attributes: ${duplicateHtmlIds.join(", ")}`);
+  }
+
+  const htmlIds = new Set(htmlIdMatches);
+  const domIdReferences = [
+    ...appSource.matchAll(/document\.getElementById\((["'`])([^"'`]+)\1\)/g)
+  ]
+    .map((match) => match[2])
+    .filter((id) => !id.includes("${"));
+  const missingDomIds = domIdReferences.filter(
+    (id, index, values) => !htmlIds.has(id) && values.indexOf(id) === index
+  );
+
+  if (missingDomIds.length > 0) {
+    throw new Error(
+      `web/app.js references missing HTML ids: ${missingDomIds.join(", ")}`
+    );
   }
 }
 

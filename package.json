@@ -8,7 +8,8 @@
     "bot": "node src/index.js",
     "ui": "node src/server.js",
     "worker": "node src/worker.js",
-    "check": "node scripts/validate.js"
+    "check": "node scripts/validate.js",
+    "test": "node --test --test-isolation=none test/smoke.test.js"
   },
   "keywords": [
     "nft",
