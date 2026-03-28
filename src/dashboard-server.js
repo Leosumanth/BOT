@@ -6642,6 +6642,13 @@ function hasOpenSeaWidgetCssNoise(value = "") {
   return /:host\s*\{|number-flow-|display\s*:|white-space\s*:|will-change\s*:/i.test(String(value || ""));
 }
 
+function extractOpenSeaMintRadarContext(html = "", startIndex = 0, anchorLength = 0) {
+  const rawHtml = String(html || "");
+  const sliceStart = Math.max(0, Number(startIndex || 0) - 220);
+  const sliceEnd = Math.min(rawHtml.length, Number(startIndex || 0) + Number(anchorLength || 0) + 1800);
+  return collapseRepeatedText(stripHtmlTags(rawHtml.slice(sliceStart, sliceEnd)));
+}
+
 function extractOpenSeaCollectionSlug(value = "") {
   try {
     const url = new URL(String(value || ""), openSeaDropsBaseUrl);
@@ -6759,12 +6766,13 @@ function mergeOpenSeaMintRadarEntries(baseEntry, candidateEntry) {
 function parseOpenSeaMintRadarEntries(html = "", options = {}) {
   const pageLabel = normalizeWhitespace(options.pageLabel || "OpenSea Drops");
   const baseUrl = options.baseUrl || openSeaDropsBaseUrl;
+  const rawHtml = String(html || "");
   const entriesBySlug = new Map();
   const anchorPattern =
     /<a\b[^>]*href=(["'])([^"'#>]+)\1[^>]*>([\s\S]*?)<\/a>/gi;
   let match = null;
 
-  while ((match = anchorPattern.exec(String(html || "")))) {
+  while ((match = anchorPattern.exec(rawHtml))) {
     const [, , hrefValue, anchorHtml] = match;
     const slug = extractOpenSeaCollectionSlug(hrefValue);
     if (!slug) {
@@ -6772,12 +6780,13 @@ function parseOpenSeaMintRadarEntries(html = "", options = {}) {
     }
 
     const rawAnchorText = collapseRepeatedText(stripHtmlTags(anchorHtml));
-    const anchorText = collapseRepeatedText(rawAnchorText);
-    if (!shouldKeepOpenSeaMintRadarCard(anchorText)) {
+    const contextText = extractOpenSeaMintRadarContext(rawHtml, match.index, match[0]?.length || 0);
+    const candidateText = shouldKeepOpenSeaMintRadarCard(rawAnchorText) ? rawAnchorText : contextText;
+    if (!shouldKeepOpenSeaMintRadarCard(candidateText)) {
       continue;
     }
 
-    const metadata = extractOpenSeaMintRadarMetadata(rawAnchorText);
+    const metadata = extractOpenSeaMintRadarMetadata(candidateText);
     if (!metadata.name) {
       continue;
     }
@@ -6799,7 +6808,7 @@ function parseOpenSeaMintRadarEntries(html = "", options = {}) {
       warnings: []
     };
 
-    if (hasOpenSeaWidgetCssNoise(rawAnchorText)) {
+    if (hasOpenSeaWidgetCssNoise(rawAnchorText) || hasOpenSeaWidgetCssNoise(contextText)) {
       entry.warnings.push("OpenSea countdown widget noise was stripped from this drop card.");
     }
 

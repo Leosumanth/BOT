@@ -384,3 +384,25 @@ test("dashboard radar parser extracts live and upcoming OpenSea drops", () => {
   assert.doesNotMatch(entries[1].scheduleText, /:host|display:inline-block|number-flow/i);
   assert.match(entries[1].warnings[0] || "", /countdown widget noise/i);
 });
+
+test("dashboard radar parser can recover mint metadata from nearby OpenSea card context", () => {
+  const sampleHtml = `
+    <article>
+      <a href="/collection/house-cats/overview">
+        House Cats
+      </a>
+      <div>
+        By HouseCatsNFT Minting now 0.0008 ETH Total items 5,555
+      </div>
+    </article>
+  `;
+
+  const entries = parseOpenSeaMintRadarEntries(sampleHtml, {
+    pageLabel: "Context Feed"
+  });
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].slug, "house-cats");
+  assert.equal(entries[0].status, "live");
+  assert.equal(entries[0].priceText, "0.0008 ETH");
+});
