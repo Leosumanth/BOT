@@ -70,6 +70,22 @@ const fallbackMintSources = [
     }
   }
 ];
+const featuredMintPresets = Object.freeze({
+  gummiezPublic: {
+    key: "gummiez_public",
+    taskName: "Gummiez OpenSea Public Mint",
+    chainKey: "ethereum",
+    sourceType: "opensea",
+    sourceTarget: "https://opensea.io/collection/gummiez",
+    sourceStage: "public",
+    quantityPerWallet: "1",
+    priceEth: "0.0026",
+    quickDropType: "public",
+    quickLaunchMode: "onchain",
+    notes:
+      "Loaded from the OpenSea Gummiez preset. OpenSea currently lists this as an Ethereum mint with a public stage at 0.0026 ETH and limit 5 per wallet. Add the live contract address and ABI before saving so MintBot can arm the task safely."
+  }
+});
 const walletAssetSnapshotStorageKey = "mintbot.wallet-assets.snapshots.v1";
 const walletAssetSelectedStorageKey = "mintbot.wallet-assets.selected.v1";
 const walletAssetAutoSyncIntervalMs = 2 * 60 * 1000;
@@ -102,6 +118,7 @@ const runtimeOutput = document.getElementById("runtime-output");
 const clearLogsButton = document.getElementById("clear-logs-button");
 const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
+const quickGummiezTaskButton = document.getElementById("quick-gummiez-task-button");
 const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
 const runPriorityButton = document.getElementById("run-priority-button");
 const rpcPulseButton = document.getElementById("rpc-pulse-button");
@@ -6683,6 +6700,7 @@ function setView(viewName) {
   views.forEach((view) => {
     view.classList.toggle("active", view.dataset.viewPanel === viewName);
   });
+  quickGummiezTaskButton?.classList.toggle("hidden", viewName !== "dashboard");
   dashboardOpenTaskButton.classList.toggle("hidden", viewName !== "dashboard");
   if (viewName === "wallets") {
     renderWallets();
@@ -7716,6 +7734,49 @@ function openTaskModal(task = null) {
   initializeMotionSurfaces(taskModal);
 }
 
+function loadFeaturedMintPreset(preset) {
+  if (!preset) {
+    return;
+  }
+
+  setView("tasks");
+  openTaskModal();
+  setTaskAdvancedVisibility(true);
+
+  taskNameInput.value = preset.taskName || "";
+  taskChainInput.value = state.chains.some((chain) => chain.key === preset.chainKey)
+    ? preset.chainKey
+    : taskChainInput.value;
+  taskSourceTypeInput.value = preset.sourceType || "generic_contract";
+  taskSourceTargetInput.value = preset.sourceTarget || "";
+  taskSourceStageInput.value = preset.sourceStage || "auto";
+  taskQuantityInput.value = preset.quantityPerWallet || "1";
+  taskPriceInput.value = preset.priceEth || "";
+  taskNotesInput.value = preset.notes || "";
+
+  if (taskQuickDropTypeInput) {
+    taskQuickDropTypeInput.value = preset.quickDropType || "public";
+  }
+
+  if (taskSimpleLaunchModeInput) {
+    taskSimpleLaunchModeInput.value = preset.quickLaunchMode || "onchain";
+  }
+
+  updateTaskSourceInputs();
+  applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
+  syncTaskSimpleLaunchFields();
+
+  abiStatus.textContent =
+    "Gummiez preset loaded. Paste the live contract address, fetch the ABI, then select wallets and save.";
+  taskContractInput.focus();
+
+  showToast(
+    "Gummiez preset loaded. Next: add contract address, load ABI, select wallets, then save the task.",
+    "info",
+    "Preset Loaded"
+  );
+}
+
 function closeTaskModal() {
   taskModal.classList.add("hidden");
 }
@@ -8186,6 +8247,9 @@ dashboardRefreshButton?.addEventListener("click", () => {
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());
+quickGummiezTaskButton?.addEventListener("click", () => {
+  loadFeaturedMintPreset(featuredMintPresets.gummiezPublic);
+});
 dashboardOpenTaskButton.addEventListener("click", () => {
   setView("tasks");
 });
