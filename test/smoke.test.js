@@ -358,7 +358,7 @@ test("dashboard radar parser extracts live and upcoming OpenSea drops", () => {
         Gummiez By everytimezone Minting now 0.0005 ETH Total items 3,333
       </a>
       <a href="https://opensea.io/collection/phygitals-30th-edition">
-        Phygitals: 30th Edition By PhygitalsTeam Mint price 0.012 ETH Total items 1,000 Mint starts in 00 : 02 : 12 : 33
+        Phygitals: 30th Edition By PhygitalsTeam Mint price 0.012 ETH Total items 1,000 Mint starts in :host{display:inline-block;white-space:nowrap;line-height:var(--number-flow-char-height,1em)!important} span[will-change:transform].number{padding:calc(var(--number-flow-mask-height,0.25em)/2) 0} 00 : 02 : 12 : 33
       </a>
       <a href="/blog/creator-spotlight">
         Creator Spotlight
@@ -381,4 +381,6 @@ test("dashboard radar parser extracts live and upcoming OpenSea drops", () => {
   assert.equal(entries[0].priceText, "0.0005 ETH");
   assert.equal(entries[1].status, "upcoming");
   assert.match(entries[1].scheduleText, /Starts in 00 : 02 : 12 : 33/);
+  assert.doesNotMatch(entries[1].scheduleText, /:host|display:inline-block|number-flow/i);
+  assert.match(entries[1].warnings[0] || "", /countdown widget noise/i);
 });

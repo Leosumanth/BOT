@@ -6627,6 +6627,21 @@ function collapseRepeatedText(value = "") {
   return repeatedMatch ? repeatedMatch[1].trim() : normalized;
 }
 
+function stripOpenSeaWidgetCssNoise(value = "") {
+  return normalizeWhitespace(
+    String(value || "")
+      .replace(/(?:[a-z0-9_-]*[:.\[]+[a-z0-9:_\-\[\]\(\).,'"=]*\s*)+\{[^{}]*\}/gi, " ")
+      .replace(/:[a-z-]+(?:\([^)]*\))?\s*\{[^{}]*\}/gi, " ")
+      .replace(/\b(?:display|direction|white-space|line-height|will-change|padding|transform)\s*:\s*[^; ]+[;]?/gi, " ")
+      .replace(/\bvar\([^)]*\)/gi, " ")
+      .replace(/\b(?:inline-block|nowrap|important|symbol|digit|number|ltr)\b/gi, " ")
+  );
+}
+
+function hasOpenSeaWidgetCssNoise(value = "") {
+  return /:host\s*\{|number-flow-|display\s*:|white-space\s*:|will-change\s*:/i.test(String(value || ""));
+}
+
 function extractOpenSeaCollectionSlug(value = "") {
   try {
     const url = new URL(String(value || ""), openSeaDropsBaseUrl);
@@ -6664,7 +6679,7 @@ function shouldKeepOpenSeaMintRadarCard(text = "") {
 }
 
 function extractOpenSeaMintRadarMetadata(text = "") {
-  const normalized = collapseRepeatedText(text);
+  const normalized = collapseRepeatedText(stripOpenSeaWidgetCssNoise(text));
   const creatorMatch = normalized.match(
     /\bBy\s+(.+?)(?=\s+(?:Minting now|Status Minting|Mint price|Total items|Items minted|Mint starts in)\b|$)/i
   );
@@ -6756,12 +6771,13 @@ function parseOpenSeaMintRadarEntries(html = "", options = {}) {
       continue;
     }
 
-    const anchorText = collapseRepeatedText(stripHtmlTags(anchorHtml));
+    const rawAnchorText = collapseRepeatedText(stripHtmlTags(anchorHtml));
+    const anchorText = collapseRepeatedText(rawAnchorText);
     if (!shouldKeepOpenSeaMintRadarCard(anchorText)) {
       continue;
     }
 
-    const metadata = extractOpenSeaMintRadarMetadata(anchorText);
+    const metadata = extractOpenSeaMintRadarMetadata(rawAnchorText);
     if (!metadata.name) {
       continue;
     }
@@ -6782,6 +6798,10 @@ function parseOpenSeaMintRadarEntries(html = "", options = {}) {
       sources: [pageLabel],
       warnings: []
     };
+
+    if (hasOpenSeaWidgetCssNoise(rawAnchorText)) {
+      entry.warnings.push("OpenSea countdown widget noise was stripped from this drop card.");
+    }
 
     if (url.hostname && !/opensea\.io$/i.test(url.hostname)) {
       entry.warnings.push(`Parsed a non-OpenSea hostname for ${slug}.`);
