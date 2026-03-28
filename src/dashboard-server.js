@@ -251,6 +251,7 @@ let appState = null;
 let integrationSecrets = {};
 let integrationHealthState = createDefaultIntegrationHealthState();
 const localTaskRuns = new Map();
+const queuedTaskFallbackTimers = new Map();
 let liveLogs = [];
 let queueCoordinator = null;
 let distributedRunState = createIdleRunState(resolveQueueConfig());
@@ -275,6 +276,12 @@ const walletAssetRpcTimeoutMs = Math.max(
   1_500,
   Number(process.env.WALLET_ASSET_RPC_TIMEOUT_MS || 4_000)
 );
+const queueInlineFallbackMs = Math.max(
+  5_000,
+  Number(process.env.QUEUE_INLINE_FALLBACK_MS || 8_000)
+);
+const queueInlineWorkerId =
+  String(process.env.QUEUE_INLINE_WORKER_ID || "").trim() || `dashboard_${process.pid}`;
 const walletAssetChainlistUrlBudget = Math.max(
   1,
   Number(process.env.WALLET_ASSET_CHAINLIST_URL_BUDGET || 2)
@@ -6419,6 +6426,7 @@ async function syncDistributedQueueSnapshot() {
   if (!queueCoordinator?.enabled) {
     distributedRunState = createIdleRunState(getQueueConfig());
     distributedQueuedTaskIds.clear();
+    clearAllQueuedTaskFallbacks();
     return;
   }
 
@@ -6434,6 +6442,7 @@ async function syncDistributedQueueSnapshot() {
       distributedQueuedTaskIds.add(job.taskId);
     }
   });
+  reconcileQueuedTaskFallbacks();
 }
 
 function applyRunStateUpdate(runState) {
@@ -6455,6 +6464,7 @@ async function initializeQueueMode() {
   if (!queueModeEnabled() || queueCoordinator) {
     if (!queueModeEnabled()) {
       distributedRunState = createIdleRunState(getQueueConfig());
+      clearAllQueuedTaskFallbacks();
     }
     return;
   }
@@ -6480,9 +6490,11 @@ async function initializeQueueMode() {
       const activeTaskIds = message.payload.runState.activeTaskIds || [];
       if (message.payload.runState.activeTaskId) {
         distributedQueuedTaskIds.delete(message.payload.runState.activeTaskId);
+        clearQueuedTaskFallback(message.payload.runState.activeTaskId);
       }
       activeTaskIds.forEach((taskId) => {
         distributedQueuedTaskIds.delete(taskId);
+        clearQueuedTaskFallback(taskId);
       });
       if (activeTaskIds.length === 0 && message.payload.runState.activeTaskId == null) {
         void refreshDistributedState().catch(reportBackgroundError);
@@ -6494,17 +6506,20 @@ async function initializeQueueMode() {
     if (message.type === "task-queued" && message.payload?.taskId) {
       distributedQueuedTaskIds.add(message.payload.taskId);
       clearDistributedTaskPatch(message.payload.taskId);
+      scheduleQueuedTaskFallback(message.payload.taskId);
       emitState();
       return;
     }
 
     if (message.type === "task-dequeued" && message.payload?.taskId) {
       distributedQueuedTaskIds.delete(message.payload.taskId);
+      clearQueuedTaskFallback(message.payload.taskId);
       emitState();
       return;
     }
 
     if (message.type === "task-sync") {
+      clearQueuedTaskFallback(message.payload?.taskId);
       clearDistributedTaskPatch(message.payload?.taskId);
       void refreshDistributedState().catch(reportBackgroundError);
     }
@@ -7176,6 +7191,58 @@ function clearDistributedTaskPatch(taskId) {
   distributedTaskPatches.delete(taskId);
 }
 
+function clearQueuedTaskFallback(taskId) {
+  if (!taskId) {
+    return;
+  }
+
+  const timer = queuedTaskFallbackTimers.get(taskId);
+  if (!timer) {
+    return;
+  }
+
+  clearTimeout(timer);
+  queuedTaskFallbackTimers.delete(taskId);
+}
+
+function clearAllQueuedTaskFallbacks() {
+  queuedTaskFallbackTimers.forEach((timer) => {
+    clearTimeout(timer);
+  });
+  queuedTaskFallbackTimers.clear();
+}
+
+function scheduleQueuedTaskFallback(taskId) {
+  if (!taskId || !queueModeEnabled() || !queueCoordinator?.enabled || queuedTaskFallbackTimers.has(taskId)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    queuedTaskFallbackTimers.delete(taskId);
+    void reclaimQueuedTaskRun(taskId).catch(reportBackgroundError);
+  }, queueInlineFallbackMs);
+
+  if (typeof timer?.unref === "function") {
+    timer.unref();
+  }
+
+  queuedTaskFallbackTimers.set(taskId, timer);
+}
+
+function reconcileQueuedTaskFallbacks() {
+  const queuedTaskIds = new Set(distributedQueuedTaskIds);
+
+  queuedTaskFallbackTimers.forEach((_, taskId) => {
+    if (!queuedTaskIds.has(taskId)) {
+      clearQueuedTaskFallback(taskId);
+    }
+  });
+
+  queuedTaskIds.forEach((taskId) => {
+    scheduleQueuedTaskFallback(taskId);
+  });
+}
+
 function updateTaskProgressFromLog(task, entry) {
   const progress = deriveTaskProgressFromLog(task, entry);
   if (!progress) {
@@ -7549,12 +7616,14 @@ async function startTaskRunLocal(taskId) {
     throw createHttpError("Task is already running", 409);
   }
 
+  clearQueuedTaskFallback(taskId);
   const runContext = {
     taskId,
     taskName: task.name,
     controller: new AbortController(),
     startedAt: null,
-    active: false
+    active: false,
+    workerId: queueModeEnabled() ? queueInlineWorkerId : null
   };
   localTaskRuns.set(taskId, runContext);
   try {
@@ -7562,6 +7631,24 @@ async function startTaskRunLocal(taskId) {
     const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
     runContext.startedAt = new Date().toISOString();
     runContext.active = true;
+
+    if (queueModeEnabled()) {
+      distributedQueuedTaskIds.delete(taskId);
+      clearDistributedTaskPatch(taskId);
+      await setTaskRuntimeRecord(taskId, {
+        status: "running",
+        progress: {
+          phase: "Preparing",
+          percent: 8
+        },
+        summary: createEmptySummary(walletIds.length),
+        active: true,
+        queued: false,
+        error: null,
+        workerId: runContext.workerId,
+        startedAt: runContext.startedAt
+      });
+    }
 
     await updateTask(taskId, {
       autoArmPending: false,
@@ -7594,6 +7681,24 @@ async function startTaskRunLocal(taskId) {
       .then(async (result) => {
         const summary = summarizeResults(result.results);
         const taskAfterRun = getTaskById(taskId);
+        const completedAt = new Date().toISOString();
+        clearDistributedTaskPatch(taskId);
+        if (queueModeEnabled()) {
+          await setTaskRuntimeRecord(taskId, {
+            status: "completed",
+            progress: {
+              phase: "Completed",
+              percent: 100
+            },
+            summary,
+            active: false,
+            queued: false,
+            error: null,
+            workerId: runContext.workerId,
+            startedAt: null,
+            lastRunAt: completedAt
+          });
+        }
         await updateTask(taskId, {
           status: "completed",
           progress: {
@@ -7601,11 +7706,11 @@ async function startTaskRunLocal(taskId) {
             percent: 100
           },
           summary,
-          lastRunAt: new Date().toISOString(),
+          lastRunAt: completedAt,
           history: [
             {
               id: createId("history"),
-              ranAt: new Date().toISOString(),
+              ranAt: completedAt,
               summary
             },
             ...(taskAfterRun.history || [])
@@ -7614,23 +7719,43 @@ async function startTaskRunLocal(taskId) {
       })
       .catch(async (error) => {
         const stopped = error instanceof AbortRunError || runContext.controller.signal.aborted;
+        const failedAt = new Date().toISOString();
+        clearDistributedTaskPatch(taskId);
+        if (queueModeEnabled()) {
+          await setTaskRuntimeRecord(taskId, {
+            status: stopped ? "stopped" : "failed",
+            progress: {
+              phase: stopped ? "Stopped" : "Failed",
+              percent: stopped ? 0 : 100
+            },
+            summary: createEmptySummary((task.walletIds || []).length),
+            active: false,
+            queued: false,
+            error: formatError(error),
+            workerId: runContext.workerId,
+            startedAt: null,
+            lastRunAt: failedAt
+          });
+        }
         await updateTask(taskId, {
           status: stopped ? "stopped" : "failed",
           progress: {
             phase: stopped ? "Stopped" : "Failed",
             percent: stopped ? 0 : 100
-          }
+          },
+          lastRunAt: failedAt
         });
         pushLog({
           level: "error",
           taskId,
           message: `[task ${runContext.taskName}] ${formatError(error)}`,
-          timestamp: new Date().toISOString()
+          timestamp: failedAt
         });
       })
       .catch(reportBackgroundError)
       .finally(() => {
         localTaskRuns.delete(taskId);
+        clearDistributedTaskPatch(taskId);
         emitState();
       });
 
@@ -7638,7 +7763,80 @@ async function startTaskRunLocal(taskId) {
     return { ok: true };
   } catch (error) {
     localTaskRuns.delete(taskId);
+    clearDistributedTaskPatch(taskId);
     throw error;
+  }
+}
+
+async function reclaimQueuedTaskRun(taskId) {
+  if (!taskId || !queueModeEnabled() || !queueCoordinator?.enabled) {
+    return { ok: false, reclaimed: false };
+  }
+
+  clearQueuedTaskFallback(taskId);
+
+  if (localTaskRuns.has(taskId) || !distributedQueuedTaskIds.has(taskId) || isTaskActive(taskId)) {
+    return { ok: false, reclaimed: false };
+  }
+
+  const task = getTaskById(taskId);
+  if (!task) {
+    return { ok: false, reclaimed: false };
+  }
+
+  const removal = await queueCoordinator.removeQueuedTask(taskId);
+  if (!removal.removed) {
+    await refreshDistributedState();
+    return { ok: false, reclaimed: false };
+  }
+
+  distributedQueuedTaskIds.delete(taskId);
+  clearDistributedTaskPatch(taskId);
+  pushLog({
+    level: "warning",
+    taskId,
+    message: `[task ${task.name}] No Redis worker claimed this queued run within ${Math.round(
+      queueInlineFallbackMs / 1000
+    )}s. Reclaiming it on the dashboard process.`,
+    timestamp: new Date().toISOString()
+  });
+  emitState();
+
+  try {
+    await startTaskRunLocal(taskId);
+    return { ok: true, reclaimed: true };
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    await setTaskRuntimeRecord(taskId, {
+      status: "failed",
+      progress: {
+        phase: "Failed",
+        percent: 100
+      },
+      summary: createEmptySummary((task.walletIds || []).length),
+      active: false,
+      queued: false,
+      error: formatError(error),
+      workerId: queueInlineWorkerId,
+      startedAt: null,
+      lastRunAt: failedAt
+    });
+    await updateTask(taskId, {
+      status: "failed",
+      progress: {
+        phase: "Failed",
+        percent: 100
+      },
+      lastRunAt: failedAt
+    });
+    pushLog({
+      level: "error",
+      taskId,
+      message: `[task ${task.name}] Queue fallback failed: ${formatError(error)}`,
+      timestamp: failedAt
+    });
+    emitState();
+    return { ok: false, reclaimed: true, error: formatError(error) };
   }
 }
 
@@ -7686,6 +7884,7 @@ async function startTaskRunQueued(taskId) {
     workerId: null,
     startedAt: null
   });
+  scheduleQueuedTaskFallback(taskId);
   emitState();
 
   await queueCoordinator.publishEvent("task-sync", { taskId });
@@ -7737,7 +7936,17 @@ function handleStopRun(response) {
       return;
     }
 
-    Promise.all(activeTaskIds.map((taskId) => queueCoordinator.requestStop(taskId)))
+    Promise.all(
+      activeTaskIds.map((taskId) => {
+        const localRun = localTaskRuns.get(taskId);
+        if (localRun) {
+          localRun.controller.abort();
+          return Promise.resolve(true);
+        }
+
+        return queueCoordinator.requestStop(taskId);
+      })
+    )
       .then(() => {
         activeTaskIds.forEach((taskId) => {
           setDistributedTaskPatch(taskId, {
@@ -7779,6 +7988,7 @@ async function requestTaskStop(taskId) {
 
   if (queueModeEnabled()) {
     if (distributedQueuedTaskIds.has(taskId)) {
+      clearQueuedTaskFallback(taskId);
       await queueCoordinator.removeQueuedTask(taskId);
       distributedQueuedTaskIds.delete(taskId);
       clearDistributedTaskPatch(taskId);
@@ -7798,6 +8008,12 @@ async function requestTaskStop(taskId) {
       });
       emitState();
       return { ok: true, taskId, cancelledQueue: true };
+    }
+
+    const localRun = localTaskRuns.get(taskId);
+    if (localRun) {
+      localRun.controller.abort();
+      return { ok: true, taskId, stoppedInline: true };
     }
 
     if (!isTaskActive(taskId)) {
@@ -7997,6 +8213,7 @@ async function deleteTaskById(taskId) {
   }
 
   if (queueModeEnabled() && distributedQueuedTaskIds.has(taskId)) {
+    clearQueuedTaskFallback(taskId);
     await queueCoordinator.removeQueuedTask(taskId);
     distributedQueuedTaskIds.delete(taskId);
     clearDistributedTaskPatch(taskId);
@@ -10139,6 +10356,7 @@ async function cleanupServerResources() {
     distributedRunState = createIdleRunState(getQueueConfig());
     distributedQueuedTaskIds.clear();
     distributedTaskPatches.clear();
+    clearAllQueuedTaskFallbacks();
 
     const shutdownErrors = [];
 
