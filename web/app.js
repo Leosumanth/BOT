@@ -83,7 +83,7 @@ const featuredMintPresets = Object.freeze({
     quickDropType: "public",
     quickLaunchMode: "onchain",
     notes:
-      "Loaded from the OpenSea Gummiez preset. OpenSea currently lists this as an Ethereum mint with a public stage at 0.0026 ETH and limit 5 per wallet. Add the live contract address and ABI before saving so MintBot can arm the task safely."
+      "Loaded from the OpenSea Gummiez preset. OpenSea currently lists this as an Ethereum mint with a public stage at 0.0026 ETH and limit 5 per wallet. MintBot will try to auto-discover the live contract and ABI from the OpenSea source immediately."
   }
 });
 const walletAssetSnapshotStorageKey = "mintbot.wallet-assets.snapshots.v1";
@@ -445,6 +445,9 @@ let abiAutofillTimer = null;
 let abiAutofillRequestId = 0;
 let abiExplorerFetchTimer = null;
 let abiExplorerFetchRequestId = 0;
+let sourceDiscoveryTimer = null;
+let sourceDiscoveryRequestId = 0;
+let taskSourceDiscoveryStatus = "";
 let rpcInspectTimer = null;
 let rpcInspectRequestId = 0;
 let rpcChainSearchTimer = null;
@@ -6828,8 +6831,180 @@ function updateTaskSourceInputs() {
     ? `Adapter focus: ${capabilityFlags.join(", ")}.`
     : "Adapter focus: local contract execution only.";
   const discoveryCopy = discoverySummary ? ` ${discoverySummary}` : "";
+  const discoveryStatusCopy =
+    taskSourceDiscoveryStatus && sourceType !== "generic_contract"
+      ? ` Discovery status: ${taskSourceDiscoveryStatus}`
+      : "";
 
-  taskSourceHint.textContent = `${sourceDescription} ${targetCopy} Stage: ${stageLabel}. ${capabilityCopy}${discoveryCopy}`;
+  taskSourceHint.textContent = `${sourceDescription} ${targetCopy} Stage: ${stageLabel}. ${capabilityCopy}${discoveryCopy}${discoveryStatusCopy}`;
+}
+
+function setTaskSourceDiscoveryStatus(message = "") {
+  taskSourceDiscoveryStatus = String(message || "").trim();
+  updateTaskSourceInputs();
+}
+
+function activeTaskSourceDiscoveryPayload() {
+  return {
+    sourceType: String(taskSourceTypeInput?.value || "").trim(),
+    sourceTarget: String(taskSourceTargetInput?.value || "").trim(),
+    sourceStage: String(taskSourceStageInput?.value || "auto").trim(),
+    chainKey: String(taskChainInput?.value || "").trim(),
+    walletIds: selectedWalletIds(),
+    rpcNodeIds: selectedRpcIds(),
+    quantityPerWallet: Math.max(1, Number(taskQuantityInput?.value || 1)),
+    mintFunction: String(taskFunctionInput?.value || "").trim()
+  };
+}
+
+function filterSelectedRpcIdsForChain(chainKey) {
+  return selectedRpcIds().filter((rpcId) => {
+    const node = state.rpcNodes.find((rpcNode) => rpcNode.id === rpcId);
+    return node?.chainKey === chainKey;
+  });
+}
+
+async function requestTaskSourceDiscovery(options = {}) {
+  const {
+    force = false,
+    quiet = true,
+    successToastTitle = "",
+    successToastMessage = ""
+  } = options;
+  const payload = activeTaskSourceDiscoveryPayload();
+
+  if (payload.sourceType !== "opensea") {
+    if (force) {
+      setTaskSourceDiscoveryStatus("");
+    }
+    return null;
+  }
+
+  if (!payload.sourceTarget) {
+    setTaskSourceDiscoveryStatus("Waiting for an OpenSea collection URL or slug.");
+    return null;
+  }
+
+  const requestId = ++sourceDiscoveryRequestId;
+  setTaskSourceDiscoveryStatus("Discovering collection contract and ABI...");
+
+  try {
+    const response = await request("/api/sources/discover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      quiet
+    });
+
+    if (requestId !== sourceDiscoveryRequestId) {
+      return null;
+    }
+
+    const discovery = response.discovery || null;
+    if (!discovery) {
+      return null;
+    }
+
+    if (discovery.chainKey && discovery.chainLabel && Number.isFinite(Number(discovery.chainId))) {
+      ensureChainOption({
+        key: discovery.chainKey,
+        label: discovery.chainLabel,
+        chainId: Number(discovery.chainId)
+      });
+    }
+
+    if (discovery.chainKey) {
+      taskChainInput.value = discovery.chainKey;
+      renderRpcSelector(filterSelectedRpcIdsForChain(discovery.chainKey));
+    }
+
+    if (discovery.contractAddress) {
+      taskContractInput.value = discovery.contractAddress;
+    }
+
+    const lookupKey = buildTaskAbiLookupKey(
+      discovery.chainKey || taskChainInput.value,
+      discovery.contractAddress || taskContractInput.value
+    );
+    const abiEntries = Array.isArray(response.abi) ? response.abi : [];
+
+    if (
+      abiEntries.length === 0 &&
+      currentTaskAbiOrigin() === "explorer" &&
+      taskAbiInput.dataset.abiLookupKey !== lookupKey
+    ) {
+      taskAbiInput.value = "";
+      setTaskAbiOrigin("", lookupKey);
+      setMintStartDetectionState(null);
+      renderPhasePreview([]);
+      updateAbiStatus("OpenSea auto-discovery found the contract, but ABI auto-load is not available yet.");
+    }
+
+    if (abiEntries.length > 0) {
+      taskAbiInput.value = JSON.stringify(abiEntries, null, 2);
+      setTaskAbiOrigin("explorer", lookupKey);
+    }
+
+    const autofill = response.autofill || discovery.autofill || null;
+    if (autofill) {
+      setMintStartDetectionState(autofill.mintStartDetection || null);
+      renderPhasePreview(autofill.phasePreview || []);
+      applyMintAutofill(autofill, {
+        includeFunction: true,
+        includeArgs: true,
+        includeQuantity: true,
+        includePrice: true,
+        includePlatform: true
+      });
+      updateAbiStatus(buildAbiStatusSourceLabel("OpenSea auto-discovery", autofill));
+    } else if (abiEntries.length > 0) {
+      applyAbiAutofillFromCurrentInput({
+        sourceLabel: "OpenSea auto-discovery",
+        includeFunction: true,
+        includeArgs: true,
+        includeQuantity: true,
+        includePrice: true,
+        includePlatform: true,
+        remote: false
+      });
+    }
+
+    const statusParts = [];
+    if (discovery.collection?.name) {
+      statusParts.push(`${discovery.collection.name} found`);
+    }
+    if (discovery.chainLabel) {
+      statusParts.push(discovery.chainLabel);
+    }
+    if (discovery.contractAddress) {
+      statusParts.push("contract discovered");
+    }
+    if (abiEntries.length > 0) {
+      statusParts.push("ABI loaded");
+    }
+    if (Array.isArray(discovery.warnings) && discovery.warnings.length > 0) {
+      statusParts.push(discovery.warnings[0]);
+    }
+    setTaskSourceDiscoveryStatus(statusParts.join(" · "));
+
+    if (successToastTitle && successToastMessage) {
+      showToast(successToastMessage, "success", successToastTitle);
+    }
+
+    return response;
+  } catch (error) {
+    if (requestId === sourceDiscoveryRequestId) {
+      setTaskSourceDiscoveryStatus(`Discovery unavailable: ${error.message || "request failed"}`);
+    }
+    return null;
+  }
+}
+
+function scheduleTaskSourceDiscovery(options = {}) {
+  window.clearTimeout(sourceDiscoveryTimer);
+  sourceDiscoveryTimer = window.setTimeout(() => {
+    requestTaskSourceDiscovery(options).catch(() => {});
+  }, 450);
 }
 
 function parseAbiEntries(value) {
@@ -7605,6 +7780,9 @@ function openTaskModal(task = null) {
   modalTitle.textContent = task ? "Edit Task" : "New Task";
   taskSubmitButton.textContent = task ? "Save Task" : "Create Task";
   window.clearTimeout(abiExplorerFetchTimer);
+  window.clearTimeout(sourceDiscoveryTimer);
+  sourceDiscoveryRequestId += 1;
+  taskSourceDiscoveryStatus = "";
 
   taskIdInput.value = task?.id || "";
   taskNameInput.value = task?.name || "";
@@ -7732,6 +7910,12 @@ function openTaskModal(task = null) {
   renderRpcSelector(task?.rpcNodeIds || []);
   taskModal.classList.remove("hidden");
   initializeMotionSurfaces(taskModal);
+
+  if ((task?.sourceType || taskSourceTypeInput.value) === "opensea" && String(taskSourceTargetInput.value || "").trim()) {
+    scheduleTaskSourceDiscovery({ force: true, quiet: true });
+  } else {
+    updateTaskSourceInputs();
+  }
 }
 
 function loadFeaturedMintPreset(preset) {
@@ -7765,16 +7949,22 @@ function loadFeaturedMintPreset(preset) {
   updateTaskSourceInputs();
   applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
   syncTaskSimpleLaunchFields();
+  requestTaskSourceDiscovery({
+    force: true,
+    quiet: false,
+    successToastTitle: "Preset Loaded",
+    successToastMessage:
+      "Gummiez preset loaded and OpenSea auto-discovery has started."
+  })
+    .then((response) => {
+      if (response?.discovery?.contractAddress) {
+        taskContractInput.focus();
+        return;
+      }
 
-  abiStatus.textContent =
-    "Gummiez preset loaded. Paste the live contract address, fetch the ABI, then select wallets and save.";
-  taskContractInput.focus();
-
-  showToast(
-    "Gummiez preset loaded. Next: add contract address, load ABI, select wallets, then save the task.",
-    "info",
-    "Preset Loaded"
-  );
+      taskSourceTargetInput.focus();
+    })
+    .catch(() => {});
 }
 
 function closeTaskModal() {
@@ -9145,14 +9335,24 @@ selectAllRpcButton.addEventListener("click", () => {
 
 taskSourceTypeInput?.addEventListener("change", () => {
   updateTaskSourceInputs();
+  if (taskSourceTypeInput.value === "opensea") {
+    scheduleTaskSourceDiscovery({ force: true, quiet: true });
+    return;
+  }
+
+  window.clearTimeout(sourceDiscoveryTimer);
+  sourceDiscoveryRequestId += 1;
+  setTaskSourceDiscoveryStatus("");
 });
 
 taskSourceStageInput?.addEventListener("change", () => {
   updateTaskSourceInputs();
+  scheduleTaskSourceDiscovery({ force: true, quiet: true });
 });
 
 taskSourceTargetInput?.addEventListener("input", () => {
   updateTaskSourceInputs();
+  scheduleTaskSourceDiscovery({ quiet: true });
 });
 
 taskLatencyProfileInput.addEventListener("change", () => {

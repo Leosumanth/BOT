@@ -1,9 +1,9 @@
 const { ethers } = require("ethers");
 
-const EXPLORER_BASE_URL = "https://api.etherscan.io/v2/api";
+const EXPLORER_BASE_URL = process.env.EXPLORER_BASE_URL || "https://api.etherscan.io/v2/api";
 const ALCHEMY_KEY_TEST_ENDPOINT = "https://eth-mainnet.g.alchemy.com/v2/";
 const DRPC_KEY_TEST_ENDPOINT = "https://lb.drpc.live/ethereum/";
-const OPENSEA_API_BASE_URL = "https://api.opensea.io";
+const OPENSEA_API_BASE_URL = process.env.OPENSEA_API_BASE_URL || "https://api.opensea.io";
 const OPENSEA_KEY_TEST_COLLECTION_SLUG = "cryptopunks";
 
 const secretEnvNames = {
@@ -37,6 +37,110 @@ function trimValue(value, fallback = "") {
 
   const normalized = String(value).trim();
   return normalized || fallback;
+}
+
+function normalizeOpenSeaContractEntry(entry = {}) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
+
+  const address = trimValue(
+    entry.address ||
+      entry.contractAddress ||
+      entry.contract_address ||
+      entry.contract ||
+      ""
+  );
+  if (!address || !ethers.isAddress(address)) {
+    return null;
+  }
+
+  return {
+    address: ethers.getAddress(address),
+    chain: trimValue(entry.chain || entry.blockchain || entry.network || entry.identifier || ""),
+    name: trimValue(entry.name || entry.contract_name || ""),
+    standard: trimValue(entry.standard || entry.schema_name || entry.schema || "")
+  };
+}
+
+function extractOpenSeaContracts(payload = {}) {
+  const candidateObjects = [
+    payload,
+    payload?.collection_data,
+    payload?.collection,
+    payload?.data
+  ].filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+  const rawContracts = [];
+
+  candidateObjects.forEach((entry) => {
+    if (Array.isArray(entry.contracts)) {
+      rawContracts.push(...entry.contracts);
+    }
+
+    if (Array.isArray(entry.primary_contracts)) {
+      rawContracts.push(...entry.primary_contracts);
+    }
+
+    if (entry.primary_contract && typeof entry.primary_contract === "object") {
+      rawContracts.push(entry.primary_contract);
+    }
+
+    if (entry.contract && typeof entry.contract === "object") {
+      rawContracts.push(entry.contract);
+    }
+  });
+
+  const seenContracts = new Set();
+  return rawContracts.reduce((contracts, entry) => {
+    const normalized = normalizeOpenSeaContractEntry(entry);
+    if (!normalized) {
+      return contracts;
+    }
+
+    const dedupeKey = `${normalized.chain.toLowerCase()}:${normalized.address.toLowerCase()}`;
+    if (seenContracts.has(dedupeKey)) {
+      return contracts;
+    }
+
+    seenContracts.add(dedupeKey);
+    contracts.push(normalized);
+    return contracts;
+  }, []);
+}
+
+function normalizeOpenSeaCollection(payload = {}, options = {}) {
+  const fallbackSlug = trimValue(options.slug || "");
+  const slug = trimValue(
+    payload?.collection ||
+      payload?.slug ||
+      payload?.identifier ||
+      payload?.collection_slug ||
+      fallbackSlug
+  );
+  const name = trimValue(payload?.name || payload?.title || slug);
+  const description = trimValue(payload?.description || payload?.collection_description || "");
+  const imageUrl = trimValue(
+    payload?.image_url ||
+      payload?.imageUrl ||
+      payload?.banner_image_url ||
+      payload?.featured_image_url ||
+      ""
+  );
+  const externalUrl = trimValue(payload?.external_url || payload?.project_url || "");
+  const openseaUrl = trimValue(
+    payload?.opensea_url || payload?.url || (slug ? `https://opensea.io/collection/${slug}` : "")
+  );
+
+  return {
+    slug,
+    name,
+    description,
+    imageUrl,
+    externalUrl,
+    openseaUrl,
+    contracts: extractOpenSeaContracts(payload),
+    raw: payload
+  };
 }
 
 function normalizeDashboardSettings(settings) {
@@ -346,6 +450,8 @@ module.exports = {
   fetchDrpcBlockNumber,
   fetchAbiFromExplorer,
   fetchOpenSeaCollectionBySlug,
+  extractOpenSeaContracts,
+  normalizeOpenSeaCollection,
   normalizeDashboardSettings,
   OPENSEA_KEY_TEST_COLLECTION_SLUG,
   resolveIntegrationSecrets,

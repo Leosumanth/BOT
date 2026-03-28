@@ -25,6 +25,7 @@ const {
   fetchDrpcBlockNumber,
   fetchAbiFromExplorer,
   fetchOpenSeaCollectionBySlug,
+  normalizeOpenSeaCollection,
   normalizeDashboardSettings,
   OPENSEA_KEY_TEST_COLLECTION_SLUG,
   resolveIntegrationSecrets,
@@ -158,6 +159,30 @@ const chainCatalog = [
   { key: "shape", label: "Shape", chainId: 360 },
   { key: "plasma", label: "Plasma", chainId: 9745 }
 ];
+const openseaChainKeyAliases = new Map([
+  ["ethereum", "ethereum"],
+  ["eth", "ethereum"],
+  ["mainnet", "ethereum"],
+  ["base", "base"],
+  ["base_mainnet", "base"],
+  ["base_sepolia", "base_sepolia"],
+  ["basesepolia", "base_sepolia"],
+  ["sepolia", "sepolia"],
+  ["optimism", "optimism"],
+  ["op", "optimism"],
+  ["polygon", "polygon"],
+  ["matic", "polygon"],
+  ["arbitrum", "arbitrum"],
+  ["arbitrum_one", "arbitrum"],
+  ["bsc", "bsc"],
+  ["bnb", "bsc"],
+  ["bnb_smart_chain", "bsc"],
+  ["blast", "blast"],
+  ["scroll", "scroll"],
+  ["zora", "zora"],
+  ["shape", "shape"],
+  ["plasma", "plasma"]
+]);
 const alchemyRpcImportCatalog = [
   { chainKey: "ethereum", chainId: 1, endpointKey: "eth-mainnet", label: "Ethereum Mainnet" },
   { chainKey: "bsc", chainId: 56, endpointKey: "bnb-mainnet", label: "BNB Smart Chain Mainnet" },
@@ -3656,6 +3681,75 @@ function sanitizeTaskInput(payload, existingTask = null) {
   };
 }
 
+async function enrichTaskFromSource(task) {
+  if (String(task?.sourceType || "").trim() !== "opensea" || !String(task?.sourceTarget || "").trim()) {
+    return task;
+  }
+
+  const needsDiscovery =
+    !String(task.contractAddress || "").trim() ||
+    !String(task.abiJson || "").trim();
+
+  if (!needsDiscovery) {
+    return task;
+  }
+
+  const discovery = await discoverOpenSeaSource({
+    sourceTarget: task.sourceTarget,
+    sourceStage: task.sourceStage || defaultMintSourceStage,
+    preferredChainKey: task.chainKey,
+    walletIds: Array.isArray(task.walletIds) ? task.walletIds : [],
+    rpcNodeIds: Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [],
+    quantityPerWallet: Math.max(1, Number(task.quantityPerWallet || 1)),
+    requestedFunction: String(task.mintFunction || "").trim()
+  });
+  const autofill = discovery.autofill || null;
+  const nextTask = {
+    ...task
+  };
+
+  if (
+    discovery.chainKey &&
+    (!nextTask.chainKey || nextTask.chainKey === "base_sepolia" || !String(nextTask.contractAddress || "").trim())
+  ) {
+    nextTask.chainKey = discovery.chainKey;
+  }
+
+  if (!String(nextTask.contractAddress || "").trim() && discovery.contractAddress) {
+    nextTask.contractAddress = discovery.contractAddress;
+  }
+
+  if (!String(nextTask.abiJson || "").trim() && Array.isArray(discovery.abi) && discovery.abi.length > 0) {
+    nextTask.abiJson = JSON.stringify(discovery.abi);
+  }
+
+  if (autofill?.mintFunction && !String(nextTask.mintFunction || "").trim()) {
+    nextTask.mintFunction = autofill.mintFunction;
+  }
+
+  if (Array.isArray(autofill?.mintArgs) && !String(nextTask.mintArgs || "").trim()) {
+    nextTask.mintArgs = JSON.stringify(autofill.mintArgs);
+  }
+
+  if (autofill?.priceEth !== undefined && autofill?.priceEth !== null && !String(nextTask.priceEth || "").trim()) {
+    nextTask.priceEth = String(autofill.priceEth);
+  }
+
+  if (
+    autofill?.platform &&
+    (!String(nextTask.platform || "").trim() || nextTask.platform === "Generic EVM (auto-detect)")
+  ) {
+    nextTask.platform = autofill.platform;
+  }
+
+  if (!nextTask.mintStartDetectionEnabled && autofill?.mintStartDetection?.enabled) {
+    nextTask.mintStartDetectionEnabled = true;
+    nextTask.mintStartDetectionConfig = autofill.mintStartDetection;
+  }
+
+  return nextTask;
+}
+
 function parseTaskAbiEntries(abiJson) {
   const parsedAbi = JSON.parse(abiJson);
   const abiEntries = Array.isArray(parsedAbi) ? parsedAbi : parsedAbi?.abi;
@@ -6104,6 +6198,167 @@ function chainLabel(chainKey) {
   return findAvailableChainByKey(chainKey)?.label || chainKey || "Unknown";
 }
 
+function normalizeOpenSeaChainKey(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!normalized) {
+    return "";
+  }
+
+  return openseaChainKeyAliases.get(normalized) || normalized;
+}
+
+function chooseOpenSeaCollectionContract(contracts = [], options = {}) {
+  const candidates = (Array.isArray(contracts) ? contracts : [])
+    .filter((entry) => entry?.address && ethers.isAddress(entry.address))
+    .map((entry) => ({
+      ...entry,
+      resolvedChainKey: normalizeOpenSeaChainKey(entry.chain)
+    }));
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const preferredChainKeys = [
+    options.preferredChainKey,
+    options.chainHint,
+    options.fallbackChainKey
+  ]
+    .map((entry) => normalizeOpenSeaChainKey(entry))
+    .filter(Boolean);
+
+  for (const preferredChainKey of preferredChainKeys) {
+    const matchedCandidate = candidates.find((entry) => entry.resolvedChainKey === preferredChainKey);
+    if (matchedCandidate) {
+      return matchedCandidate;
+    }
+  }
+
+  return candidates.find((entry) => entry.resolvedChainKey) || candidates[0];
+}
+
+async function discoverOpenSeaSource({
+  sourceTarget,
+  sourceStage = "auto",
+  preferredChainKey = "",
+  walletIds = [],
+  rpcNodeIds = [],
+  quantityPerWallet = 1,
+  requestedFunction = ""
+}) {
+  const sourceContext = resolveMintSourceContext("opensea", {
+    sourceTarget,
+    sourceStage
+  });
+  validateMintSourceSelection("opensea", {
+    sourceTarget,
+    sourceStage,
+    sourceContext
+  });
+
+  if (!sourceContext.projectSlug) {
+    throw new Error("OpenSea auto-discovery needs a valid collection URL or slug.");
+  }
+
+  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+  if (!resolvedSecrets.openseaApiKey) {
+    throw new Error("Add an OpenSea API key in Settings to enable automatic OpenSea discovery.");
+  }
+
+  const collectionPayload = await fetchOpenSeaCollectionBySlug({
+    slug: sourceContext.projectSlug,
+    apiKey: resolvedSecrets.openseaApiKey
+  });
+  const collection = normalizeOpenSeaCollection(collectionPayload, {
+    slug: sourceContext.projectSlug
+  });
+  const warnings = [];
+  const selectedContract = chooseOpenSeaCollectionContract(collection.contracts, {
+    preferredChainKey,
+    chainHint: sourceContext.chainHint,
+    fallbackChainKey: "ethereum"
+  });
+  const chainKey =
+    normalizeOpenSeaChainKey(selectedContract?.chain) ||
+    normalizeOpenSeaChainKey(preferredChainKey) ||
+    normalizeOpenSeaChainKey(sourceContext.chainHint);
+  const chain = chainKey ? findAvailableChainByKey(chainKey) : null;
+
+  if (!selectedContract) {
+    warnings.push("OpenSea returned no contract addresses for this collection.");
+  }
+
+  if (selectedContract && !chain) {
+    warnings.push(
+      selectedContract.chain
+        ? `OpenSea returned contract chain "${selectedContract.chain}", which MintBot does not recognize yet.`
+        : "OpenSea did not return a recognized chain for the discovered contract."
+    );
+  }
+
+  let abi = [];
+  let abiProvider = "";
+  let autofill = null;
+
+  if (selectedContract?.address && chain?.chainId && resolvedSecrets.explorerApiKey) {
+    try {
+      const abiResult = await fetchAbiFromExplorer({
+        chainId: chain.chainId,
+        address: selectedContract.address,
+        apiKey: resolvedSecrets.explorerApiKey
+      });
+      abi = Array.isArray(abiResult?.abi) ? abiResult.abi : [];
+      abiProvider = "Etherscan V2";
+
+      if (abi.length > 0) {
+        autofill = await buildMintAutofill({
+          chainKey: chain.key,
+          contractAddress: selectedContract.address,
+          abiEntries: abi,
+          requestedFunction,
+          walletIds,
+          rpcNodeIds,
+          quantityPerWallet
+        });
+      }
+    } catch (error) {
+      warnings.push(`ABI auto-load failed: ${formatError(error)}`);
+    }
+  } else if (selectedContract?.address && !resolvedSecrets.explorerApiKey) {
+    warnings.push("Explorer API key is not configured, so ABI auto-load is unavailable.");
+  }
+
+  return {
+    sourceType: "opensea",
+    sourceTarget,
+    sourceStage,
+    sourceContext,
+    collection: {
+      slug: collection.slug || sourceContext.projectSlug,
+      name: collection.name || sourceContext.projectLabel || sourceContext.projectSlug,
+      description: collection.description || "",
+      openseaUrl: collection.openseaUrl || sourceContext.canonicalUrl || "",
+      externalUrl: collection.externalUrl || ""
+    },
+    contracts: collection.contracts,
+    contractCount: collection.contracts.length,
+    chainKey: chain?.key || chainKey || "",
+    chainId: chain?.chainId || null,
+    chainLabel: chain?.label || chainLabel(chainKey),
+    contractAddress: selectedContract?.address || "",
+    contractChain: selectedContract?.chain || "",
+    abi,
+    abiProvider,
+    autofill,
+    warnings
+  };
+}
+
 async function reloadIntegrationSecrets() {
   const nextSecrets = {};
 
@@ -7695,7 +7950,8 @@ function validateAndPrepareTask(task, existingTask, payload) {
 
 async function saveTaskPayload(payload) {
   const existingTask = payload.id ? getTaskById(payload.id) : null;
-  const task = sanitizeTaskInput(payload, existingTask);
+  let task = sanitizeTaskInput(payload, existingTask);
+  task = await enrichTaskFromSource(task);
   const { abiEntries, preparedTask, autoGeneratePhaseTasks } = validateAndPrepareTask(
     task,
     existingTask,
@@ -8769,6 +9025,47 @@ async function handleContractAutofill(request, response) {
   }
 }
 
+async function handleSourceDiscovery(request, response) {
+  try {
+    const payload = await readJsonBody(request);
+    const sourceType = String(payload.sourceType || "").trim().toLowerCase();
+    const sourceTarget = String(payload.sourceTarget || "").trim();
+    const sourceStage = String(payload.sourceStage || "auto").trim();
+
+    if (!sourceType) {
+      throw new Error("Source type is required for auto-discovery.");
+    }
+
+    if (!sourceTarget) {
+      throw new Error("Source target is required for auto-discovery.");
+    }
+
+    let discovery = null;
+    if (sourceType === "opensea") {
+      discovery = await discoverOpenSeaSource({
+        sourceTarget,
+        sourceStage,
+        preferredChainKey: String(payload.chainKey || "").trim(),
+        walletIds: Array.isArray(payload.walletIds) ? payload.walletIds : [],
+        rpcNodeIds: Array.isArray(payload.rpcNodeIds) ? payload.rpcNodeIds : [],
+        quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || 1)),
+        requestedFunction: String(payload.mintFunction || "").trim()
+      });
+    } else {
+      throw new Error(`${sourceType} auto-discovery is not implemented yet.`);
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      discovery,
+      abi: discovery.abi || [],
+      autofill: discovery.autofill || null
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: formatError(error) });
+  }
+}
+
 async function verifyExplorerApiKey(apiKey) {
   if (/^https?:\/\//i.test(apiKey) || /etherscan/i.test(apiKey) || /apikey=/i.test(apiKey)) {
     throw new Error("Paste the raw Etherscan V2 API key only, not a link or URL.");
@@ -9742,6 +10039,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/contracts/autofill") {
       await handleContractAutofill(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/sources/discover") {
+      await handleSourceDiscovery(request, response);
       return;
     }
 
