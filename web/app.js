@@ -882,6 +882,18 @@ function isLikelyEvmAddress(value) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(value || "").trim());
 }
 
+function hasTaskSourceTarget() {
+  return Boolean(String(taskSourceTargetInput?.value || "").trim());
+}
+
+function syncTaskSourceTypeFromTarget() {
+  if (!taskSourceTypeInput) {
+    return;
+  }
+
+  taskSourceTypeInput.value = hasTaskSourceTarget() ? "opensea" : "generic_contract";
+}
+
 function buildTaskAbiLookupKey(chainKey = taskChainInput.value, address = taskContractInput.value) {
   const normalizedChainKey = String(chainKey || "").trim();
   const normalizedAddress = String(address || "").trim().toLowerCase();
@@ -1153,6 +1165,8 @@ function enforcePublicMintTaskDefaults() {
   if (taskSourceStageInput) {
     taskSourceStageInput.value = "public";
   }
+
+  syncTaskSourceTypeFromTarget();
 
   if (taskAutoPhaseToggle) {
     taskAutoPhaseToggle.checked = false;
@@ -6876,17 +6890,17 @@ function updateTaskSourceInputs() {
     capabilityFlags.push("session auth");
   }
 
-  taskSourceTargetInput.disabled = sourceType === "generic_contract";
+  taskSourceTargetInput.disabled = false;
   taskSourceTargetInput.placeholder =
     sourceType === "generic_contract"
-      ? "Not needed for direct contract mints"
-      : exampleTarget || "Paste a drop URL, slug, or source identifier";
+      ? "Optional OpenSea collection link for auto-discovery"
+      : exampleTarget || "Paste an OpenSea collection link or slug";
   taskSourceConfigInput.placeholder = JSON.stringify(configExample, null, 2);
 
   const targetCopy =
     sourceType === "generic_contract"
-      ? "Target is optional for direct contract mint tasks."
-      : `Use a drop URL, slug, or identifier for ${sourceLabel}.`;
+      ? "Leave the link empty if you prefer to fill the contract and ABI manually."
+      : `Use an OpenSea collection link or slug for ${sourceLabel} auto-discovery.`;
   const capabilityCopy = capabilityFlags.length
     ? `Adapter focus: ${capabilityFlags.join(", ")}.`
     : "Adapter focus: local contract execution only.";
@@ -6905,6 +6919,7 @@ function setTaskSourceDiscoveryStatus(message = "") {
 }
 
 function activeTaskSourceDiscoveryPayload() {
+  syncTaskSourceTypeFromTarget();
   return {
     sourceType: String(taskSourceTypeInput?.value || "").trim(),
     sourceTarget: String(taskSourceTargetInput?.value || "").trim(),
@@ -8002,11 +8017,12 @@ function openTaskModal(task = null) {
   taskPriceInput.value = task?.priceEth || "";
   taskAbiInput.value = task?.abiJson || "";
   taskPlatformInput.value = task?.platform || "Generic EVM (auto-detect)";
-  populateMintSourceSelectors(task?.sourceType || "generic_contract");
-  taskSourceTypeInput.value = task?.sourceType || "generic_contract";
+  populateMintSourceSelectors(task?.sourceTarget ? task?.sourceType || "opensea" : task?.sourceType || "opensea");
+  taskSourceTypeInput.value = task?.sourceTarget ? task?.sourceType || "opensea" : task?.sourceType || "opensea";
   taskSourceTargetInput.value = task?.sourceTarget || "";
   taskSourceStageInput.value = "public";
   taskSourceConfigInput.value = task?.sourceConfigJson || "";
+  syncTaskSourceTypeFromTarget();
   updateTaskSourceInputs();
   taskFunctionInput.value = task?.mintFunction || "";
   taskArgsInput.value = task?.mintArgs || "";
@@ -8138,7 +8154,7 @@ function loadFeaturedMintPreset(preset) {
   taskChainInput.value = state.chains.some((chain) => chain.key === preset.chainKey)
     ? preset.chainKey
     : taskChainInput.value;
-  taskSourceTypeInput.value = preset.sourceType || "generic_contract";
+  taskSourceTypeInput.value = preset.sourceTarget ? preset.sourceType || "opensea" : preset.sourceType || "opensea";
   taskSourceTargetInput.value = preset.sourceTarget || "";
   taskSourceStageInput.value = "public";
   taskQuantityInput.value = preset.quantityPerWallet || "1";
@@ -8153,6 +8169,7 @@ function loadFeaturedMintPreset(preset) {
     taskSimpleLaunchModeInput.value = preset.quickLaunchMode || "onchain";
   }
 
+  syncTaskSourceTypeFromTarget();
   updateTaskSourceInputs();
   enforcePublicMintTaskDefaults();
   applyTaskSimpleLaunchToAdvanced({ applyProfile: true });
@@ -8430,6 +8447,36 @@ function buildClaimTaskSettings() {
   };
 }
 
+async function ensureTaskSourceDiscoveryBeforeSave() {
+  const sourceTarget = String(taskSourceTargetInput?.value || "").trim();
+  if (!sourceTarget) {
+    return null;
+  }
+
+  syncTaskSourceTypeFromTarget();
+
+  const hasContractAddress = isLikelyEvmAddress(taskContractInput?.value || "");
+  const hasAbiJson = Boolean(String(taskAbiInput?.value || "").trim());
+  if (hasContractAddress && hasAbiJson) {
+    return null;
+  }
+
+  const response = await requestTaskSourceDiscovery({
+    force: true,
+    quiet: false
+  });
+
+  const discoveredContractAddress = isLikelyEvmAddress(taskContractInput?.value || "");
+  const discoveredAbiJson = Boolean(String(taskAbiInput?.value || "").trim());
+  if (!discoveredContractAddress || !discoveredAbiJson) {
+    throw new Error(
+      "OpenSea auto-discovery could not fill the contract and ABI yet. Check your OpenSea and Explorer API keys, or paste the contract and ABI manually."
+    );
+  }
+
+  return response;
+}
+
 function validateTaskQuickStrategy() {
   const mode = normalizeTaskQuickLaunchSignal(taskSimpleLaunchModeInput?.value);
 
@@ -8485,6 +8532,9 @@ function validateTaskQuickStrategy() {
 
 function buildTaskPayload() {
   applyTaskSimpleLaunchToAdvanced();
+  syncTaskSourceTypeFromTarget();
+  const sourceTarget = String(taskSourceTargetInput?.value || "").trim();
+  const sourceType = sourceTarget ? "opensea" : "generic_contract";
 
   return {
     id: taskIdInput.value || undefined,
@@ -8494,10 +8544,10 @@ function buildTaskPayload() {
     notes: taskNotesInput.value,
     contractAddress: taskContractInput.value,
     chainKey: taskChainInput.value,
-    sourceType: taskSourceTypeInput.value,
-    sourceTarget: taskSourceTypeInput.value === "generic_contract" ? "" : taskSourceTargetInput.value,
+    sourceType,
+    sourceTarget,
     sourceStage: "public",
-    sourceConfigJson: taskSourceConfigInput.value.trim(),
+    sourceConfigJson: sourceTarget ? taskSourceConfigInput.value.trim() : "",
     quantityPerWallet: taskQuantityInput.value,
     priceEth: taskPriceInput.value,
     abiJson: taskAbiInput.value,
@@ -9574,6 +9624,7 @@ taskSourceStageInput?.addEventListener("change", () => {
 });
 
 taskSourceTargetInput?.addEventListener("input", () => {
+  syncTaskSourceTypeFromTarget();
   updateTaskSourceInputs();
   scheduleTaskSourceDiscovery({ quiet: true });
 });
@@ -9781,9 +9832,17 @@ abiDropzone.addEventListener("drop", async (event) => {
 
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  try {
+    await ensureTaskSourceDiscoveryBeforeSave();
+  } catch (error) {
+    showToast(error.message || "OpenSea auto-discovery failed.", "error", "Auto-Discovery Failed");
+    return;
+  }
+
   if (!validateTaskQuickStrategy()) {
     return;
   }
+
   try {
     const payload = await request("/api/tasks", {
       method: "POST",

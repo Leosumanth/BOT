@@ -632,10 +632,30 @@
             </label>
           </div>
 
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Collection Link</h4>
+                <p class="helper-copy">Paste the OpenSea collection link or slug and MintBot will try to discover the chain, contract, ABI, public mint function, and price for you.</p>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label hidden>
+                <span>Source Type</span>
+                <select id="task-source-type-input"></select>
+              </label>
+              <label>
+                <span>OpenSea Collection Link / Slug</span>
+                <input id="task-source-target-input" type="text" placeholder="https://opensea.io/collection/example-drop" />
+              </label>
+            </div>
+            <p id="task-source-hint" class="helper-copy">Paste a collection link and wait a second for auto-discovery, or leave it empty and fill the contract + ABI manually.</p>
+          </div>
+
           <div class="form-grid two">
             <label>
               <span>Contract Address</span>
-              <input id="task-contract-input" type="text" placeholder="0x..." />
+              <input id="task-contract-input" type="text" placeholder="0x... or leave blank for auto-fill from the collection link" />
             </label>
             <label>
               <span>Chain</span>
@@ -665,22 +685,14 @@
             <p class="helper-copy">Advanced settings are optional and mainly for explorer/source discovery, gas tuning, relay routing, and custom sale-open checks.</p>
           </div>
 
-          <div class="surface inset-surface task-advanced-section hidden">
+          <div class="surface inset-surface">
             <div class="surface-header compact">
               <div>
-                <h4>Mint Source</h4>
-                <p class="helper-copy">Choose where mint eligibility, scheduling hints, and payload preparation should come from.</p>
+                <h4>Discovery Details</h4>
+                <p class="helper-copy">These source details stay synced behind the scenes for link-first public mint tasks.</p>
               </div>
             </div>
-            <div class="form-grid three">
-              <label>
-                <span>Source Type</span>
-                <select id="task-source-type-input"></select>
-              </label>
-              <label>
-                <span>Source Target</span>
-                <input id="task-source-target-input" type="text" placeholder="Optional drop URL or identifier" />
-              </label>
+            <div class="form-grid three" hidden>
               <label hidden>
                 <span>Source Stage</span>
                 <select id="task-source-stage-input">
@@ -698,7 +710,7 @@
                 ></textarea>
               </label>
             </div>
-            <p id="task-source-hint" class="helper-copy">Generic contract public mints can leave source target empty. OpenSea public mints work best with the collection URL.</p>
+            <p class="helper-copy">OpenSea public mints work best with a collection link plus saved OpenSea and Explorer API keys.</p>
           </div>
 
           <div class="form-grid single">
@@ -725,10 +737,10 @@
               <h4>ABI JSON</h4>
               <div class="surface-actions">
                 <button id="fetch-abi-button" class="ghost-button fx-button" type="button">Fetch from Explorer</button>
-                <span id="abi-status" class="muted-copy">Paste JSON or load a file.</span>
+                <span id="abi-status" class="muted-copy">Paste JSON, load a file, or use OpenSea auto-discovery.</span>
               </div>
             </div>
-            <div id="abi-dropzone" class="dropzone">Drop ABI JSON here or use the file picker.</div>
+            <div id="abi-dropzone" class="dropzone">Drop ABI JSON here, use the file picker, or let the collection link auto-load it.</div>
             <textarea id="task-abi-input" rows="7" placeholder='[{"inputs":[],"name":"mint","type":"function"}]'></textarea>
           </div>
 
