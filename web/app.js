@@ -10,7 +10,17 @@ const state = {
   session: { authenticated: false, user: null, authRequired: true },
   currentView: "dashboard",
   walletGroupFilter: "All",
-  taskStatusFilter: "all"
+  taskStatusFilter: "all",
+  mintRadar: {
+    items: [],
+    loading: false,
+    error: "",
+    fetchedAt: "",
+    limitation: "",
+    warnings: [],
+    filter: "all",
+    chainFilter: "all"
+  }
 };
 const fallbackMintSources = [
   {
@@ -76,6 +86,7 @@ const walletAssetAutoSyncIntervalMs = 2 * 60 * 1000;
 const rpcHealthWarningLatencyMs = 180;
 const rpcHealthCriticalLatencyMs = 320;
 const rpcHealthAutoPulseIntervalMs = 3 * 60 * 1000;
+const mintRadarAutoSyncIntervalMs = 5 * 60 * 1000;
 
 const body = document.body;
 body.dataset.currentView = state.currentView;
@@ -88,6 +99,15 @@ const navButtons = [...document.querySelectorAll(".nav-button")];
 const views = [...document.querySelectorAll(".view")];
 const dashboardRunHistory = document.getElementById("dashboard-run-history");
 const taskGrid = document.getElementById("task-grid");
+const mintRadarChainInput = document.getElementById("mint-radar-chain-input");
+const mintRadarRefreshButton = document.getElementById("mint-radar-refresh-button");
+const mintRadarFilterInput = document.getElementById("mint-radar-filter-input");
+const mintRadarStatus = document.getElementById("mint-radar-status");
+const mintRadarCount = document.getElementById("mint-radar-count");
+const mintRadarUpdated = document.getElementById("mint-radar-updated");
+const mintRadarLimitation = document.getElementById("mint-radar-limitation");
+const mintRadarWarningList = document.getElementById("mint-radar-warning-list");
+const mintRadarList = document.getElementById("mint-radar-list");
 const tasksSummaryCopy = document.getElementById("tasks-summary-copy");
 const taskStatusLegend = document.getElementById("task-status-legend");
 const systemAlerts = document.getElementById("system-alerts");
@@ -453,6 +473,8 @@ let walletAssetsAutoSyncKickTimer = null;
 let rpcHealthAutoPulseInFlight = false;
 let rpcHealthAutoPulseTimer = null;
 let rpcHealthAutoPulseKickTimer = null;
+let mintRadarAutoSyncTimer = null;
+let mintRadarAutoSyncKickTimer = null;
 let rpcHealthNotificationPrimed = false;
 let walletAssetInspector = createWalletAssetInspector(
   loadPersistedSelectedWalletAssetId(),
@@ -1375,6 +1397,18 @@ function stopRpcHealthAutoPulse() {
   rpcHealthAutoPulseInFlight = false;
 }
 
+function stopMintRadarAutoSync() {
+  if (mintRadarAutoSyncKickTimer) {
+    window.clearTimeout(mintRadarAutoSyncKickTimer);
+    mintRadarAutoSyncKickTimer = null;
+  }
+
+  if (mintRadarAutoSyncTimer) {
+    window.clearInterval(mintRadarAutoSyncTimer);
+    mintRadarAutoSyncTimer = null;
+  }
+}
+
 function ensureWalletAssetAutoSync() {
   if (walletAssetsAutoSyncTimer || typeof window === "undefined") {
     return;
@@ -1413,6 +1447,31 @@ function ensureRpcHealthAutoPulse() {
       void pulseRpcMesh({ silent: true }).catch(() => {});
     }
   }, rpcHealthAutoPulseIntervalMs);
+}
+
+function shouldAutoSyncMintRadar() {
+  if (!state.session.authenticated || state.mintRadar.loading) {
+    return false;
+  }
+
+  if (state.currentView !== "mint-radar" && (!Array.isArray(state.mintRadar.items) || state.mintRadar.items.length === 0)) {
+    return false;
+  }
+
+  const fetchedAt = new Date(state.mintRadar.fetchedAt || 0).getTime();
+  return fetchedAt <= 0 || Date.now() - fetchedAt >= mintRadarAutoSyncIntervalMs;
+}
+
+function ensureMintRadarAutoSync() {
+  if (mintRadarAutoSyncTimer || typeof window === "undefined") {
+    return;
+  }
+
+  mintRadarAutoSyncTimer = window.setInterval(() => {
+    if (shouldAutoSyncMintRadar()) {
+      void loadMintRadar({ forceRefresh: true, quiet: true, source: "auto" }).catch(() => {});
+    }
+  }, mintRadarAutoSyncIntervalMs);
 }
 
 function rpcHealthCadenceLabel(intervalMs = rpcHealthAutoPulseIntervalMs) {
@@ -1642,6 +1701,26 @@ function scheduleRpcHealthAutoPulse(options = {}) {
   }, 1200);
 }
 
+function scheduleMintRadarAutoSync(options = {}) {
+  const { immediate = false } = options;
+  if (!state.session.authenticated) {
+    stopMintRadarAutoSync();
+    return;
+  }
+
+  ensureMintRadarAutoSync();
+  if (!immediate || mintRadarAutoSyncKickTimer || !shouldAutoSyncMintRadar()) {
+    return;
+  }
+
+  mintRadarAutoSyncKickTimer = window.setTimeout(() => {
+    mintRadarAutoSyncKickTimer = null;
+    if (shouldAutoSyncMintRadar()) {
+      void loadMintRadar({ forceRefresh: true, quiet: true, source: "auto" }).catch(() => {});
+    }
+  }, 800);
+}
+
 function setLoginStatus(message) {
   loginStatus.textContent = message;
 }
@@ -1662,6 +1741,7 @@ function setAuthState(authenticated, user = null, authRequired = true) {
   if (!authenticated && authRequired) {
     stopWalletAssetAutoSync();
     stopRpcHealthAutoPulse();
+    stopMintRadarAutoSync();
     rpcHealthNotificationPrimed = false;
     if (rpcHealthSyncStatus) {
       rpcHealthSyncStatus.textContent = "";
@@ -3293,6 +3373,360 @@ function renderTasks() {
       } catch {}
     });
   });
+}
+
+function mintRadarStatusTone(status = "") {
+  return status === "live" ? "running" : status === "upcoming" ? "queued" : "draft";
+}
+
+function mintRadarStatusLabel(status = "") {
+  return status === "live" ? "Live" : status === "upcoming" ? "Upcoming" : "Watching";
+}
+
+function mintRadarChainValue(entry = {}) {
+  const normalizedChainKey = String(entry.chainKey || "").trim();
+  return normalizedChainKey || "__unknown";
+}
+
+function mintRadarChainLabelForValue(value = "") {
+  const normalized = String(value || "").trim();
+  if (!normalized || normalized === "all") {
+    return "All Chains";
+  }
+
+  if (normalized === "__unknown") {
+    return "Unknown Chain";
+  }
+
+  const matchingItem = (Array.isArray(state.mintRadar.items) ? state.mintRadar.items : []).find(
+    (entry) => String(entry.chainKey || "").trim() === normalized && String(entry.chainLabel || "").trim()
+  );
+  return matchingItem?.chainLabel || chainLabel(normalized);
+}
+
+function mintRadarChainOptions() {
+  const options = new Map([["all", "All Chains"]]);
+
+  state.chains.forEach((chain) => {
+    if (chain?.key && chain?.label) {
+      options.set(chain.key, chain.label);
+    }
+  });
+
+  (Array.isArray(state.mintRadar.items) ? state.mintRadar.items : []).forEach((entry) => {
+    const value = mintRadarChainValue(entry);
+    const label =
+      value === "__unknown"
+        ? "Unknown Chain"
+        : String(entry.chainLabel || "").trim() || chainLabel(value);
+    options.set(value, label);
+  });
+
+  const selectedValue = String(state.mintRadar.chainFilter || "all").trim() || "all";
+  if (!options.has(selectedValue)) {
+    options.set(selectedValue, mintRadarChainLabelForValue(selectedValue));
+  }
+
+  return [...options.entries()].map(([value, label]) => ({ value, label }));
+}
+
+function filteredMintRadarItems() {
+  const filter = String(state.mintRadar.filter || "all").trim().toLowerCase();
+  const chainFilter = String(state.mintRadar.chainFilter || "all").trim();
+  const items = Array.isArray(state.mintRadar.items) ? state.mintRadar.items : [];
+  return items
+    .filter((entry) => filter === "all" || entry.status === filter)
+    .filter((entry) => {
+      if (chainFilter === "all") {
+        return true;
+      }
+
+      return mintRadarChainValue(entry) === chainFilter;
+    });
+}
+
+function parseMintRadarPriceValue(priceText = "") {
+  const match = String(priceText || "").match(/([0-9]+(?:\.[0-9]+)?)/);
+  return match ? match[1] : "";
+}
+
+function preparePublicMintFromRadar(entry) {
+  if (!entry?.url && !entry?.slug) {
+    showToast("This radar entry does not include an OpenSea collection link yet.", "error", "Mint Radar");
+    return;
+  }
+
+  const sourceTarget = String(entry.url || "").trim() || `https://opensea.io/collection/${entry.slug}`;
+  const taskName = String(entry.collectionName || entry.name || "").trim();
+  const priceValue = parseMintRadarPriceValue(entry.priceText);
+
+  setView("tasks");
+  openTaskModal();
+
+  taskSourceTargetInput.value = sourceTarget;
+  taskSourceStageInput.value = "public";
+  syncTaskSourceTypeFromTarget();
+  currentTaskSourceDiscovery = null;
+  currentTaskMintAutofill = null;
+
+  if (taskName && !String(taskNameInput.value || "").trim()) {
+    taskNameInput.value = `${taskName} Public Mint`;
+  }
+
+  if (entry.chainKey && [...taskChainInput.options].some((option) => option.value === entry.chainKey)) {
+    taskChainInput.value = entry.chainKey;
+    renderRpcSelector(filterSelectedRpcIdsForChain(entry.chainKey));
+  }
+
+  if (priceValue && !String(taskPriceInput.value || "").trim()) {
+    taskPriceInput.value = priceValue;
+  }
+
+  updateTaskSourceInputs();
+  updateTaskMintSummary();
+  scheduleTaskSourceDiscovery({
+    force: true,
+    quiet: false,
+    successToastTitle: "Mint Radar",
+    successToastMessage: `${taskName || "Collection"} loaded into the public mint builder.`
+  });
+}
+
+function renderMintRadar() {
+  if (!mintRadarList) {
+    return;
+  }
+
+  const filter = String(state.mintRadar.filter || "all").trim().toLowerCase() || "all";
+  const chainFilter = String(state.mintRadar.chainFilter || "all").trim() || "all";
+  const items = filteredMintRadarItems();
+  const allItems = Array.isArray(state.mintRadar.items) ? state.mintRadar.items : [];
+  const warnings = Array.isArray(state.mintRadar.warnings) ? state.mintRadar.warnings : [];
+  const fetchedAt = String(state.mintRadar.fetchedAt || "").trim();
+  const limitation = String(state.mintRadar.limitation || "").trim();
+
+  if (mintRadarChainInput) {
+    const chainOptions = mintRadarChainOptions();
+    mintRadarChainInput.innerHTML = chainOptions
+      .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+      .join("");
+    mintRadarChainInput.value = chainFilter;
+  }
+
+  if (mintRadarFilterInput && mintRadarFilterInput.value !== filter) {
+    mintRadarFilterInput.value = filter;
+  }
+
+  if (mintRadarStatus) {
+    if (state.mintRadar.loading) {
+      mintRadarStatus.textContent = "Refreshing the OpenSea drops feed and checking for new collections...";
+    } else if (state.mintRadar.error) {
+      mintRadarStatus.textContent = state.mintRadar.error;
+    } else if (allItems.length > 0) {
+      mintRadarStatus.textContent =
+        "OpenSea drops loaded. Filter by chain, review live or upcoming mints, and send any collection straight into the public mint builder.";
+    } else {
+      mintRadarStatus.textContent = "Refresh the OpenSea drops feed to load live and upcoming mints.";
+    }
+  }
+
+  if (mintRadarCount) {
+    const chainCopy = chainFilter === "all" ? "" : ` on ${mintRadarChainLabelForValue(chainFilter)}`;
+    mintRadarCount.textContent =
+      allItems.length > 0
+        ? `Showing ${items.length} of ${allItems.length} tracked ${allItems.length === 1 ? "drop" : "drops"}${chainCopy}.`
+        : "No tracked drops yet.";
+  }
+
+  if (mintRadarUpdated) {
+    mintRadarUpdated.textContent = fetchedAt
+      ? `Updated ${relativeTime(fetchedAt)} · auto-sync every 5m`
+      : "Auto-sync every 5m";
+  }
+
+  if (mintRadarLimitation) {
+    mintRadarLimitation.textContent =
+      limitation ||
+      "This radar follows the drops OpenSea currently surfaces. It is not a universal calendar for every NFT mint on every website.";
+  }
+
+  if (mintRadarWarningList) {
+    mintRadarWarningList.classList.toggle("hidden", warnings.length === 0);
+    mintRadarWarningList.innerHTML = warnings.length
+      ? warnings
+          .slice(0, 4)
+          .map(
+            (warning) => `
+              <article class="alert-item warning">
+                <strong>OpenSea Radar Note</strong>
+                <p class="muted-copy">${escapeHtml(warning)}</p>
+              </article>
+            `
+          )
+          .join("")
+      : "";
+  }
+
+  if (items.length === 0) {
+    const emptyTitle = state.mintRadar.error ? "Mint radar unavailable" : state.mintRadar.loading ? "Loading drops" : "No drops in this filter";
+    const emptyMessage = state.mintRadar.error
+      ? state.mintRadar.error
+      : state.mintRadar.loading
+        ? "OpenSea radar data is loading."
+        : filter === "all" && chainFilter === "all"
+          ? "No live or upcoming drops were returned by OpenSea yet."
+          : `No ${filter === "all" ? "tracked" : filter} drops are visible for ${mintRadarChainLabelForValue(chainFilter)} right now.`;
+    mintRadarList.innerHTML = `<div class="empty-state"><h3>${escapeHtml(emptyTitle)}</h3><p>${escapeHtml(emptyMessage)}</p></div>`;
+    return;
+  }
+
+  mintRadarList.innerHTML = items
+    .map((entry) => {
+      const tone = mintRadarStatusTone(entry.status);
+      const statusLabel = mintRadarStatusLabel(entry.status);
+      const contractLabel = entry.nftContractAddress ? truncateMiddle(entry.nftContractAddress) : "Discover on task load";
+      const chainValue = entry.chainLabel || chainLabel(entry.chainKey) || "OpenSea";
+      const sourceSummary =
+        [entry.priceText, entry.scheduleText, entry.totalItemsText, entry.mintedCountText].filter(Boolean).join(" · ") ||
+        entry.summary ||
+        "OpenSea drop detected.";
+
+      return `
+        <article class="surface mint-radar-card" data-radar-slug="${escapeHtml(entry.slug || "")}" data-tilt>
+          <div class="mint-radar-card-header">
+            <div>
+              <p class="eyebrow">${escapeHtml(chainValue)}</p>
+              <h3>${escapeHtml(entry.collectionName || entry.name || "OpenSea Drop")}</h3>
+              <p class="helper-copy">${escapeHtml(entry.creator || entry.slug || "")}</p>
+            </div>
+            <span class="status-pill ${escapeHtml(tone)}">${escapeHtml(statusLabel)}</span>
+          </div>
+
+          <div class="chip-row">
+            ${entry.priceText ? `<span class="tag-chip">${escapeHtml(entry.priceText)}</span>` : ""}
+            ${entry.scheduleText ? `<span class="tag-chip">${escapeHtml(entry.scheduleText)}</span>` : ""}
+            ${entry.totalItemsText ? `<span class="tag-chip">Total ${escapeHtml(entry.totalItemsText)}</span>` : ""}
+            ${entry.mintedCountText ? `<span class="tag-chip">Minted ${escapeHtml(entry.mintedCountText)}</span>` : ""}
+          </div>
+
+          <p class="muted-copy mint-radar-summary">${escapeHtml(sourceSummary)}</p>
+
+          <div class="task-meta mint-radar-meta">
+            <div class="meta-item">
+              <label>Collection</label>
+              <strong>${escapeHtml(entry.slug || "Unknown")}</strong>
+            </div>
+            <div class="meta-item">
+              <label>NFT Contract</label>
+              <strong>${escapeHtml(contractLabel)}</strong>
+            </div>
+            <div class="meta-item">
+              <label>Source</label>
+              <strong>${escapeHtml((entry.sources || []).join(", ") || "OpenSea")}</strong>
+            </div>
+          </div>
+
+          ${
+            Array.isArray(entry.warnings) && entry.warnings.length > 0
+              ? `<p class="helper-copy mint-radar-card-note">${escapeHtml(entry.warnings[0])}</p>`
+              : ""
+          }
+
+          <div class="mint-radar-actions">
+            <button class="ghost-button fx-button" type="button" data-mint-radar-action="open" data-radar-slug="${escapeHtml(entry.slug || "")}">
+              Open on OpenSea
+            </button>
+            <button class="primary-button fx-button" type="button" data-mint-radar-action="prepare" data-radar-slug="${escapeHtml(entry.slug || "")}">
+              Prepare Public Mint
+            </button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  mintRadarList.querySelectorAll("[data-mint-radar-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = String(button.dataset.radarSlug || "").trim();
+      const entry = allItems.find((item) => item.slug === slug);
+      if (!entry) {
+        return;
+      }
+
+      if (button.dataset.mintRadarAction === "open") {
+        window.open(entry.url || `https://opensea.io/collection/${slug}`, "_blank", "noopener,noreferrer");
+        return;
+      }
+
+      if (button.dataset.mintRadarAction === "prepare") {
+        preparePublicMintFromRadar(entry);
+      }
+    });
+  });
+}
+
+async function loadMintRadar(options = {}) {
+  const { forceRefresh = false, quiet = false } = options;
+
+  if (!mintRadarList) {
+    return null;
+  }
+
+  if (state.mintRadar.loading && !forceRefresh) {
+    return null;
+  }
+
+  state.mintRadar.loading = true;
+  if (forceRefresh) {
+    state.mintRadar.error = "";
+  }
+  renderMintRadar();
+
+  try {
+    const query = new URLSearchParams();
+    query.set("limit", "48");
+    if (forceRefresh) {
+      query.set("refresh", "1");
+    }
+
+    const payload = await request(`/api/mint-radar/opensea${query.toString() ? `?${query.toString()}` : ""}`, {
+      quiet
+    });
+
+    state.mintRadar.items = Array.isArray(payload.items) ? payload.items : [];
+    state.mintRadar.fetchedAt = payload.fetchedAt || new Date().toISOString();
+    state.mintRadar.limitation = payload.limitation || "";
+    state.mintRadar.warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+    state.mintRadar.error = "";
+    return payload;
+  } catch (error) {
+    state.mintRadar.error = error.message || "Mint radar is unavailable right now.";
+    if (!state.mintRadar.fetchedAt) {
+      state.mintRadar.items = [];
+    }
+    return null;
+  } finally {
+    state.mintRadar.loading = false;
+    renderMintRadar();
+  }
+}
+
+function ensureMintRadarLoaded(options = {}) {
+  const { forceRefresh = false } = options;
+  const fetchedAt = String(state.mintRadar.fetchedAt || "").trim();
+  const ageMs = fetchedAt ? Date.now() - new Date(fetchedAt).getTime() : Number.POSITIVE_INFINITY;
+  const shouldLoad =
+    forceRefresh ||
+    (Array.isArray(state.mintRadar.items) && state.mintRadar.items.length === 0) ||
+    !fetchedAt ||
+    !Number.isFinite(ageMs) ||
+    ageMs > 5 * 60 * 1000;
+
+  if (!shouldLoad || state.mintRadar.loading) {
+    return;
+  }
+
+  loadMintRadar({ forceRefresh, quiet: true }).catch(() => {});
 }
 
 function renderWalletBalanceSyncStatus() {
@@ -6840,6 +7274,7 @@ function renderAll() {
   renderLogs();
   renderDashboard();
   renderTasks();
+  renderMintRadar();
   renderWallets();
   renderWalletAssets();
   renderRpcNodes();
@@ -6872,6 +7307,7 @@ function applyAppState(payload, options = {}) {
   renderAll();
   scheduleWalletAssetAutoSync({ immediate: true });
   scheduleRpcHealthAutoPulse({ immediate: true });
+  scheduleMintRadarAutoSync({ immediate: state.currentView === "mint-radar" });
 }
 
 function ensureChainOption(chain) {
@@ -6909,6 +7345,11 @@ function setView(viewName) {
     renderWallets();
     renderWalletAssets();
     scheduleWalletAssetAutoSync({ immediate: true });
+  }
+  if (viewName === "mint-radar") {
+    renderMintRadar();
+    ensureMintRadarLoaded();
+    scheduleMintRadarAutoSync({ immediate: true });
   }
   if (viewName === "assistant" && assistantAvailability().ready) {
     window.setTimeout(() => {
@@ -8808,6 +9249,33 @@ dashboardRefreshButton?.addEventListener("click", () => {
   loadState()
     .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
     .catch(() => {});
+});
+
+mintRadarRefreshButton?.addEventListener("click", async () => {
+  try {
+    await withButtonBusyState(mintRadarRefreshButton, "Refreshing...", async () => {
+      const payload = await loadMintRadar({ forceRefresh: true, quiet: false });
+      if (payload) {
+        showToast("OpenSea mint radar refreshed.", "success", "Mint Radar");
+      }
+    });
+  } catch {}
+});
+
+mintRadarFilterInput?.addEventListener("change", () => {
+  state.mintRadar.filter = String(mintRadarFilterInput.value || "all").trim().toLowerCase() || "all";
+  renderMintRadar();
+  if (state.currentView === "mint-radar") {
+    ensureMintRadarLoaded();
+  }
+});
+
+mintRadarChainInput?.addEventListener("change", () => {
+  state.mintRadar.chainFilter = String(mintRadarChainInput.value || "all").trim() || "all";
+  renderMintRadar();
+  if (state.currentView === "mint-radar") {
+    ensureMintRadarLoaded();
+  }
 });
 
 newTaskButton.addEventListener("click", () => openTaskModal());

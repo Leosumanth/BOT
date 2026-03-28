@@ -272,6 +272,11 @@ let nativeUsdPriceCache = {
   value: null,
   pending: null
 };
+let openSeaMintRadarCache = {
+  expiresAt: 0,
+  value: null,
+  pending: null
+};
 const walletAssetRpcTimeoutMs = Math.max(
   1_500,
   Number(process.env.WALLET_ASSET_RPC_TIMEOUT_MS || 4_000)
@@ -297,6 +302,25 @@ const nativeUsdPriceFetchTimeoutMs = Math.max(
 const nativeUsdPriceUrl =
   process.env.NATIVE_USD_PRICE_URL ||
   "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin&vs_currencies=usd";
+const openSeaDropsBaseUrl = String(process.env.OPENSEA_DROPS_BASE_URL || "https://opensea.io").trim();
+const openSeaMintRadarCacheTtlMs = Math.max(
+  30_000,
+  Number(process.env.OPENSEA_MINT_RADAR_CACHE_TTL_MS || 90_000)
+);
+const openSeaMintRadarFetchTimeoutMs = Math.max(
+  5_000,
+  Number(process.env.OPENSEA_MINT_RADAR_FETCH_TIMEOUT_MS || 12_000)
+);
+const openSeaMintRadarMaxPages = Math.max(
+  1,
+  Math.min(4, Number(process.env.OPENSEA_MINT_RADAR_MAX_PAGES || 2))
+);
+const openSeaMintRadarMaxItems = Math.max(
+  6,
+  Math.min(48, Number(process.env.OPENSEA_MINT_RADAR_MAX_ITEMS || 48))
+);
+const openSeaMintRadarLimitation =
+  "Tracks the live and upcoming drops surfaced by OpenSea, not every NFT mint on every launch site.";
 
 function createIntegrationHealthEntry(status = "missing", details = {}) {
   return {
@@ -6551,6 +6575,484 @@ function chooseOpenSeaCollectionContract(contracts = [], options = {}) {
   return candidates.find((entry) => entry.resolvedChainKey) || candidates[0];
 }
 
+function normalizeWhitespace(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function decodeHtmlEntities(value = "") {
+  const namedEntities = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"'
+  };
+
+  return String(value || "").replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity) => {
+    const normalizedEntity = String(entity || "").toLowerCase();
+
+    if (normalizedEntity in namedEntities) {
+      return namedEntities[normalizedEntity];
+    }
+
+    if (normalizedEntity.startsWith("#x")) {
+      const codePoint = Number.parseInt(normalizedEntity.slice(2), 16);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    }
+
+    if (normalizedEntity.startsWith("#")) {
+      const codePoint = Number.parseInt(normalizedEntity.slice(1), 10);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    }
+
+    return match;
+  });
+}
+
+function stripHtmlTags(value = "") {
+  return normalizeWhitespace(
+    decodeHtmlEntities(
+      String(value || "")
+        .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+    )
+  );
+}
+
+function collapseRepeatedText(value = "") {
+  const normalized = normalizeWhitespace(value);
+  const repeatedMatch = normalized.match(/^(.{20,}?)\s+\1$/i);
+  return repeatedMatch ? repeatedMatch[1].trim() : normalized;
+}
+
+function extractOpenSeaCollectionSlug(value = "") {
+  try {
+    const url = new URL(String(value || ""), openSeaDropsBaseUrl);
+    const pathname = decodeURIComponent(url.pathname || "");
+    const match = pathname.match(/^\/(?:[a-z]{2}\/)?collection\/([^/?#]+)/i);
+    return match ? normalizeWhitespace(match[1]) : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeOpenSeaMintRadarStatus(text = "") {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) {
+    return "unknown";
+  }
+
+  if (/\bminting now\b|\bstatus minting\b|\blive now\b/.test(normalized)) {
+    return "live";
+  }
+
+  if (/\bmint starts in\b|\bcoming soon\b|\bupcoming\b|\bstarts in\b/.test(normalized)) {
+    return "upcoming";
+  }
+
+  return "unknown";
+}
+
+function shouldKeepOpenSeaMintRadarCard(text = "") {
+  const normalized = String(text || "").toLowerCase();
+  const hasMintWord = /\bmint/.test(normalized);
+  const hasLaunchSignal =
+    /\bminting now\b|\bmint starts in\b|\bmint price\b|\bstatus minting\b|\beligible\b/.test(normalized);
+  return hasMintWord && hasLaunchSignal;
+}
+
+function extractOpenSeaMintRadarMetadata(text = "") {
+  const normalized = collapseRepeatedText(text);
+  const creatorMatch = normalized.match(
+    /\bBy\s+(.+?)(?=\s+(?:Minting now|Status Minting|Mint price|Total items|Items minted|Mint starts in)\b|$)/i
+  );
+  const nameMatch = normalized.match(
+    /^(.*?)(?=\s+(?:By\s+.+?\s+)?(?:Minting now|Status Minting|Mint price|Mint starts in|Total items)\b|$)/i
+  );
+  const priceMatch = normalized.match(
+    /(?:\bminting now\b|\bmint price\b)\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)/i
+  );
+  const startsMatch = normalized.match(
+    /\bMint starts in\b\s+(.+?)(?=\s+(?:Mint price|Total items|Items minted|Status)\b|$)/i
+  );
+  const totalItemsMatch = normalized.match(/\bTotal items\b\s+([0-9,]+|Open edition)/i);
+  const mintedCountMatch = normalized.match(/\bItems minted\b\s+([0-9,]+)/i);
+  const status = normalizeOpenSeaMintRadarStatus(normalized);
+
+  const summaryParts = [];
+  if (priceMatch) {
+    summaryParts.push(`Mint price ${priceMatch[1]} ${String(priceMatch[2] || "").toUpperCase()}`);
+  }
+  if (startsMatch) {
+    summaryParts.push(`Starts in ${normalizeWhitespace(startsMatch[1])}`);
+  } else if (status === "live") {
+    summaryParts.push("Minting now");
+  }
+  if (totalItemsMatch) {
+    summaryParts.push(`Total items ${normalizeWhitespace(totalItemsMatch[1])}`);
+  }
+  if (mintedCountMatch) {
+    summaryParts.push(`Items minted ${normalizeWhitespace(mintedCountMatch[1])}`);
+  }
+
+  return {
+    rawText: normalized,
+    name: normalizeWhitespace(nameMatch?.[1] || ""),
+    creator: normalizeWhitespace(creatorMatch?.[1] || ""),
+    status,
+    priceText: priceMatch ? `${priceMatch[1]} ${String(priceMatch[2] || "").toUpperCase()}` : "",
+    scheduleText: startsMatch ? `Starts in ${normalizeWhitespace(startsMatch[1])}` : "",
+    totalItemsText: normalizeWhitespace(totalItemsMatch?.[1] || ""),
+    mintedCountText: normalizeWhitespace(mintedCountMatch?.[1] || ""),
+    summary: summaryParts.join(" · ")
+  };
+}
+
+function mergeOpenSeaMintRadarEntries(baseEntry, candidateEntry) {
+  if (!baseEntry) {
+    return candidateEntry;
+  }
+
+  const mergedStatus =
+    baseEntry.status === "live" || candidateEntry.status === "live"
+      ? "live"
+      : baseEntry.status === "upcoming" || candidateEntry.status === "upcoming"
+        ? "upcoming"
+        : baseEntry.status || candidateEntry.status || "unknown";
+
+  return {
+    ...baseEntry,
+    ...candidateEntry,
+    name:
+      candidateEntry.name && candidateEntry.name.length >= (baseEntry.name || "").length
+        ? candidateEntry.name
+        : baseEntry.name || candidateEntry.name,
+    creator: baseEntry.creator || candidateEntry.creator,
+    priceText: baseEntry.priceText || candidateEntry.priceText,
+    scheduleText: baseEntry.scheduleText || candidateEntry.scheduleText,
+    totalItemsText: baseEntry.totalItemsText || candidateEntry.totalItemsText,
+    mintedCountText: baseEntry.mintedCountText || candidateEntry.mintedCountText,
+    summary: baseEntry.summary || candidateEntry.summary,
+    warnings: [...new Set([...(baseEntry.warnings || []), ...(candidateEntry.warnings || [])])],
+    sources: [...new Set([...(baseEntry.sources || []), ...(candidateEntry.sources || [])])],
+    status: mergedStatus
+  };
+}
+
+function parseOpenSeaMintRadarEntries(html = "", options = {}) {
+  const pageLabel = normalizeWhitespace(options.pageLabel || "OpenSea Drops");
+  const baseUrl = options.baseUrl || openSeaDropsBaseUrl;
+  const entriesBySlug = new Map();
+  const anchorPattern =
+    /<a\b[^>]*href=(["'])([^"'#>]+)\1[^>]*>([\s\S]*?)<\/a>/gi;
+  let match = null;
+
+  while ((match = anchorPattern.exec(String(html || "")))) {
+    const [, , hrefValue, anchorHtml] = match;
+    const slug = extractOpenSeaCollectionSlug(hrefValue);
+    if (!slug) {
+      continue;
+    }
+
+    const anchorText = collapseRepeatedText(stripHtmlTags(anchorHtml));
+    if (!shouldKeepOpenSeaMintRadarCard(anchorText)) {
+      continue;
+    }
+
+    const metadata = extractOpenSeaMintRadarMetadata(anchorText);
+    if (!metadata.name) {
+      continue;
+    }
+
+    const url = new URL(hrefValue, baseUrl);
+    const entry = {
+      slug,
+      name: metadata.name,
+      creator: metadata.creator,
+      status: metadata.status,
+      url: `https://opensea.io/collection/${encodeURIComponent(slug)}`,
+      priceText: metadata.priceText,
+      scheduleText: metadata.scheduleText,
+      totalItemsText: metadata.totalItemsText,
+      mintedCountText: metadata.mintedCountText,
+      summary: metadata.summary || metadata.rawText,
+      rawText: metadata.rawText,
+      sources: [pageLabel],
+      warnings: []
+    };
+
+    if (url.hostname && !/opensea\.io$/i.test(url.hostname)) {
+      entry.warnings.push(`Parsed a non-OpenSea hostname for ${slug}.`);
+    }
+
+    entriesBySlug.set(slug, mergeOpenSeaMintRadarEntries(entriesBySlug.get(slug), entry));
+  }
+
+  return [...entriesBySlug.values()];
+}
+
+async function fetchOpenSeaDropsHtml(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), openSeaMintRadarFetchTimeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenSea Drops request failed with status ${response.status}`);
+    }
+
+    return await response.text();
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("OpenSea Drops request timed out.");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function enrichOpenSeaMintRadarEntries(entries = [], apiKey = "") {
+  if (!apiKey || !Array.isArray(entries) || entries.length === 0) {
+    return entries;
+  }
+
+  const enrichedEntries = entries.map((entry) => ({ ...entry }));
+  const pendingEntries = [...enrichedEntries];
+  const concurrency = Math.max(1, Math.min(4, pendingEntries.length));
+
+  async function worker() {
+    while (pendingEntries.length > 0) {
+      const entry = pendingEntries.shift();
+      if (!entry?.slug) {
+        continue;
+      }
+
+      try {
+        const payload = await fetchOpenSeaCollectionBySlug({
+          slug: entry.slug,
+          apiKey
+        });
+        const collection = normalizeOpenSeaCollection(payload, { slug: entry.slug });
+        const selectedContract = chooseOpenSeaCollectionContract(collection.contracts, {
+          fallbackChainKey: "ethereum"
+        });
+        const chainKey = normalizeOpenSeaChainKey(selectedContract?.chain);
+        const chain = chainKey ? findAvailableChainByKey(chainKey) : null;
+
+        entry.collectionName = collection.name || entry.name;
+        entry.description = collection.description || "";
+        entry.imageUrl = collection.imageUrl || "";
+        entry.externalUrl = collection.externalUrl || "";
+        entry.url = collection.openseaUrl || entry.url;
+        entry.nftContractAddress = selectedContract?.address || "";
+        entry.chainKey = chain?.key || chainKey || "";
+        entry.chainLabel = chain?.label || chainLabel(chainKey);
+      } catch (error) {
+        entry.warnings = [...new Set([...(entry.warnings || []), `Collection enrichment failed: ${formatError(error)}`])];
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return enrichedEntries;
+}
+
+function buildOpenSeaMintRadarPageUrls() {
+  const urls = [
+    {
+      url: new URL("/drops", openSeaDropsBaseUrl).toString(),
+      label: "Live & Upcoming"
+    }
+  ];
+
+  for (let page = 1; page <= openSeaMintRadarMaxPages; page += 1) {
+    const upcomingUrl = new URL("/drops/upcoming/", openSeaDropsBaseUrl);
+    if (page > 1) {
+      upcomingUrl.searchParams.set("page", String(page));
+    }
+    urls.push({
+      url: upcomingUrl.toString(),
+      label: page === 1 ? "Upcoming" : `Upcoming Page ${page}`
+    });
+  }
+
+  return urls;
+}
+
+function sortOpenSeaMintRadarEntries(entries = []) {
+  const statusRank = {
+    live: 0,
+    upcoming: 1,
+    unknown: 2
+  };
+
+  return [...entries].sort((left, right) => {
+    const leftRank = statusRank[left.status] ?? 9;
+    const rightRank = statusRank[right.status] ?? 9;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+
+    return String(left.name || "").localeCompare(String(right.name || ""));
+  });
+}
+
+function summarizeOpenSeaMintRadarStatus(entries = []) {
+  return entries.reduce(
+    (summary, entry) => {
+      const key = entry.status === "live" ? "live" : entry.status === "upcoming" ? "upcoming" : "unknown";
+      summary[key] += 1;
+      summary.total += 1;
+      return summary;
+    },
+    { total: 0, live: 0, upcoming: 0, unknown: 0 }
+  );
+}
+
+async function buildOpenSeaMintRadarSnapshot() {
+  const resolvedSecrets = resolveIntegrationSecrets(integrationSecrets);
+  const pageTargets = buildOpenSeaMintRadarPageUrls();
+  const pageResults = await Promise.allSettled(
+    pageTargets.map(async (target) => ({
+      ...target,
+      html: await fetchOpenSeaDropsHtml(target.url)
+    }))
+  );
+  const entriesBySlug = new Map();
+  const warnings = [];
+  const pageErrors = [];
+
+  pageResults.forEach((result, index) => {
+    const target = pageTargets[index];
+    if (result.status !== "fulfilled") {
+      pageErrors.push(`${target.label}: ${formatError(result.reason)}`);
+      return;
+    }
+
+    const parsedEntries = parseOpenSeaMintRadarEntries(result.value.html, {
+      pageLabel: target.label,
+      baseUrl: openSeaDropsBaseUrl
+    });
+
+    parsedEntries.forEach((entry) => {
+      entriesBySlug.set(entry.slug, mergeOpenSeaMintRadarEntries(entriesBySlug.get(entry.slug), entry));
+    });
+  });
+
+  if (pageErrors.length > 0) {
+    warnings.push(...pageErrors);
+  }
+
+  let items = sortOpenSeaMintRadarEntries([...entriesBySlug.values()]);
+
+  if (items.length === 0) {
+    throw new Error(
+      pageErrors.length > 0
+        ? `OpenSea Drops could not be parsed. ${pageErrors[0]}`
+        : "OpenSea Drops returned no live or upcoming mint cards."
+    );
+  }
+
+  if (!resolvedSecrets.openseaApiKey) {
+    warnings.push("OpenSea API key is not configured, so collection enrichment is unavailable.");
+  } else {
+    const enrichedItems = await enrichOpenSeaMintRadarEntries(items, resolvedSecrets.openseaApiKey);
+    if (Array.isArray(enrichedItems) && enrichedItems.length > 0) {
+      items = sortOpenSeaMintRadarEntries(enrichedItems);
+    }
+  }
+
+  return {
+    limitation: openSeaMintRadarLimitation,
+    fetchedAt: new Date().toISOString(),
+    items,
+    counts: summarizeOpenSeaMintRadarStatus(items),
+    warnings
+  };
+}
+
+function filterOpenSeaMintRadarSnapshot(snapshot, options = {}) {
+  const statusFilter = String(options.status || "all").trim().toLowerCase();
+  const chainFilter = String(options.chainKey || "all").trim().toLowerCase();
+  const limit = Math.max(1, Math.min(openSeaMintRadarMaxItems, Number(options.limit || openSeaMintRadarMaxItems)));
+  const filteredItems = (Array.isArray(snapshot?.items) ? snapshot.items : [])
+    .filter((entry) => statusFilter === "all" || entry.status === statusFilter)
+    .filter((entry) => {
+      if (chainFilter === "all") {
+        return true;
+      }
+
+      const entryChainKey = String(entry?.chainKey || "").trim().toLowerCase();
+      if (chainFilter === "__unknown") {
+        return !entryChainKey;
+      }
+
+      return entryChainKey === chainFilter;
+    })
+    .slice(0, limit);
+
+  return {
+    limitation: snapshot?.limitation || openSeaMintRadarLimitation,
+    fetchedAt: snapshot?.fetchedAt || new Date().toISOString(),
+    counts: summarizeOpenSeaMintRadarStatus(filteredItems),
+    warnings: Array.isArray(snapshot?.warnings) ? snapshot.warnings : [],
+    items: filteredItems
+  };
+}
+
+async function getOpenSeaMintRadarSnapshot(options = {}) {
+  const forceRefresh = Boolean(options.forceRefresh);
+  const now = Date.now();
+  const staleSnapshot = openSeaMintRadarCache.value;
+
+  if (!forceRefresh && staleSnapshot && openSeaMintRadarCache.expiresAt > now) {
+    return filterOpenSeaMintRadarSnapshot(staleSnapshot, options);
+  }
+
+  if (!forceRefresh && openSeaMintRadarCache.pending) {
+    return filterOpenSeaMintRadarSnapshot(await openSeaMintRadarCache.pending, options);
+  }
+
+  openSeaMintRadarCache.pending = buildOpenSeaMintRadarSnapshot()
+    .then((snapshot) => {
+      openSeaMintRadarCache = {
+        expiresAt: Date.now() + openSeaMintRadarCacheTtlMs,
+        value: snapshot,
+        pending: null
+      };
+      return snapshot;
+    })
+    .catch((error) => {
+      openSeaMintRadarCache.pending = null;
+      if (staleSnapshot) {
+        return {
+          ...staleSnapshot,
+          warnings: [
+            ...new Set([
+              ...(Array.isArray(staleSnapshot.warnings) ? staleSnapshot.warnings : []),
+              `Refresh failed, showing cached data: ${formatError(error)}`
+            ])
+          ]
+        };
+      }
+      throw error;
+    });
+
+  return filterOpenSeaMintRadarSnapshot(await openSeaMintRadarCache.pending, options);
+}
+
 async function discoverOpenSeaSource({
   sourceTarget,
   sourceStage = "auto",
@@ -9585,6 +10087,31 @@ async function handleSourceDiscovery(request, response) {
   }
 }
 
+async function handleOpenSeaMintRadar(url, response) {
+  try {
+    const status = String(url.searchParams.get("status") || "all").trim().toLowerCase();
+    const chainKey = String(url.searchParams.get("chainKey") || "all").trim().toLowerCase();
+    const limit = Number(url.searchParams.get("limit") || openSeaMintRadarMaxItems);
+    const forceRefresh = ["1", "true", "yes"].includes(
+      String(url.searchParams.get("refresh") || "").trim().toLowerCase()
+    );
+    const snapshot = await getOpenSeaMintRadarSnapshot({
+      status: ["live", "upcoming", "all"].includes(status) ? status : "all",
+      chainKey: chainKey || "all",
+      limit,
+      forceRefresh
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      source: "opensea_drops",
+      ...snapshot
+    });
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: formatError(error) });
+  }
+}
+
 async function verifyExplorerApiKey(apiKey) {
   if (/^https?:\/\//i.test(apiKey) || /etherscan/i.test(apiKey) || /apikey=/i.test(apiKey)) {
     throw new Error("Paste the raw Etherscan V2 API key only, not a link or URL.");
@@ -10341,6 +10868,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/mint-radar/opensea") {
+      await handleOpenSeaMintRadar(url, response);
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/telemetry") {
       handleTelemetry(response);
       return;
@@ -10718,6 +11250,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  extractOpenSeaCollectionSlug,
+  parseOpenSeaMintRadarEntries,
   resolveHost,
   resolvePort,
   startServer,

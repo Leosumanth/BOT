@@ -723,6 +723,61 @@ body[data-current-view="tasks"] .header-input::placeholder {
   align-items: flex-start;
 }
 
+.mint-radar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.mint-radar-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.mint-radar-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.mint-radar-card-header > div {
+  display: grid;
+  gap: 6px;
+}
+
+.mint-radar-top-meta,
+.mint-radar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.mint-radar-top-meta {
+  justify-content: flex-end;
+}
+
+.mint-radar-warning-list {
+  margin-top: 14px;
+}
+
+.mint-radar-summary {
+  min-height: 42px;
+}
+
+.mint-radar-meta {
+  flex-wrap: wrap;
+}
+
+.mint-radar-card-note {
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 203, 112, 0.16);
+  background: rgba(255, 190, 92, 0.08);
+}
+
 .header-input,
 .header-select {
   min-width: 190px;

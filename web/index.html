@@ -54,6 +54,7 @@
           <nav class="sidebar-nav">
             <button class="nav-button active" data-view="dashboard" type="button">Dashboard</button>
             <button class="nav-button" data-view="tasks" type="button">Tasks</button>
+            <button class="nav-button" data-view="mint-radar" type="button">Mint Radar</button>
             <button class="nav-button" data-view="wallets" type="button">Wallets</button>
             <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
             <button class="nav-button" data-view="assistant" type="button">Operator AI</button>
@@ -192,6 +193,54 @@
           </section>
 
           <div id="task-grid" class="task-grid advanced-task-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="mint-radar">
+          <div class="view-header">
+            <div>
+              <h2>Mint Radar</h2>
+              <p class="view-subtitle">
+                Track the live and upcoming drops OpenSea is surfacing right now, then push any collection straight into the public mint task builder.
+              </p>
+            </div>
+            <div class="header-actions">
+              <select id="mint-radar-chain-input" class="header-select">
+                <option value="all">All Chains</option>
+              </select>
+              <select id="mint-radar-filter-input" class="header-select">
+                <option value="all">All Drops</option>
+                <option value="live">Live</option>
+                <option value="upcoming">Upcoming</option>
+              </select>
+              <button id="mint-radar-refresh-button" class="primary-button fx-button" type="button">Refresh Feed</button>
+            </div>
+          </div>
+
+          <section class="surface" data-tilt>
+            <div class="surface-header compact">
+              <div>
+                <h3>OpenSea Drops Feed</h3>
+                <p id="mint-radar-status" class="helper-copy">
+                  Load the current OpenSea live and upcoming drop feed, filter it by chain, and route any collection into a public mint task.
+                </p>
+              </div>
+              <div class="surface-actions mint-radar-top-meta">
+                <span id="mint-radar-count" class="muted-copy">No feed loaded yet.</span>
+                <span id="mint-radar-updated" class="muted-copy">Not refreshed</span>
+              </div>
+            </div>
+            <p id="mint-radar-limitation" class="helper-copy">
+              This radar follows the drops OpenSea currently surfaces. It is not a universal calendar for every NFT mint on every website.
+            </p>
+          </section>
+
+          <div id="mint-radar-warning-list" class="stack-list mint-radar-warning-list"></div>
+          <div id="mint-radar-list" class="mint-radar-grid">
+            <div class="empty-state">
+              <h3>No radar data yet</h3>
+              <p>Refresh the OpenSea feed to load live and upcoming drops.</p>
+            </div>
+          </div>
         </section>
 
         <section class="view" data-view-panel="wallets">

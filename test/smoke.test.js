@@ -16,6 +16,10 @@ const { normalizeConfig } = require("../src/config");
 const { createDefaultPersistentState, normalizePersistentState } = require("../src/database");
 const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = require("../src/queue");
 const { resolveHost, resolvePort } = require("../src/server");
+const {
+  extractOpenSeaCollectionSlug,
+  parseOpenSeaMintRadarEntries
+} = require("../src/dashboard-server");
 
 const sampleAbi = [
   {
@@ -345,4 +349,36 @@ test("server host/port helpers honor env fallbacks", () => {
     assert.equal(resolveHost(), "0.0.0.0");
     assert.equal(resolvePort(), 4567);
   });
+});
+
+test("dashboard radar parser extracts live and upcoming OpenSea drops", () => {
+  const sampleHtml = `
+    <main>
+      <a href="/collection/gummiez/overview">
+        Gummiez By everytimezone Minting now 0.0005 ETH Total items 3,333
+      </a>
+      <a href="https://opensea.io/collection/phygitals-30th-edition">
+        Phygitals: 30th Edition By PhygitalsTeam Mint price 0.012 ETH Total items 1,000 Mint starts in 00 : 02 : 12 : 33
+      </a>
+      <a href="/blog/creator-spotlight">
+        Creator Spotlight
+      </a>
+    </main>
+  `;
+
+  assert.equal(extractOpenSeaCollectionSlug("/collection/gummiez/overview"), "gummiez");
+  assert.equal(
+    extractOpenSeaCollectionSlug("https://opensea.io/collection/phygitals-30th-edition"),
+    "phygitals-30th-edition"
+  );
+
+  const entries = parseOpenSeaMintRadarEntries(sampleHtml, {
+    pageLabel: "Smoke Feed"
+  });
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].slug, "gummiez");
+  assert.equal(entries[0].status, "live");
+  assert.equal(entries[0].priceText, "0.0005 ETH");
+  assert.equal(entries[1].status, "upcoming");
+  assert.match(entries[1].scheduleText, /Starts in 00 : 02 : 12 : 33/);
 });
