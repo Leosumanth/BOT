@@ -496,6 +496,10 @@ function mintFunctionCandidateScore(entry) {
     return -1;
   }
 
+  if (normalizedName === "mintseadrop") {
+    return -1;
+  }
+
   if (
     /^(set|get|is|has|supports|owner|admin|pause|unpause|toggle|update|edit|configure|config|withdraw|airdrop|reserve)/.test(
       normalizedName

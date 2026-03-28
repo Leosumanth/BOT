@@ -501,6 +501,12 @@ let currentMintStartDetection = {
   enabled: false,
   config: null
 };
+let currentTaskLaunchRecommendation = {
+  mode: "",
+  waitUntilIso: "",
+  reason: ""
+};
+let currentTaskExecutionBlocker = "";
 let assistantState = {
   loading: false,
   messages: []
@@ -6936,6 +6942,8 @@ async function requestTaskSourceDiscovery(options = {}) {
       taskAbiInput.value = "";
       setTaskAbiOrigin("", lookupKey);
       setMintStartDetectionState(null);
+      setTaskLaunchRecommendation(null);
+      setTaskExecutionBlocker("");
       renderPhasePreview([]);
       updateAbiStatus("OpenSea auto-discovery found the contract, but ABI auto-load is not available yet.");
     }
@@ -6947,6 +6955,7 @@ async function requestTaskSourceDiscovery(options = {}) {
 
     const autofill = response.autofill || discovery.autofill || null;
     if (autofill) {
+      applyAutofillRouting(autofill, { sourceLabel: "OpenSea auto-discovery" });
       setMintStartDetectionState(autofill.mintStartDetection || null);
       renderPhasePreview(autofill.phasePreview || []);
       applyMintAutofill(autofill, {
@@ -6958,6 +6967,8 @@ async function requestTaskSourceDiscovery(options = {}) {
       });
       updateAbiStatus(buildAbiStatusSourceLabel("OpenSea auto-discovery", autofill));
     } else if (abiEntries.length > 0) {
+      setTaskLaunchRecommendation(null);
+      setTaskExecutionBlocker("");
       applyAbiAutofillFromCurrentInput({
         sourceLabel: "OpenSea auto-discovery",
         includeFunction: true,
@@ -7037,6 +7048,126 @@ function setMintStartDetectionState(value = null) {
   syncTaskSimpleLaunchFields();
 }
 
+function normalizeTaskLaunchRecommendation(value = null) {
+  const config = value && typeof value === "object" ? value : null;
+  const rawMode = String(config?.mode || "").trim().toLowerCase();
+  const mode = ["utc", "live", "onchain", "mempool", "block"].includes(rawMode) ? rawMode : "";
+  const waitUntilIso = String(config?.waitUntilIso || "").trim();
+  const reason = String(config?.reason || "").trim();
+
+  return {
+    mode,
+    waitUntilIso,
+    reason
+  };
+}
+
+function setTaskLaunchRecommendation(value = null) {
+  currentTaskLaunchRecommendation = normalizeTaskLaunchRecommendation(value);
+  syncTaskSimpleLaunchFields();
+}
+
+function setTaskExecutionBlocker(value = "") {
+  currentTaskExecutionBlocker = String(value || "").trim();
+  syncTaskSimpleLaunchFields();
+}
+
+function applyRecommendedLaunchPlan(options = {}) {
+  const { force = false, silent = true } = options;
+  const recommendation = currentTaskLaunchRecommendation;
+  if (!taskSimpleLaunchModeInput || !recommendation.mode) {
+    return false;
+  }
+
+  const currentMode = normalizeTaskQuickLaunchSignal(taskSimpleLaunchModeInput.value);
+  if (!force && currentMode !== "onchain") {
+    return false;
+  }
+
+  if (recommendation.mode === "utc" && recommendation.waitUntilIso) {
+    const utcValue = isoStringToUtcDateTimeLocalValue(recommendation.waitUntilIso);
+    if (!utcValue) {
+      return false;
+    }
+
+    taskSimpleLaunchModeInput.value = "utc";
+    taskSimpleStartTimeInput.value = utcValue;
+    applyTaskSimpleLaunchToAdvanced();
+    syncTaskSimpleLaunchFromAdvanced();
+    if (!silent) {
+      showToast(
+        "A launch time was detected from contract metadata, so the task was switched to UTC Schedule automatically.",
+        "info",
+        "Launch Mode Updated"
+      );
+    }
+    return true;
+  }
+
+  if (recommendation.mode === "live") {
+    taskSimpleLaunchModeInput.value = "live";
+    taskSimpleStartTimeInput.value = "";
+    applyTaskSimpleLaunchToAdvanced();
+    syncTaskSimpleLaunchFromAdvanced();
+    if (!silent) {
+      showToast(
+        "This mint appears live, so the task was switched to Run ASAP automatically.",
+        "info",
+        "Launch Mode Updated"
+      );
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function applyAutofillRouting(autofill, options = {}) {
+  if (!autofill || typeof autofill !== "object") {
+    setTaskLaunchRecommendation(null);
+    setTaskExecutionBlocker("");
+    return false;
+  }
+
+  const { sourceLabel = "" } = options;
+  let routeChanged = false;
+  const nextContractAddress = String(autofill.contractAddressOverride || "").trim();
+  const nextAbiEntries = Array.isArray(autofill.abiOverride) ? autofill.abiOverride : null;
+
+  if (nextContractAddress && nextContractAddress !== String(taskContractInput.value || "").trim()) {
+    taskContractInput.value = nextContractAddress;
+    routeChanged = true;
+  }
+
+  if (nextAbiEntries && nextAbiEntries.length > 0) {
+    const nextAbiJson = JSON.stringify(nextAbiEntries, null, 2);
+    if (nextAbiJson !== String(taskAbiInput.value || "")) {
+      taskAbiInput.value = nextAbiJson;
+      setTaskAbiOrigin(
+        "autofill",
+        buildTaskAbiLookupKey(taskChainInput.value, nextContractAddress || taskContractInput.value.trim())
+      );
+      routeChanged = true;
+    }
+  }
+
+  setTaskLaunchRecommendation(autofill.launchRecommendation || null);
+  setTaskExecutionBlocker(autofill.executionBlocker || "");
+  if (applyRecommendedLaunchPlan({ silent: true })) {
+    routeChanged = true;
+  }
+
+  if (routeChanged && sourceLabel) {
+    showToast(
+      `${sourceLabel} switched this task to the correct mint contract and launch mode automatically.`,
+      "info",
+      "Mint Route Updated"
+    );
+  }
+
+  return routeChanged;
+}
+
 function findAbiFunctionEntry(abiEntries, functionName) {
   const requested = String(functionName || "").trim().toLowerCase();
   if (!requested) {
@@ -7104,6 +7235,10 @@ function writableAbiFunctionEntries(abiEntries) {
 function mintFunctionCandidateScore(entry) {
   const normalizedName = normalizeAbiName(entry?.name);
   if (!normalizedName) {
+    return -1;
+  }
+
+  if (normalizedName === "mintseadrop") {
     return -1;
   }
 
@@ -7214,6 +7349,16 @@ function resolveMintFunctionFromAbi(abiEntries, requestedFunction = "") {
 }
 
 function inferTaskPlatformFromAbi(abiEntries, mintFunction = "") {
+  const hasSeaDropTokenPattern =
+    Boolean(findAbiFunctionEntry(abiEntries, "mintSeaDrop")) &&
+    Boolean(findAbiFunctionEntry(abiEntries, "updatePublicDrop"));
+  const hasSeaDropMintPattern =
+    Boolean(findAbiFunctionEntry(abiEntries, "mintPublic")) &&
+    Boolean(findAbiFunctionEntry(abiEntries, "getPublicDrop"));
+  if (hasSeaDropTokenPattern || hasSeaDropMintPattern) {
+    return "OpenSea SeaDrop";
+  }
+
   const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
   const abiNames = abiEntries
     .filter((entry) => typeof entry?.name === "string")
@@ -7494,6 +7639,9 @@ function buildAbiStatusSourceLabel(sourceLabel, autofill = null) {
   if (sourceLabel) {
     parts.push(sourceLabel);
   }
+  if (autofill?.routeLabel) {
+    parts.push(autofill.routeLabel);
+  }
   if (autofill?.mintStartDetection?.enabled) {
     parts.push("mint start detection armed");
   }
@@ -7616,6 +7764,7 @@ async function requestRemoteMintAutofill(abiEntries, options = {}) {
       return null;
     }
 
+    applyAutofillRouting(autofill, { sourceLabel: "Contract autofill" });
     setMintStartDetectionState(autofill.mintStartDetection || null);
     renderPhasePreview(autofill.phasePreview || []);
     applyMintAutofill(autofill, {
@@ -7667,6 +7816,8 @@ function applyAbiAutofillFromCurrentInput(options = {}) {
       Number(taskQuantityInput.value || 1)
     );
     setMintStartDetectionState(null);
+    setTaskLaunchRecommendation(null);
+    setTaskExecutionBlocker("");
     renderPhasePreview([]);
     applyMintAutofill(localAutofill, {
       includeFunction,
@@ -7736,6 +7887,7 @@ async function fetchAbiForCurrentTask(options = {}) {
 
     taskAbiInput.value = JSON.stringify(payload.abi, null, 2);
     setTaskAbiOrigin("explorer", lookupKey);
+    applyAutofillRouting(payload.autofill || null, { sourceLabel: payload.provider || "Explorer" });
     setMintStartDetectionState(payload.autofill?.mintStartDetection || null);
     renderPhasePreview(payload.autofill?.phasePreview || []);
     applyMintAutofill(
@@ -7756,14 +7908,16 @@ async function fetchAbiForCurrentTask(options = {}) {
       );
     }
 
-    requestRemoteMintAutofill(payload.abi || [], {
-      sourceLabel: `${payload.provider || "Explorer"} wallet preview`,
-      includeFunction: false,
-      includeArgs: false,
-      includeQuantity: false,
-      includePrice: false,
-      includePlatform: false
-    }).catch(() => {});
+    if (!Array.isArray(payload.autofill?.abiOverride) || payload.autofill.abiOverride.length === 0) {
+      requestRemoteMintAutofill(payload.abi || [], {
+        sourceLabel: `${payload.provider || "Explorer"} wallet preview`,
+        includeFunction: false,
+        includeArgs: false,
+        includeQuantity: false,
+        includePrice: false,
+        includePlatform: false
+      }).catch(() => {});
+    }
   } catch {
     if (requestId === abiExplorerFetchRequestId) {
       updateAbiStatus();
@@ -7868,6 +8022,16 @@ function openTaskModal(task = null) {
       ? task.mintStartDetectionConfig
       : {})
   });
+  setTaskLaunchRecommendation(
+    task?.useSchedule && task?.waitUntilIso
+      ? {
+          mode: "utc",
+          waitUntilIso: task.waitUntilIso,
+          reason: "Saved task schedule"
+        }
+      : null
+  );
+  setTaskExecutionBlocker("");
   if (taskQuickDropTypeInput) {
     taskQuickDropTypeInput.value = taskQuickDropTypeFromTask(task);
   }
@@ -8016,16 +8180,22 @@ function syncTaskSimpleLaunchFields() {
 
   if (taskSimpleLaunchHint) {
     taskSimpleLaunchHint.textContent =
-      mode === "utc"
+      currentTaskExecutionBlocker
+        ? currentTaskExecutionBlocker
+        : mode === "utc"
         ? "Enter the launch time in UTC. MintBot saves it in UTC and still waits on mint-open reads when the ABI exposes them."
         : mode === "block"
           ? "Only use Exact Block when the project gave a real block number or you derived one from trusted block intel. UTC times do not map to fixed blocks."
           : mode === "mempool"
             ? "Best when you know the admin opener transaction. Enter the function name or selector so the task fires as soon as that tx hits mempool."
-            : mode === "live"
+          : mode === "live"
               ? "Use this only when the mint is already live right now and you want MintBot to fire through the fast path immediately."
               : hasOnChainGate
                 ? "On-chain gating is ready. MintBot will pre-arm the task and wait for the sale-open signal before broadcasting."
+                : currentTaskLaunchRecommendation.mode === "utc" && currentTaskLaunchRecommendation.waitUntilIso
+                  ? "Contract metadata exposed a launch time, so MintBot can switch this task to UTC Schedule automatically."
+                  : currentTaskLaunchRecommendation.mode === "live"
+                    ? "Contract metadata suggests the mint is already live, so MintBot can switch this task to Run ASAP automatically."
                 : "Load the ABI first so MintBot can detect a sale-open read automatically, or switch to UTC Time if the project only shares a clock time.";
   }
 
@@ -8219,6 +8389,11 @@ function buildClaimTaskSettings() {
 function validateTaskQuickStrategy() {
   const mode = normalizeTaskQuickLaunchSignal(taskSimpleLaunchModeInput?.value);
 
+  if (currentTaskExecutionBlocker) {
+    showToast(currentTaskExecutionBlocker, "error", "Mint Blocked");
+    return false;
+  }
+
   if (mode === "utc") {
     if (!String(taskSimpleStartTimeInput?.value || "").trim()) {
       showToast("Enter the UTC launch time before saving this task.", "info", "UTC Time Required");
@@ -8249,6 +8424,10 @@ function validateTaskQuickStrategy() {
   }
 
   if (mode === "onchain" && !currentMintStartDetection.enabled && !String(taskReadyFunctionInput.value || "").trim()) {
+    if (applyRecommendedLaunchPlan({ force: true, silent: false })) {
+      return validateTaskQuickStrategy();
+    }
+
     showToast(
       "Load the ABI first so MintBot can detect the sale-open function, or switch to UTC Time / Run ASAP.",
       "info",
@@ -9396,6 +9575,8 @@ taskChainInput.addEventListener("change", () => {
     taskAbiInput.value = "";
     setTaskAbiOrigin("", "");
     setMintStartDetectionState(null);
+    setTaskLaunchRecommendation(null);
+    setTaskExecutionBlocker("");
     renderPhasePreview([]);
   }
 
@@ -9421,6 +9602,8 @@ taskContractInput.addEventListener("input", () => {
     taskAbiInput.value = "";
     setTaskAbiOrigin("", "");
     setMintStartDetectionState(null);
+    setTaskLaunchRecommendation(null);
+    setTaskExecutionBlocker("");
     renderPhasePreview([]);
     updateAbiStatus();
   }

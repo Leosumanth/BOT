@@ -3830,10 +3830,74 @@ const preferredMintFunctionNames = [
 const preferredMintFunctionNameSet = new Set(
   preferredMintFunctionNames.map((name) => normalizeAbiName(name))
 );
+const seaDropContractAddresses = Object.freeze({
+  ethereum: "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5"
+});
+const seaDropPublicMintAbi = Object.freeze([
+  {
+    inputs: [{ internalType: "address", name: "nftContract", type: "address" }],
+    name: "getPayers",
+    outputs: [{ internalType: "address[]", name: "", type: "address[]" }],
+    stateMutability: "view",
+    type: "function"
+  },
+  {
+    inputs: [{ internalType: "address", name: "nftContract", type: "address" }],
+    name: "getAllowedFeeRecipients",
+    outputs: [{ internalType: "address[]", name: "", type: "address[]" }],
+    stateMutability: "view",
+    type: "function"
+  },
+  {
+    inputs: [{ internalType: "address", name: "nftContract", type: "address" }],
+    name: "getPublicDrop",
+    outputs: [
+      {
+        components: [
+          { internalType: "uint80", name: "mintPrice", type: "uint80" },
+          { internalType: "uint48", name: "startTime", type: "uint48" },
+          { internalType: "uint48", name: "endTime", type: "uint48" },
+          {
+            internalType: "uint16",
+            name: "maxTotalMintableByWallet",
+            type: "uint16"
+          },
+          { internalType: "uint16", name: "feeBps", type: "uint16" },
+          {
+            internalType: "bool",
+            name: "restrictFeeRecipients",
+            type: "bool"
+          }
+        ],
+        internalType: "struct PublicDrop",
+        name: "",
+        type: "tuple"
+      }
+    ],
+    stateMutability: "view",
+    type: "function"
+  },
+  {
+    inputs: [
+      { internalType: "address", name: "nftContract", type: "address" },
+      { internalType: "address", name: "feeRecipient", type: "address" },
+      { internalType: "address", name: "minterIfNotPayer", type: "address" },
+      { internalType: "uint256", name: "quantity", type: "uint256" }
+    ],
+    name: "mintPublic",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function"
+  }
+]);
 
 function mintFunctionCandidateScore(entry) {
   const normalizedName = normalizeAbiName(entry?.name);
   if (!normalizedName) {
+    return -1;
+  }
+
+  if (normalizedName === "mintseadrop") {
     return -1;
   }
 
@@ -3955,6 +4019,10 @@ function isIntegerAbiType(type) {
 }
 
 function inferTaskPlatformFromAbi(abiEntries, mintFunction = "") {
+  if (isSeaDropTokenContractAbi(abiEntries) || isSeaDropMintContractAbi(abiEntries)) {
+    return "OpenSea SeaDrop";
+  }
+
   const mintEntry = findAbiFunctionEntry(abiEntries, mintFunction);
   const abiNames = abiEntries
     .filter((entry) => typeof entry?.name === "string")
@@ -3998,6 +4066,237 @@ function inferTaskPlatformFromAbi(abiEntries, mintFunction = "") {
   }
 
   return "Generic EVM (auto-detect)";
+}
+
+function isSeaDropTokenContractAbi(abiEntries) {
+  return Boolean(
+    findAbiFunctionEntry(abiEntries, "mintSeaDrop") &&
+      findAbiFunctionEntry(abiEntries, "updatePublicDrop")
+  );
+}
+
+function isSeaDropMintContractAbi(abiEntries) {
+  return Boolean(
+    findAbiFunctionEntry(abiEntries, "mintPublic") &&
+      findAbiFunctionEntry(abiEntries, "getPublicDrop")
+  );
+}
+
+function seaDropContractAddressForChain(chainKey) {
+  return seaDropContractAddresses[String(chainKey || "").trim().toLowerCase()] || "";
+}
+
+function normalizeSeaDropPublicDrop(value) {
+  if (!value) {
+    return null;
+  }
+
+  const source = Array.isArray(value)
+    ? {
+        mintPrice: value[0],
+        startTime: value[1],
+        endTime: value[2],
+        maxTotalMintableByWallet: value[3],
+        feeBps: value[4],
+        restrictFeeRecipients: value[5]
+      }
+    : value;
+
+  return {
+    mintPrice: source.mintPrice ?? source[0] ?? 0n,
+    startTime: source.startTime ?? source[1] ?? 0n,
+    endTime: source.endTime ?? source[2] ?? 0n,
+    maxTotalMintableByWallet:
+      source.maxTotalMintableByWallet ?? source[3] ?? 0,
+    feeBps: source.feeBps ?? source[4] ?? 0,
+    restrictFeeRecipients: Boolean(
+      source.restrictFeeRecipients ?? source[5] ?? false
+    )
+  };
+}
+
+async function buildSeaDropPublicAutofill({
+  chainKey,
+  nftContractAddress,
+  abiEntries,
+  walletIds = [],
+  rpcNodeIds = [],
+  quantityPerWallet = 1
+}) {
+  if (!isSeaDropTokenContractAbi(abiEntries || [])) {
+    return null;
+  }
+
+  const seaDropContractAddress = seaDropContractAddressForChain(chainKey);
+  if (!seaDropContractAddress || !ethers.isAddress(nftContractAddress)) {
+    return null;
+  }
+
+  const normalizedQuantity = Math.max(1, Number(quantityPerWallet || 1));
+  const warnings = [
+    `Detected ERC721SeaDrop. Switched the mint route to the shared SeaDrop contract ${seaDropContractAddress}.`
+  ];
+  let rpcNodeName = null;
+  let priceEth = "0";
+  let priceSource = "SeaDrop.getPublicDrop";
+  let waitUntilIso = "";
+  let feeRecipient = ethers.ZeroAddress;
+  let publicDrop = null;
+  let allowedPayers = [];
+  let executionBlocker = "";
+  const providerResult = await createReadProviderForChain(chainKey, rpcNodeIds);
+
+  if (!providerResult.provider) {
+    return null;
+  }
+
+  rpcNodeName = providerResult.rpcNode?.name || null;
+  try {
+    const contract = new ethers.Contract(
+      seaDropContractAddress,
+      seaDropPublicMintAbi,
+      providerResult.provider
+    );
+    const [publicDropResult, feeRecipientsResult, payersResult] = await Promise.allSettled([
+      contract.getPublicDrop(nftContractAddress),
+      contract.getAllowedFeeRecipients(nftContractAddress),
+      contract.getPayers(nftContractAddress)
+    ]);
+
+    if (publicDropResult.status === "fulfilled") {
+      publicDrop = normalizeSeaDropPublicDrop(publicDropResult.value);
+      const formattedPrice = formatEthString(publicDrop?.mintPrice);
+      if (formattedPrice !== null) {
+        priceEth = formattedPrice;
+      }
+      waitUntilIso = normalizeContractTimestampValue(publicDrop?.startTime) || "";
+    } else {
+      return null;
+    }
+
+    if (feeRecipientsResult.status === "fulfilled") {
+      const feeRecipients = Array.isArray(feeRecipientsResult.value)
+        ? feeRecipientsResult.value.filter((entry) => ethers.isAddress(entry))
+        : [];
+      if (feeRecipients.length > 0) {
+        feeRecipient = feeRecipients[0];
+      } else if (publicDrop?.restrictFeeRecipients) {
+        warnings.push(
+          "SeaDrop requires an allowed fee recipient, but no allowed fee recipient was returned."
+        );
+      }
+    } else {
+      warnings.push(
+        `SeaDrop fee recipient read failed: ${formatError(
+          feeRecipientsResult.reason
+        )}`
+      );
+    }
+
+    if (payersResult.status === "fulfilled") {
+      allowedPayers = Array.isArray(payersResult.value)
+        ? payersResult.value.filter((entry) => ethers.isAddress(entry))
+        : [];
+    }
+  } finally {
+    await destroyProvider(providerResult.provider);
+  }
+
+  if (allowedPayers.length > 0) {
+    const selectedWallets = (appState?.wallets || []).filter((wallet) =>
+      (walletIds || []).includes(wallet.id)
+    );
+    const selectedWalletAllowed = selectedWallets.some((wallet) =>
+      allowedPayers.some(
+        (payer) => payer.toLowerCase() === String(wallet.address || "").toLowerCase()
+      )
+    );
+
+    if (selectedWallets.length > 0 && !selectedWalletAllowed) {
+      executionBlocker =
+        "This collection restricts mint calls to approved payer contracts, so a direct wallet mint task will not succeed without the project’s relayer or website-backed flow.";
+      warnings.push(executionBlocker);
+    } else if (selectedWallets.length === 0) {
+      warnings.push(
+        "SeaDrop uses approved payer contracts for this collection. Select a wallet to verify whether direct minting is allowed."
+      );
+    }
+  }
+
+  const waitUntilMs = waitUntilIso ? new Date(waitUntilIso).getTime() : null;
+  const launchRecommendation =
+    waitUntilMs && waitUntilMs > Date.now()
+      ? {
+          mode: "utc",
+          waitUntilIso,
+          reason: "SeaDrop public drop start time"
+        }
+      : {
+          mode: "live",
+          waitUntilIso: "",
+          reason: "SeaDrop public drop"
+        };
+
+  return {
+    mintFunction: "mintPublic",
+    mintArgs: [
+      nftContractAddress,
+      feeRecipient,
+      "{{wallet}}",
+      normalizedQuantity
+    ],
+    quantityPerWallet: normalizedQuantity,
+    priceEth,
+    platform: "OpenSea SeaDrop",
+    detectedMintFunctions: ["mintPublic"],
+    mintStartDetection: {
+      enabled: false,
+      pollIntervalMs: 500,
+      saleActiveFunction: null,
+      pausedFunction: null,
+      totalSupplyFunction: null,
+      stateFunction: null,
+      signals: []
+    },
+    phasePreview: [
+      {
+        phaseType: "public",
+        label: "Public",
+        mintFunction: "mintPublic",
+        signature: "mintPublic(address,address,address,uint256)",
+        priceEth,
+        priceSource,
+        waitUntilIso: waitUntilIso || null,
+        startTimeSource: waitUntilIso ? "SeaDrop.getPublicDrop" : null,
+        autoLaunchMode:
+          launchRecommendation.mode === "utc" ? "scheduled" : "instant",
+        autoLaunchLabel:
+          launchRecommendation.mode === "utc"
+            ? "scheduled from SeaDrop public drop"
+            : "ready to launch through SeaDrop",
+        eligibilityStatus: "review",
+        eligibilityLabel: "SeaDrop route derived from contract metadata",
+        eligibleWalletLabels: [],
+        reviewWalletLabels: [],
+        ineligibleWalletLabels: [],
+        requiresReview: Boolean(executionBlocker),
+        rpcNodeName,
+        warning: executionBlocker || warnings[0] || null
+      }
+    ],
+    priceSource,
+    rpcNodeName,
+    warnings,
+    contractAddressOverride: seaDropContractAddress,
+    abiOverride: seaDropPublicMintAbi,
+    launchRecommendation,
+    routeLabel: executionBlocker ? "SeaDrop payer-restricted route" : "SeaDrop public mint route",
+    executionBlocker,
+    payerRestriction: {
+      enabled: allowedPayers.length > 0,
+      allowedPayers
+    }
+  };
 }
 
 function looksLikeQuantityInput(input, inputIndex, totalInputs) {
@@ -5963,6 +6262,18 @@ async function buildMintAutofill({
   quantityPerWallet = 1,
   claimTaskSettings = {}
 }) {
+  const seaDropAutofill = await buildSeaDropPublicAutofill({
+    chainKey,
+    nftContractAddress: contractAddress,
+    abiEntries,
+    walletIds,
+    rpcNodeIds,
+    quantityPerWallet
+  });
+  if (seaDropAutofill) {
+    return seaDropAutofill;
+  }
+
   const resolvedMintFunction = resolveMintFunctionFromAbi(abiEntries, requestedFunction);
   const warnings = [];
   const mintStartDetection = detectMintStartFunctionsFromAbi(abiEntries);
