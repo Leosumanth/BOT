@@ -19,9 +19,11 @@ const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = requi
 const { resolveHost, resolvePort } = require("../src/server");
 const {
   applyMintAutofillToTask,
+  buildMintValueFundingAssessment,
   extractOpenSeaCollectionSlug,
   formatTerminalLogEntry,
   parseOpenSeaMintRadarEntries,
+  selectPreferredSimulationError,
   seaDropContractAddressForChain
 } = require("../src/dashboard-server");
 
@@ -593,4 +595,32 @@ test("dashboard terminal log formatter emits timestamped backend log lines", () 
     line,
     "2026-03-30 10:22:33.456Z [WARNING] [task Fast Mint] Runtime prepared in 812ms"
   );
+});
+
+test("source discovery prefers a more useful simulation error over missing revert data", () => {
+  const genericError = Object.assign(new Error("missing revert data"), {
+    shortMessage: "missing revert data"
+  });
+  const betterError = Object.assign(new Error("insufficient funds for intrinsic transaction cost"), {
+    shortMessage: "insufficient funds for intrinsic transaction cost"
+  });
+
+  assert.equal(selectPreferredSimulationError(genericError, betterError), betterError);
+  assert.equal(selectPreferredSimulationError(betterError, genericError), betterError);
+});
+
+test("source discovery funding assessment flags underfunded wallets without treating them as eligible", () => {
+  assert.deepEqual(
+    buildMintValueFundingAssessment(100000000000000n, 400000000000000n),
+    {
+      status: "underfunded",
+      message: "wallet balance 0.0001 ETH is below the mint value 0.0004 ETH by 0.0003 ETH (gas is extra)",
+      shortfallWei: 300000000000000n
+    }
+  );
+
+  assert.deepEqual(buildMintValueFundingAssessment(500000000000000n, 400000000000000n), {
+    status: "funded",
+    message: "wallet balance 0.0005 ETH covers the mint value 0.0004 ETH (gas is extra)"
+  });
 });

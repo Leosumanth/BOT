@@ -4230,27 +4230,46 @@ async function simulateSeaDropDirectWalletMint({
   quantity,
   value
 }) {
+  const txRequest = {
+    from: walletAddress,
+    to: seaDropContractAddress,
+    data: seaDropPublicMintInterface.encodeFunctionData("mintPublic", [
+      nftContractAddress,
+      feeRecipient,
+      walletAddress,
+      quantity
+    ]),
+    value
+  };
+
   try {
-    await provider.call({
-      from: walletAddress,
-      to: seaDropContractAddress,
-      data: seaDropPublicMintInterface.encodeFunctionData("mintPublic", [
-        nftContractAddress,
-        feeRecipient,
-        walletAddress,
-        quantity
-      ]),
-      value
-    });
+    await provider.call(txRequest);
     return {
       success: true,
-      error: null
+      error: null,
+      estimatedGas: null,
+      usedEstimateGasFallback: false
     };
-  } catch (error) {
-    return {
-      success: false,
-      error
-    };
+  } catch (callError) {
+    try {
+      const estimatedGas = await provider.estimateGas(txRequest);
+      return {
+        success: true,
+        error: null,
+        estimatedGas,
+        usedEstimateGasFallback: true,
+        callError
+      };
+    } catch (estimateGasError) {
+      return {
+        success: false,
+        error: selectPreferredSimulationError(callError, estimateGasError),
+        callError,
+        estimateGasError,
+        estimatedGas: null,
+        usedEstimateGasFallback: false
+      };
+    }
   }
 }
 
@@ -4346,16 +4365,51 @@ async function buildSeaDropPublicAutofill({
 
     if (selectedWallets.length > 0 && publicDrop) {
       const mintValue = BigInt(publicDrop.mintPrice || 0n) * BigInt(normalizedQuantity);
+      pushLog({
+        level: "info",
+        message: `[source discovery] SeaDrop public preflight on ${chainKey || "unknown chain"} for ${nftContractAddress} at ${formatEthString(
+          mintValue
+        ) || "0"} ETH total across ${selectedWallets.length} wallet${selectedWallets.length === 1 ? "" : "s"}`,
+        timestamp: new Date().toISOString()
+      });
       walletEligibility = await Promise.all(
         selectedWallets.map(async (wallet) => {
-          const simulation = await simulateSeaDropDirectWalletMint({
-            provider: providerResult.provider,
-            seaDropContractAddress,
-            nftContractAddress,
-            feeRecipient,
-            walletAddress: wallet.address,
-            quantity: normalizedQuantity,
-            value: mintValue
+          const [balanceResult, simulation] = await Promise.all([
+            providerResult.provider.getBalance(wallet.address).catch(() => null),
+            simulateSeaDropDirectWalletMint({
+              provider: providerResult.provider,
+              seaDropContractAddress,
+              nftContractAddress,
+              feeRecipient,
+              walletAddress: wallet.address,
+              quantity: normalizedQuantity,
+              value: mintValue
+            })
+          ]);
+          const balanceWei = typeof balanceResult === "bigint" ? balanceResult : null;
+          const fundingAssessment = buildMintValueFundingAssessment(balanceWei, mintValue);
+          const simulationReason = simulation.success ? "" : formatError(simulation.error);
+          const logParts = [
+            `[source discovery] SeaDrop wallet ${wallet.label}: ${fundingAssessment.message || "wallet balance unavailable"}`
+          ];
+
+          if (simulation.success) {
+            logParts.push(
+              simulation.usedEstimateGasFallback
+                ? "direct-wallet simulation passed via estimateGas fallback"
+                : "direct-wallet simulation passed"
+            );
+            if (simulation.estimatedGas != null) {
+              logParts.push(`estimated gas ${simulation.estimatedGas.toString()}`);
+            }
+          } else {
+            logParts.push(`direct-wallet simulation failed: ${simulationReason}`);
+          }
+
+          pushLog({
+            level: simulation.success ? "info" : "warning",
+            message: logParts.join(" | "),
+            timestamp: new Date().toISOString()
           });
 
           if (simulation.success) {
@@ -4363,16 +4417,23 @@ async function buildSeaDropPublicAutofill({
               walletId: wallet.id,
               walletLabel: wallet.label,
               status: "eligible",
-              source: "seadrop_direct_wallet_simulation"
+              source: simulation.usedEstimateGasFallback
+                ? "seadrop_direct_wallet_estimate_gas"
+                : "seadrop_direct_wallet_simulation",
+              balanceWei: balanceWei != null ? balanceWei.toString() : null,
+              fundingStatus: fundingAssessment.status
             };
           }
 
+          const combinedReason = [fundingAssessment.message, simulationReason].filter(Boolean).join(" | ");
           return {
             walletId: wallet.id,
             walletLabel: wallet.label,
             status: "review",
             source: "seadrop_direct_wallet_simulation",
-            reason: formatError(simulation.error)
+            reason: combinedReason || simulationReason || fundingAssessment.message || "SeaDrop preflight failed",
+            balanceWei: balanceWei != null ? balanceWei.toString() : null,
+            fundingStatus: fundingAssessment.status
           };
         })
       );
@@ -4385,17 +4446,50 @@ async function buildSeaDropPublicAutofill({
     const eligibleWalletLabels = walletEligibility
       .filter((entry) => entry.status === "eligible")
       .map((entry) => entry.walletLabel);
+    const fundedOrUnknownWallets = walletEligibility.filter((entry) => entry.fundingStatus !== "underfunded");
+    const underfundedWallets = walletEligibility.filter((entry) => entry.fundingStatus === "underfunded");
 
     if (eligibleWalletLabels.length === 0) {
-      const firstFailureReason =
-        walletEligibility.find((entry) => entry.reason)?.reason || "direct wallet mint simulation reverted";
+      if (fundedOrUnknownWallets.length === 0 && underfundedWallets.length > 0) {
+        const firstFundingReason =
+          underfundedWallets.find((entry) => entry.reason)?.reason ||
+          "Selected wallet balance is below the public mint value, so direct-wallet eligibility cannot be confirmed yet.";
+        warnings.push(firstFundingReason);
+      } else {
+        const firstFailureReason =
+          fundedOrUnknownWallets.find((entry) => entry.reason)?.reason ||
+          walletEligibility.find((entry) => entry.reason)?.reason ||
+          "direct wallet mint simulation reverted";
       executionBlocker =
         "This collection restricts mint calls to approved payer contracts, so a direct wallet mint task will not succeed without the project’s relayer or website-backed flow.";
       warnings.push(executionBlocker);
       executionBlocker =
         `Direct wallet public-mint simulation failed for the selected wallet, so this collection is not currently mintable through the bot. (${firstFailureReason})`;
       warnings[warnings.length - 1] = executionBlocker;
+      }
     }
+
+    if (underfundedWallets.length > 0) {
+      warnings.push(
+        `Low wallet balance detected for ${underfundedWallets
+          .map((entry) => entry.walletLabel)
+          .join(", ")}. Fund the selected wallet with at least the mint value plus gas, then retry discovery for a conclusive direct-wallet check.`
+      );
+    }
+  }
+
+  if (executionBlocker) {
+    pushLog({
+      level: "warning",
+      message: `[source discovery] SeaDrop preflight blocked direct-wallet automation: ${executionBlocker}`,
+      timestamp: new Date().toISOString()
+    });
+  } else if (selectedWallets.length > 0 && warnings.length > 0) {
+    pushLog({
+      level: "info",
+      message: `[source discovery] SeaDrop preflight note: ${warnings[warnings.length - 1]}`,
+      timestamp: new Date().toISOString()
+    });
   }
 
   if (selectedWallets.length === 0 && allowedPayers.length > 0) {
@@ -4577,6 +4671,71 @@ function formatEthString(value, decimals = 18) {
   const formatted = ethers.formatUnits(value, normalizedDecimals);
   const trimmed = formatted.includes(".") ? formatted.replace(/\.?0+$/, "") : formatted;
   return trimmed || "0";
+}
+
+function isGenericSimulationMessage(message = "") {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return [
+    "missing revert data",
+    "execution reverted",
+    "call exception",
+    "server error",
+    "internal json-rpc error"
+  ].some((fragment) => normalized.includes(fragment));
+}
+
+function selectPreferredSimulationError(primaryError, secondaryError) {
+  if (!secondaryError) {
+    return primaryError;
+  }
+
+  if (!primaryError) {
+    return secondaryError;
+  }
+
+  const primaryMessage = formatError(primaryError);
+  const secondaryMessage = formatError(secondaryError);
+
+  if (/insufficient funds/i.test(secondaryMessage) && !/insufficient funds/i.test(primaryMessage)) {
+    return secondaryError;
+  }
+
+  if (isGenericSimulationMessage(primaryMessage) && secondaryMessage && secondaryMessage !== primaryMessage) {
+    return secondaryError;
+  }
+
+  return primaryError;
+}
+
+function buildMintValueFundingAssessment(balanceWei, mintValueWei) {
+  if (typeof balanceWei !== "bigint" || typeof mintValueWei !== "bigint") {
+    return {
+      status: "unknown",
+      message: ""
+    };
+  }
+
+  if (balanceWei < mintValueWei) {
+    const shortfallWei = mintValueWei - balanceWei;
+    return {
+      status: "underfunded",
+      message: `wallet balance ${formatEthString(balanceWei) || "0"} ETH is below the mint value ${formatEthString(
+        mintValueWei
+      ) || "0"} ETH by ${formatEthString(shortfallWei) || "0"} ETH (gas is extra)`,
+      shortfallWei
+    };
+  }
+
+  return {
+    status: "funded",
+    message: `wallet balance ${formatEthString(balanceWei) || "0"} ETH covers the mint value ${formatEthString(
+      mintValueWei
+    ) || "0"} ETH (gas is extra)`
+  };
 }
 
 function formatUsdString(value) {
@@ -9401,8 +9560,18 @@ async function handleTaskSave(request, response) {
   try {
     const payload = await readJsonBody(request);
     const result = await saveTaskPayload(payload);
+    pushLog({
+      level: "info",
+      message: `[task save] Saved ${result.autoGeneratedPhaseTasks ? "phase task set" : "task"} ${result.task?.name || payload.name || "Untitled Task"}`,
+      timestamp: new Date().toISOString()
+    });
     sendJson(response, 200, result);
   } catch (error) {
+    pushLog({
+      level: "error",
+      message: `[task save] ${formatError(error)}`,
+      timestamp: new Date().toISOString()
+    });
     sendJson(response, error.statusCode || 400, { error: formatError(error) });
   }
 }
@@ -10397,6 +10566,14 @@ async function handleSourceDiscovery(request, response) {
     const sourceType = String(payload.sourceType || "").trim().toLowerCase();
     const sourceTarget = String(payload.sourceTarget || "").trim();
     const sourceStage = String(payload.sourceStage || "auto").trim();
+    pushLog({
+      level: "info",
+      message: `[source discovery] Starting ${sourceType || "unknown"} discovery for ${sourceTarget || "unknown target"} (${Math.max(
+        1,
+        Number(payload.quantityPerWallet || 1)
+      )} qty, ${Array.isArray(payload.walletIds) ? payload.walletIds.length : 0} wallet${Array.isArray(payload.walletIds) && payload.walletIds.length === 1 ? "" : "s"})`,
+      timestamp: new Date().toISOString()
+    });
 
     if (!sourceType) {
       throw new Error("Source type is required for auto-discovery.");
@@ -10427,7 +10604,19 @@ async function handleSourceDiscovery(request, response) {
       abi: discovery.abi || [],
       autofill: discovery.autofill || null
     });
+    pushLog({
+      level: discovery.autofill?.executionBlocker ? "warning" : "info",
+      message: `[source discovery] ${discovery.collection?.name || sourceTarget} resolved on ${discovery.chainLabel || discovery.chainKey || "unknown chain"}${
+        discovery.autofill?.executionBlocker ? ` | blocked: ${discovery.autofill.executionBlocker}` : ""
+      }`,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
+    pushLog({
+      level: "error",
+      message: `[source discovery] ${formatError(error)}`,
+      timestamp: new Date().toISOString()
+    });
     sendJson(response, 400, { error: formatError(error) });
   }
 }
@@ -11601,11 +11790,13 @@ if (require.main === module) {
 
 module.exports = {
   applyMintAutofillToTask,
+  buildMintValueFundingAssessment,
   extractOpenSeaCollectionSlug,
   formatTerminalLogEntry,
   parseOpenSeaMintRadarEntries,
   resolveHost,
   resolvePort,
+  selectPreferredSimulationError,
   seaDropContractAddressForChain,
   startServer,
   stopServer
