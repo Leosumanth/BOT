@@ -1927,6 +1927,257 @@ function taskStatusMeta(status) {
   };
 }
 
+const TASK_RUNTIME_PIPELINE = [
+  {
+    key: "backend",
+    code: "CTRL",
+    label: "Contacting backend",
+    shortLabel: "Backend Link",
+    detail: "Linking the dashboard to the execution control plane.",
+    traceLabel: "contacting backend control plane"
+  },
+  {
+    key: "rpc",
+    code: "RPC",
+    label: "Provisioning RPC mesh",
+    shortLabel: "RPC Mesh",
+    detail: "Selecting healthy broadcast lanes and warming provider sockets.",
+    traceLabel: "provisioning rpc mesh"
+  },
+  {
+    key: "gas",
+    code: "GAS",
+    label: "Checking gas lanes",
+    shortLabel: "Gas Scan",
+    detail: "Sampling fee pressure, boost settings, and replacement thresholds.",
+    traceLabel: "checking gas fees and replacement lanes"
+  },
+  {
+    key: "route",
+    code: "ROUTE",
+    label: "Arming mint route",
+    shortLabel: "Route Armed",
+    detail: "Locking the mint route, launch window, and sale-open trigger logic.",
+    traceLabel: "arming mint route and launch triggers"
+  },
+  {
+    key: "payload",
+    code: "PAYLOAD",
+    label: "Forging payload",
+    shortLabel: "Payload Forge",
+    detail: "Encoding calldata, simulating the path, and pre-signing execution payloads.",
+    traceLabel: "forging calldata and signed payload"
+  },
+  {
+    key: "broadcast",
+    code: "BURST",
+    label: "Broadcasting strike",
+    shortLabel: "Burst Cast",
+    detail: "Submitting the payload across the active RPC mesh.",
+    traceLabel: "broadcasting payload across rpc mesh"
+  },
+  {
+    key: "receipt",
+    code: "TRACE",
+    label: "Sweeping receipts",
+    shortLabel: "Receipt Sweep",
+    detail: "Following mempool echoes, block inclusion, and receipt state.",
+    traceLabel: "sweeping receipts and chain confirmations"
+  },
+  {
+    key: "seal",
+    code: "ARCHIVE",
+    label: "Run sealed",
+    shortLabel: "Run Sealed",
+    detail: "Execution snapshot archived and awaiting the next strike.",
+    traceLabel: "archiving execution snapshot"
+  }
+];
+
+function normalizeTaskPhaseKey(phase = "") {
+  const normalized = String(phase || "").trim().toLowerCase();
+  if (!normalized) {
+    return "ready";
+  }
+
+  if (normalized.includes("queue")) {
+    return "queued";
+  }
+
+  if (normalized.includes("pre-sign")) {
+    return "pre-signing";
+  }
+
+  if (normalized.includes("broadcast")) {
+    return "broadcasting";
+  }
+
+  if (normalized.includes("sett")) {
+    return "settling";
+  }
+
+  if (normalized.includes("final")) {
+    return "finalizing";
+  }
+
+  if (normalized.includes("prepar")) {
+    return "preparing";
+  }
+
+  if (normalized.includes("schedul") || normalized.includes("waiting")) {
+    return "waiting";
+  }
+
+  if (normalized.includes("arm")) {
+    return "arming";
+  }
+
+  if (normalized.includes("complete")) {
+    return "completed";
+  }
+
+  if (normalized.includes("fail")) {
+    return "failed";
+  }
+
+  if (normalized.includes("stop")) {
+    return "stopped";
+  }
+
+  return normalized;
+}
+
+function resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent) {
+  if (statusKey === "completed" || phaseKey === "completed" || phaseKey === "finalizing") {
+    return 7;
+  }
+
+  if (phaseKey === "broadcasting") {
+    return 5;
+  }
+
+  if (phaseKey === "settling") {
+    return 6;
+  }
+
+  if (phaseKey === "pre-signing") {
+    return progressPercent >= 28 ? 4 : 2;
+  }
+
+  if (phaseKey === "arming" || phaseKey === "waiting") {
+    return 3;
+  }
+
+  if (phaseKey === "preparing") {
+    if (progressPercent <= 3) {
+      return 0;
+    }
+
+    return progressPercent <= 10 ? 1 : 2;
+  }
+
+  return 0;
+}
+
+function buildTaskTraceWindow(stageIndex, mode = "running") {
+  const windowStart = Math.max(0, Math.min(stageIndex - 1, TASK_RUNTIME_PIPELINE.length - 3));
+  const visibleStages = TASK_RUNTIME_PIPELINE.slice(windowStart, Math.min(TASK_RUNTIME_PIPELINE.length, windowStart + 3));
+
+  return visibleStages.map((stage, index) => {
+    const absoluteIndex = windowStart + index;
+    let state = "pending";
+
+    if (mode === "completed") {
+      state = "complete";
+    } else if (mode === "failed" || mode === "stopped") {
+      if (absoluteIndex < stageIndex) {
+        state = "complete";
+      } else if (absoluteIndex === stageIndex) {
+        state = "error";
+      }
+    } else if (absoluteIndex < stageIndex) {
+      state = "complete";
+    } else if (absoluteIndex === stageIndex) {
+      state = "active";
+    }
+
+    return {
+      code: stage.code,
+      label: stage.traceLabel,
+      state
+    };
+  });
+}
+
+function taskRuntimeNarrative(task, statusKey = "draft") {
+  const progress = task?.progress || { phase: "Ready", percent: 0 };
+  const progressPercent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const phaseKey = normalizeTaskPhaseKey(progress.phase);
+
+  if (statusKey === "draft" || statusKey === "ready") {
+    return {
+      phaseLabel: "Standby",
+      detail: "Awaiting operator command before the control plane goes live.",
+      signalLabel: "Execution standby",
+      sidebarLabel: "Standby",
+      trace: [
+        { code: "IDLE", label: "awaiting operator launch command", state: "active" },
+        { code: "RPC", label: "rpc mesh idle until launch", state: "pending" },
+        { code: "EXEC", label: "execution payload not armed", state: "pending" }
+      ]
+    };
+  }
+
+  if (statusKey === "queued" || phaseKey === "queued") {
+    return {
+      phaseLabel: "Launch lane armed",
+      detail: "The control plane accepted the task and is opening a live execution lane.",
+      signalLabel: "Launch lane armed",
+      sidebarLabel: "Queue Armed",
+      trace: [
+        { code: "QUEUE", label: "launch request accepted by control plane", state: "complete" },
+        { code: "HANDOFF", label: "preparing live execution handoff", state: "active" },
+        { code: "EXEC", label: "execution lane opening next", state: "pending" }
+      ]
+    };
+  }
+
+  if (statusKey === "failed" || statusKey === "stopped") {
+    const stageIndex = resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent);
+    return {
+      phaseLabel: statusKey === "stopped" ? "Operator abort" : "Route fault",
+      detail:
+        statusKey === "stopped"
+          ? "Execution was interrupted by operator command before the strike completed."
+          : "Execution fault captured. Inspect the backend terminal and latest logs for the failure surface.",
+      signalLabel: statusKey === "stopped" ? "Abort signal pushed" : "Fault captured",
+      sidebarLabel: statusKey === "stopped" ? "Abort Signal" : "Route Fault",
+      trace: buildTaskTraceWindow(stageIndex, statusKey)
+    };
+  }
+
+  const stageIndex = resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent);
+  const stage = TASK_RUNTIME_PIPELINE[stageIndex];
+
+  if (statusKey === "completed") {
+    return {
+      phaseLabel: stage.label,
+      detail: stage.detail,
+      signalLabel: "Receipt archived",
+      sidebarLabel: stage.shortLabel,
+      trace: buildTaskTraceWindow(stageIndex, "completed")
+    };
+  }
+
+  return {
+    phaseLabel: stage.label,
+    detail: stage.detail,
+    signalLabel: stage.shortLabel,
+    sidebarLabel: stage.shortLabel,
+    trace: buildTaskTraceWindow(stageIndex, "running")
+  };
+}
+
 function taskVisualStatus(task, activeTaskIdSet = null) {
   const activeIds = activeTaskIdSet || new Set(activeTaskIds());
   if (activeIds.has(task.id) && state.runState.status === "running") {
@@ -3205,6 +3456,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
   const updatedLabel = active ? "Live now" : `Updated ${relativeTime(task.updatedAt)}`;
   const sourceLabel = task.sourceLabel || findMintSourceDefinition(task.sourceType).label;
   const sourceSummary = task.sourceSummary || sourceLabel;
+  const runtime = taskRuntimeNarrative(task, statusKey);
 
   if (task.multiRpcBroadcast) {
     tags.push("RPC Mesh");
@@ -3216,7 +3468,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
         <div>
           <p class="eyebrow">${escapeHtml(chainLabel(task.chainKey))}</p>
           <h3>${escapeHtml(task.name || "Untitled Task")}</h3>
-          <p class="muted-copy">${escapeHtml(task.platform || "Mint Flow")} / ${escapeHtml(humanizePriority(task.priority || "standard"))} priority / ${escapeHtml(statusMeta.detail)}</p>
+          <p class="muted-copy">${escapeHtml(task.platform || "Mint Flow")} / ${escapeHtml(humanizePriority(task.priority || "standard"))} priority / ${escapeHtml(runtime.detail)}</p>
         </div>
         <div class="task-head-side">
           <span class="status-pill ${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.label)}</span>
@@ -3248,10 +3500,29 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
       </div>
 
       <div class="task-progress-row">
-        <span class="muted-copy">${escapeHtml(progress.phase || "Ready")} / ${progressPercent}%</span>
-        <span class="task-signal-chip ${escapeHtml(statusMeta.tone)}">${escapeHtml(active ? "Live execution" : updatedLabel)}</span>
+        <span class="muted-copy">${escapeHtml(runtime.phaseLabel)} / ${progressPercent}%</span>
+        <span class="task-signal-chip ${escapeHtml(statusMeta.tone)}">${escapeHtml(active || queued ? runtime.signalLabel : updatedLabel)}</span>
       </div>
       <div class="progress-track"><div class="progress-bar" style="width:${progressPercent}%"></div></div>
+
+      <div class="task-trace-panel">
+        <div class="task-trace-header">
+          <span class="task-trace-title">System Trace</span>
+          <span class="task-trace-caption">${escapeHtml(runtime.detail)}</span>
+        </div>
+        <div class="task-trace-lines">
+          ${runtime.trace
+            .map(
+              (entry) => `
+                <div class="task-trace-line ${escapeHtml(entry.state)}">
+                  <span class="task-trace-code">${escapeHtml(entry.code)}</span>
+                  <span class="task-trace-copy">${escapeHtml(entry.label)}</span>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
 
       ${task.notes ? `<p class="muted-copy">${escapeHtml(task.notes)}</p>` : ""}
 
@@ -3364,13 +3635,17 @@ function renderTasks() {
 
         if (action === "run") {
           await request(`/api/tasks/${taskId}/run`, { method: "POST" });
-          showToast(`${task?.name || "Task"} launch requested.`, "success", "Task Launch");
+          showToast(
+            `${task?.name || "Task"} linked to the control plane. Contacting backend, provisioning RPC mesh, and checking gas lanes now.`,
+            "success",
+            "Execution Armed"
+          );
           return;
         }
 
         if (action === "stop") {
           await request(`/api/tasks/${taskId}/stop`, { method: "POST" });
-          showToast(`${task?.name || "Task"} stop requested.`, "info", "Run Control");
+          showToast(`${task?.name || "Task"} abort signal pushed to the control plane.`, "info", "Run Control");
         }
       } catch {}
     });
@@ -7258,6 +7533,7 @@ function renderShellTelemetry() {
   const active = activeTask();
   const activeTaskCount = activeTaskIds().length;
   const hasActionableAlert = activeAlerts.some((alert) => ["critical", "warning"].includes(alert.severity));
+  const activeRuntime = active ? taskRuntimeNarrative(active, "running") : null;
 
   body.dataset.runState = state.runState.status;
   if (accountLabel) {
@@ -7267,18 +7543,18 @@ function renderShellTelemetry() {
     accountStatus.textContent =
       state.runState.status === "running"
         ? activeTaskCount > 1
-          ? `${activeTaskCount} tasks running`
-          : "Task running"
+          ? `${activeTaskCount} live lanes`
+          : activeRuntime?.sidebarLabel || "Live run"
         : (state.runState.queuedTaskIds || []).length > 0
-          ? "Queue armed"
+          ? "Launch lane armed"
           : "Operator mode";
   }
   const heroMessage = active
     ? activeTaskCount > 1
-      ? `${pluralize(activeTaskCount, "task")} are executing concurrently. Primary run: ${active.name} on ${chainLabel(active.chainKey)} at ${active.progress?.percent || 0}% completion.`
-      : `${active.name} is active on ${chainLabel(active.chainKey)} with ${active.progress?.percent || 0}% completion.`
+      ? `${pluralize(activeTaskCount, "task")} are live in the control plane. Primary lane ${active.name} on ${chainLabel(active.chainKey)} is ${activeRuntime?.phaseLabel?.toLowerCase() || "executing"} at ${active.progress?.percent || 0}% completion.`
+      : `${active.name} // ${activeRuntime?.phaseLabel || "Live execution"}. ${activeRuntime?.detail || ""}`
     : (state.runState.queuedTaskIds || []).length > 0
-      ? `${pluralize((state.runState.queuedTaskIds || []).length, "task")} queued for worker execution across the Redis lane.`
+      ? `${pluralize((state.runState.queuedTaskIds || []).length, "task")} have a launch lane armed inside the control plane.`
       : "";
   heroModeCopy.textContent = heroMessage;
   heroModeCopy.classList.toggle("hidden", !heroMessage);
@@ -7287,10 +7563,10 @@ function renderShellTelemetry() {
     sidebarModeLabel.textContent = "Needs Attention";
     sidebarModeDot.className = "signal-dot alert";
   } else if (state.runState.status === "running") {
-    sidebarModeLabel.textContent = activeTaskCount > 1 ? "Live Runs" : "Live Run";
+    sidebarModeLabel.textContent = activeTaskCount > 1 ? "Live Runs" : activeRuntime?.sidebarLabel || "Live Run";
     sidebarModeDot.className = "signal-dot hot";
   } else if ((state.runState.queuedTaskIds || []).length > 0) {
-    sidebarModeLabel.textContent = "Queued";
+    sidebarModeLabel.textContent = "Lane Armed";
     sidebarModeDot.className = "signal-dot hot";
   } else {
     sidebarModeLabel.textContent = "Activated";
@@ -9321,7 +9597,11 @@ dashboardOpenTaskButton.addEventListener("click", () => {
 runPriorityButton?.addEventListener("click", async () => {
   try {
     const payload = await request("/api/control/run-priority", { method: "POST" });
-    showToast(`${payload.task?.name || "Priority task"} launch requested.`, "success", "Priority Launch");
+    showToast(
+      `${payload.task?.name || "Priority task"} is opening a live lane. Backend contact and RPC mesh provisioning are in flight.`,
+      "success",
+      "Priority Launch"
+    );
   } catch {}
 });
 
