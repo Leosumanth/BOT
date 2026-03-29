@@ -8448,6 +8448,57 @@ select:focus,
   box-shadow: 0 0 0 4px rgba(255, 98, 127, 0.08), 0 0 14px rgba(255, 98, 127, 0.18);
 }
 
+.history-list {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.history-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(57, 224, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(9, 16, 14, 0.88), rgba(5, 10, 8, 0.84)),
+    rgba(0, 0, 0, 0.18);
+}
+
+.history-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-item-copy,
+.history-error-copy {
+  margin: 0;
+}
+
+.history-hash-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.history-hash-chip {
+  font-family: var(--mono-font);
+  letter-spacing: 0.08em;
+}
+
+.history-error-copy {
+  color: #ffb0be;
+}
+
+.task-modal-open .toast-stack {
+  top: 22px;
+  right: 22px;
+  bottom: auto;
+}
+
 .task-action-primary {
   margin-left: auto;
 }
@@ -8461,7 +8512,164 @@ select:focus,
     padding-left: 14px;
   }
 
+  .history-item-head {
+    align-items: flex-start;
+  }
+
+  .task-modal-open .toast-stack {
+    top: auto;
+    bottom: 102px;
+  }
+
   .task-action-primary {
     margin-left: 0;
+  }
+}
+
+body[data-current-view="tasks"] .task-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 420px));
+  justify-content: start;
+  align-items: start;
+  gap: 16px;
+}
+
+body[data-current-view="tasks"] .task-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 18px;
+  gap: 14px;
+}
+
+body[data-current-view="tasks"] .task-head {
+  gap: 10px;
+}
+
+body[data-current-view="tasks"] .task-head-side {
+  gap: 6px;
+}
+
+body[data-current-view="tasks"] .task-card h3 {
+  margin-top: 2px;
+  font-size: clamp(20px, 1.8vw, 28px);
+  line-height: 1.05;
+}
+
+body[data-current-view="tasks"] .task-head-timestamp {
+  font-size: 11px;
+}
+
+body[data-current-view="tasks"] .status-pill {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+body[data-current-view="tasks"] .tag-chip,
+body[data-current-view="tasks"] .wallet-chip {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+body[data-current-view="tasks"] .task-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+body[data-current-view="tasks"] .meta-item {
+  min-height: 72px;
+  padding: 10px 12px;
+}
+
+body[data-current-view="tasks"] .meta-item label,
+body[data-current-view="tasks"] .stat-box label {
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+
+body[data-current-view="tasks"] .meta-item strong {
+  font-size: 14px;
+  line-height: 1.15;
+  letter-spacing: 0.03em;
+}
+
+body[data-current-view="tasks"] .task-stats {
+  gap: 8px;
+}
+
+body[data-current-view="tasks"] .stat-box {
+  padding: 10px 12px;
+}
+
+body[data-current-view="tasks"] .stat-box strong {
+  font-size: 24px;
+}
+
+body[data-current-view="tasks"] .task-progress-row {
+  gap: 8px;
+}
+
+body[data-current-view="tasks"] .task-signal-chip {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+body[data-current-view="tasks"] .progress-track {
+  height: 12px;
+}
+
+body[data-current-view="tasks"] .task-trace-panel {
+  padding: 12px 14px;
+  gap: 8px;
+}
+
+body[data-current-view="tasks"] .task-trace-line {
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+}
+
+body[data-current-view="tasks"] .task-trace-code {
+  font-size: 9px;
+}
+
+body[data-current-view="tasks"] .task-trace-copy {
+  font-size: 10px;
+}
+
+body[data-current-view="tasks"] .task-actions {
+  gap: 8px;
+}
+
+body[data-current-view="tasks"] .mini-button {
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+body[data-current-view="tasks"] .history-block {
+  padding-top: 10px;
+}
+
+body[data-current-view="tasks"] .history-list {
+  gap: 8px;
+  padding-top: 8px;
+}
+
+body[data-current-view="tasks"] .history-item {
+  padding: 10px 12px;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  body[data-current-view="tasks"] .task-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-current-view="tasks"] .task-card {
+    max-width: none;
   }
 }

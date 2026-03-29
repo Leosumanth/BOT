@@ -2233,6 +2233,94 @@ function taskVisualStatus(task, activeTaskIdSet = null) {
   return TASK_STATUS_META[normalized] ? normalized : "draft";
 }
 
+function taskHistoryStatusMeta(entry = {}) {
+  const status = String(entry?.status || "").trim().toLowerCase();
+  const summary = entry?.summary || {};
+
+  if (status === "failed") {
+    return {
+      tone: "failed",
+      label: "Failed"
+    };
+  }
+
+  if (status === "stopped") {
+    return {
+      tone: "stopped",
+      label: "Stopped"
+    };
+  }
+
+  if ((summary.failed || 0) > 0 && (summary.success || 0) > 0) {
+    return {
+      tone: "queued",
+      label: "Partial"
+    };
+  }
+
+  return {
+    tone: "completed",
+    label: "Completed"
+  };
+}
+
+function taskHistorySummaryCopy(entry = {}) {
+  const summary = entry?.summary || {};
+  const hashCount = Array.isArray(summary.hashes) ? summary.hashes.length : 0;
+  const total = Number(summary.total || 0);
+  const success = Number(summary.success || 0);
+  const failed = Number(summary.failed || 0);
+  const stopped = Number(summary.stopped || 0);
+
+  if (success > 0 || failed > 0 || stopped > 0 || total > 0) {
+    return `${success} success / ${failed} failed / ${stopped} stopped / ${hashCount} ${
+      hashCount === 1 ? "hash" : "hashes"
+    }`;
+  }
+
+  return hashCount > 0 ? `${hashCount} ${hashCount === 1 ? "hash" : "hashes"} captured` : "No transaction hash recorded";
+}
+
+function renderTaskHistoryItems(task) {
+  const entries = Array.isArray(task?.history) ? task.history.slice(0, 4) : [];
+  if (entries.length === 0) {
+    return `<p class="muted-copy">No run history recorded yet.</p>`;
+  }
+
+  return `<div class="history-list">
+    ${entries
+      .map((entry) => {
+        const summary = entry?.summary || {};
+        const hashList = Array.isArray(summary.hashes) ? summary.hashes.slice(0, 2) : [];
+        const statusMeta = taskHistoryStatusMeta(entry);
+        const errorText = String(entry?.error || "").trim();
+        const durationLabel =
+          Number(entry?.durationMs || 0) > 0 ? ` in ${formatDuration(entry.durationMs)}` : "";
+
+        return `
+          <div class="history-item">
+            <div class="history-item-head">
+              <strong>${escapeHtml(new Date(entry.ranAt).toLocaleString())}${escapeHtml(durationLabel)}</strong>
+              <span class="status-pill ${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.label)}</span>
+            </div>
+            <p class="muted-copy history-item-copy">${escapeHtml(taskHistorySummaryCopy(entry))}</p>
+            ${
+              hashList.length
+                ? `<div class="history-hash-row">
+                    ${hashList
+                      .map((hash) => `<span class="wallet-chip history-hash-chip">${escapeHtml(truncateMiddle(hash, 12, 8))}</span>`)
+                      .join("")}
+                  </div>`
+                : ""
+            }
+            ${errorText ? `<p class="muted-copy history-error-copy">${escapeHtml(truncateMiddle(errorText, 120, 36))}</p>` : ""}
+          </div>
+        `;
+      })
+      .join("")}
+  </div>`;
+}
+
 function summarizeTaskStatuses(tasks, activeTaskIdSet = null) {
   const activeIds = activeTaskIdSet || new Set(activeTaskIds());
   const counts = TASK_STATUS_ORDER.reduce((map, status) => {
@@ -2723,7 +2811,16 @@ function pushLocalLog(level, message) {
   renderLogs();
 }
 
-function showToast(message, tone = "info", title = null) {
+function isTaskModalOpen() {
+  return Boolean(taskModal && !taskModal.classList.contains("hidden"));
+}
+
+function showToast(message, tone = "info", title = null, options = {}) {
+  if (options.suppressWhenTaskModalOpen && isTaskModalOpen()) {
+    return null;
+  }
+
+  const hideAfterMs = Math.max(0, Number(options.hideAfterMs || 4200));
   const toast = document.createElement("div");
   toast.className = `toast ${tone}`;
   toast.innerHTML = `
@@ -2732,9 +2829,12 @@ function showToast(message, tone = "info", title = null) {
   `;
 
   toastStack.prepend(toast);
-  window.setTimeout(() => {
-    toast.remove();
-  }, 4200);
+  if (hideAfterMs > 0) {
+    window.setTimeout(() => {
+      toast.remove();
+    }, hideAfterMs);
+  }
+  return toast;
 }
 
 function assistantUsesSavedDashboardKey() {
@@ -3555,14 +3655,11 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
   const summary = task.summary || {};
   const progress = task.progress || { phase: "Ready", percent: 0 };
   const progressPercent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
-  const latestHistory = task.history?.[0];
-  const latestHistorySummary = latestHistory?.summary || {};
   const statusKey = taskVisualStatus(task, activeTaskIdSet);
   const statusMeta = taskStatusMeta(statusKey);
   const active = statusKey === "running";
   const queued = statusKey === "queued";
   const hashCount = Array.isArray(summary.hashes) ? summary.hashes.length : 0;
-  const latestHashCount = Array.isArray(latestHistorySummary.hashes) ? latestHistorySummary.hashes.length : 0;
   const tags = [...(task.tags || [])];
   const updatedLabel = active ? "Live now" : `Updated ${relativeTime(task.updatedAt)}`;
   const sourceLabel = task.sourceLabel || findMintSourceDefinition(task.sourceType).label;
@@ -3643,16 +3740,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
 
       <div class="history-block">
         <div class="muted-copy">History (${task.history?.length || 0})</div>
-        ${
-          latestHistory
-            ? `
-              <div class="history-item">
-                <strong>Last run: ${new Date(latestHistory.ranAt).toLocaleString()}</strong>
-                <p class="muted-copy">${latestHistorySummary.success ?? 0} success / ${latestHistorySummary.failed ?? 0} failed / ${latestHashCount} hashes</p>
-              </div>
-            `
-            : `<p class="muted-copy">No history recorded yet.</p>`
-        }
+        ${renderTaskHistoryItems(task)}
       </div>
     </article>
   `;
@@ -8012,7 +8100,7 @@ async function requestTaskSourceDiscovery(options = {}) {
     const autofill = response.autofill || discovery.autofill || null;
     if (autofill) {
       currentTaskMintAutofill = autofill;
-      applyAutofillRouting(autofill, { sourceLabel: "OpenSea auto-discovery" });
+      applyAutofillRouting(autofill, { sourceLabel: "OpenSea auto-discovery", notify: false });
       setMintStartDetectionState(autofill.mintStartDetection || null);
       renderPhasePreview(autofill.phasePreview || []);
       applyMintAutofill(autofill, {
@@ -8197,7 +8285,7 @@ function applyAutofillRouting(autofill, options = {}) {
     return false;
   }
 
-  const { sourceLabel = "" } = options;
+  const { sourceLabel = "", notify = !isTaskModalOpen() } = options;
   currentTaskMintAutofill = autofill;
   let routeChanged = false;
   const nextContractAddress = String(autofill.contractAddressOverride || "").trim();
@@ -8226,11 +8314,15 @@ function applyAutofillRouting(autofill, options = {}) {
     routeChanged = true;
   }
 
-  if (routeChanged && sourceLabel) {
+  if (routeChanged && sourceLabel && notify) {
     showToast(
       `${sourceLabel} switched this task to the correct mint contract and launch mode automatically.`,
       "info",
-      "Mint Route Updated"
+      "Mint Route Updated",
+      {
+        hideAfterMs: 2200,
+        suppressWhenTaskModalOpen: true
+      }
     );
   }
 
@@ -9138,6 +9230,7 @@ function openTaskModal(task = null) {
   renderRpcSelector(task?.rpcNodeIds || []);
   updateTaskMintSummary();
   taskModal.classList.remove("hidden");
+  document.body.classList.add("task-modal-open");
   initializeMotionSurfaces(taskModal);
 
   if ((task?.sourceType || taskSourceTypeInput.value) === "opensea" && String(taskSourceTargetInput.value || "").trim()) {
@@ -9149,6 +9242,7 @@ function openTaskModal(task = null) {
 
 function closeTaskModal() {
   taskModal.classList.add("hidden");
+  document.body.classList.remove("task-modal-open");
 }
 
 function setTaskAdvancedVisibility(visible) {

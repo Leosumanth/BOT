@@ -8770,6 +8770,31 @@ function createEmptySummary(total = 0) {
   };
 }
 
+function buildHistorySummaryForOutcome(status, total = 0) {
+  const summary = createEmptySummary(total);
+  if (status === "stopped") {
+    summary.stopped = total > 0 ? total : 1;
+  } else if (status === "failed") {
+    summary.failed = total > 0 ? total : 1;
+  }
+  return summary;
+}
+
+function buildTaskHistoryEntry({ status, ranAt, summary, error = "", durationMs = 0 }) {
+  return {
+    id: createId("history"),
+    status: String(status || "completed"),
+    ranAt: ranAt || new Date().toISOString(),
+    summary: summary || createEmptySummary(),
+    error: String(error || "").trim(),
+    durationMs: Math.max(0, Number(durationMs) || 0)
+  };
+}
+
+function appendTaskHistory(history = [], entry) {
+  return [entry, ...(Array.isArray(history) ? history : [])].slice(0, 8);
+}
+
 async function setTaskRuntimeRecord(taskId, patch) {
   const current = appState.taskRuntimeById?.[taskId] || null;
   const nextRecord = await database.upsertTaskRuntime({
@@ -9083,6 +9108,12 @@ async function startTaskRunLocal(taskId) {
         const taskAfterRun = getTaskById(taskId);
         const completedAt = new Date().toISOString();
         const totalDurationMs = Date.now() - runContext.requestedAtMs;
+        const historyEntry = buildTaskHistoryEntry({
+          status: "completed",
+          ranAt: completedAt,
+          summary,
+          durationMs: totalDurationMs
+        });
         clearDistributedTaskPatch(taskId);
         if (queueModeEnabled()) {
           await setTaskRuntimeRecord(taskId, {
@@ -9108,14 +9139,7 @@ async function startTaskRunLocal(taskId) {
           },
           summary,
           lastRunAt: completedAt,
-          history: [
-            {
-              id: createId("history"),
-              ranAt: completedAt,
-              summary
-            },
-            ...(taskAfterRun.history || [])
-          ].slice(0, 8)
+          history: appendTaskHistory(taskAfterRun.history, historyEntry)
         });
         await publishTaskSyncEvent(taskId);
         pushLog({
@@ -9129,15 +9153,25 @@ async function startTaskRunLocal(taskId) {
         const stopped = error instanceof AbortRunError || runContext.controller.signal.aborted;
         const failedAt = new Date().toISOString();
         const totalDurationMs = Date.now() - runContext.requestedAtMs;
+        const status = stopped ? "stopped" : "failed";
+        const failureSummary = buildHistorySummaryForOutcome(status, (task.walletIds || []).length);
+        const taskAfterRun = getTaskById(taskId);
+        const historyEntry = buildTaskHistoryEntry({
+          status,
+          ranAt: failedAt,
+          summary: failureSummary,
+          error: formatError(error),
+          durationMs: totalDurationMs
+        });
         clearDistributedTaskPatch(taskId);
         if (queueModeEnabled()) {
           await setTaskRuntimeRecord(taskId, {
-            status: stopped ? "stopped" : "failed",
+            status,
             progress: {
               phase: stopped ? "Stopped" : "Failed",
               percent: stopped ? 0 : 100
             },
-            summary: createEmptySummary((task.walletIds || []).length),
+            summary: failureSummary,
             active: false,
             queued: false,
             error: formatError(error),
@@ -9147,12 +9181,14 @@ async function startTaskRunLocal(taskId) {
           });
         }
         await updateTask(taskId, {
-          status: stopped ? "stopped" : "failed",
+          status,
           progress: {
             phase: stopped ? "Stopped" : "Failed",
             percent: stopped ? 0 : 100
           },
-          lastRunAt: failedAt
+          summary: failureSummary,
+          lastRunAt: failedAt,
+          history: appendTaskHistory(taskAfterRun?.history, historyEntry)
         });
         await publishTaskSyncEvent(taskId);
         pushLog({
@@ -9226,13 +9262,20 @@ async function reclaimQueuedTaskRun(taskId) {
     return { ok: true, reclaimed: true };
   } catch (error) {
     const failedAt = new Date().toISOString();
+    const failureSummary = buildHistorySummaryForOutcome("failed", (task.walletIds || []).length);
+    const historyEntry = buildTaskHistoryEntry({
+      status: "failed",
+      ranAt: failedAt,
+      summary: failureSummary,
+      error: formatError(error)
+    });
     await setTaskRuntimeRecord(taskId, {
       status: "failed",
       progress: {
         phase: "Failed",
         percent: 100
       },
-      summary: createEmptySummary((task.walletIds || []).length),
+      summary: failureSummary,
       active: false,
       queued: false,
       error: formatError(error),
@@ -9246,7 +9289,9 @@ async function reclaimQueuedTaskRun(taskId) {
         phase: "Failed",
         percent: 100
       },
-      lastRunAt: failedAt
+      summary: failureSummary,
+      lastRunAt: failedAt,
+      history: appendTaskHistory(task.history, historyEntry)
     });
     pushLog({
       level: "error",
