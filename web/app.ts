@@ -4215,8 +4215,10 @@ function setDashboardMintInlineStatus(message = "", tone = "info") {
     return;
   }
 
-  dashboardMintInlineStatus.textContent = message;
-  dashboardMintInlineStatus.dataset.tone = tone;
+  const normalizedMessage = String(message || "").trim();
+  dashboardMintInlineStatus.textContent = normalizedMessage;
+  dashboardMintInlineStatus.dataset.tone = normalizedMessage ? tone : "";
+  dashboardMintInlineStatus.classList.toggle("hidden", !normalizedMessage);
 }
 
 function renderDashboardMintHero() {
@@ -4261,12 +4263,6 @@ function renderDashboardMintHero() {
         : "Every one-click mint still lands in the Tasks workspace for review and control.";
   }
 
-  if (dashboardMintInlineStatus && !dashboardMintInlineStatus.textContent.trim()) {
-    setDashboardMintInlineStatus(
-      "Uses your first available wallet and the active RPC mesh. Advanced tuning still stays available in Tasks.",
-      "info"
-    );
-  }
 }
 
 function renderDashboard() {
@@ -11863,6 +11859,5 @@ loadSession()
     renderRpcSelector([]);
     connectEvents();
     setView("dashboard");
-    showToast("Advanced command surface online.", "success", "System Ready");
   })
   .catch(() => {});

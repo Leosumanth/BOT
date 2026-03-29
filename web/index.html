@@ -59,23 +59,21 @@
               <button class="nav-button" data-view="settings" type="button">Settings</button>
             </nav>
 
-            <div class="topbar-toolbar">
-              <div class="topbar-pill topbar-mode-pill">
-                <span id="sidebar-mode-dot" class="signal-dot"></span>
-                <span class="micro-label">Mode</span>
-                <strong id="sidebar-mode-label">Activated</strong>
-              </div>
-              <div class="topbar-pill topbar-time-pill">
-                <span class="micro-label">Time</span>
-                <strong id="live-clock">--:--:--</strong>
-              </div>
-              <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
-              <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Tasks</button>
-              <button id="logout-button" class="danger-button fx-button" type="button">Sign Out</button>
-            </div>
+            <button id="logout-button" class="danger-button fx-button topbar-signout" type="button">Sign Out</button>
           </div>
 
           <div class="topbar-hidden-mount hidden" aria-hidden="true">
+            <div class="topbar-pill topbar-mode-pill">
+                <span id="sidebar-mode-dot" class="signal-dot"></span>
+                <span class="micro-label">Mode</span>
+                <strong id="sidebar-mode-label">Activated</strong>
+            </div>
+            <div class="topbar-pill topbar-time-pill">
+                <span class="micro-label">Time</span>
+                <strong id="live-clock">--:--:--</strong>
+            </div>
+            <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
+            <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Tasks</button>
             <div class="account-card hud-panel" data-tilt>
               <div class="account-avatar" aria-hidden="true">OP</div>
               <div>
@@ -105,9 +103,7 @@
               <button id="dashboard-mint-submit-button" class="primary-button fx-button dashboard-mint-submit" type="submit">Mint</button>
             </form>
 
-            <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status">
-              Paste a collection URL and MintBot will route it into Tasks.
-            </p>
+            <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status hidden"></p>
           </section>
 
           <section class="dashboard-support-mount hidden" aria-hidden="true">
