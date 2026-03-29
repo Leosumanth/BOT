@@ -3458,6 +3458,7 @@ function defaultTaskState() {
     sourceTarget: "",
     sourceStage: "public",
     sourceConfigJson: "",
+    sourceExecutionBlocker: "",
     quantityPerWallet: 1,
     priceEth: "",
     abiJson: "",
@@ -3591,6 +3592,9 @@ function sanitizeTaskInput(payload, existingTask = null) {
     sourceTarget: sourceSelection.sourceTarget,
     sourceStage: "public",
     sourceConfigJson: sourceSelection.sourceConfigJson,
+    sourceExecutionBlocker: String(
+      payload.sourceExecutionBlocker ?? base.sourceExecutionBlocker ?? ""
+    ).trim(),
     quantityPerWallet: Math.max(1, Number(payload.quantityPerWallet || base.quantityPerWallet || 1)),
     priceEth: String(payload.priceEth ?? base.priceEth ?? "").trim(),
     abiJson: String(payload.abiJson || base.abiJson || "").trim(),
@@ -3703,6 +3707,77 @@ function sanitizeTaskInput(payload, existingTask = null) {
   };
 }
 
+function applyMintAutofillToTask(task, autofill) {
+  const nextTask = {
+    ...task
+  };
+  if (!autofill || typeof autofill !== "object") {
+    return nextTask;
+  }
+
+  let routeChanged = false;
+  const nextContractAddress = String(autofill.contractAddressOverride || "").trim();
+  if (nextContractAddress) {
+    nextTask.contractAddress = nextContractAddress;
+    routeChanged = true;
+  }
+
+  if (Array.isArray(autofill.abiOverride) && autofill.abiOverride.length > 0) {
+    nextTask.abiJson = JSON.stringify(autofill.abiOverride);
+    routeChanged = true;
+  }
+
+  if (autofill.mintFunction && (routeChanged || !String(nextTask.mintFunction || "").trim())) {
+    nextTask.mintFunction = autofill.mintFunction;
+  }
+
+  if (Array.isArray(autofill.mintArgs) && (routeChanged || !String(nextTask.mintArgs || "").trim())) {
+    nextTask.mintArgs = JSON.stringify(autofill.mintArgs);
+  }
+
+  if (
+    autofill.priceEth !== undefined &&
+    autofill.priceEth !== null &&
+    (routeChanged || !String(nextTask.priceEth || "").trim())
+  ) {
+    nextTask.priceEth = String(autofill.priceEth);
+  }
+
+  if (
+    autofill.platform &&
+    (routeChanged ||
+      !String(nextTask.platform || "").trim() ||
+      nextTask.platform === "Generic EVM (auto-detect)")
+  ) {
+    nextTask.platform = autofill.platform;
+  }
+
+  if (
+    autofill.mintStartDetection &&
+    typeof autofill.mintStartDetection === "object" &&
+    (routeChanged || !nextTask.mintStartDetectionEnabled)
+  ) {
+    nextTask.mintStartDetectionEnabled = Boolean(autofill.mintStartDetection.enabled);
+    nextTask.mintStartDetectionConfig = autofill.mintStartDetection;
+  }
+
+  const launchRecommendation = autofill.launchRecommendation;
+  const recommendedWaitUntilIso = String(launchRecommendation?.waitUntilIso || "").trim();
+  if (
+    !nextTask.useSchedule &&
+    String(launchRecommendation?.mode || "").trim().toLowerCase() === "utc" &&
+    recommendedWaitUntilIso &&
+    !Number.isNaN(new Date(recommendedWaitUntilIso).getTime())
+  ) {
+    nextTask.useSchedule = true;
+    nextTask.waitUntilIso = recommendedWaitUntilIso;
+    nextTask.schedulePending = true;
+  }
+
+  nextTask.sourceExecutionBlocker = String(autofill.executionBlocker || "").trim();
+  return nextTask;
+}
+
 async function enrichTaskFromSource(task) {
   if (String(task?.sourceType || "").trim() !== "opensea" || !String(task?.sourceTarget || "").trim()) {
     return task;
@@ -3769,7 +3844,7 @@ async function enrichTaskFromSource(task) {
     nextTask.mintStartDetectionConfig = autofill.mintStartDetection;
   }
 
-  return nextTask;
+  return applyMintAutofillToTask(nextTask, autofill);
 }
 
 function parseTaskAbiEntries(abiJson) {
@@ -3846,7 +3921,8 @@ const preferredMintFunctionNameSet = new Set(
   preferredMintFunctionNames.map((name) => normalizeAbiName(name))
 );
 const seaDropContractAddresses = Object.freeze({
-  ethereum: "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5"
+  ethereum: "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5",
+  base: "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5"
 });
 const seaDropPublicMintAbi = Object.freeze([
   {
@@ -3905,6 +3981,7 @@ const seaDropPublicMintAbi = Object.freeze([
     type: "function"
   }
 ]);
+const seaDropPublicMintInterface = new ethers.Interface(seaDropPublicMintAbi);
 
 function mintFunctionCandidateScore(entry) {
   const normalizedName = normalizeAbiName(entry?.name);
@@ -4130,6 +4207,39 @@ function normalizeSeaDropPublicDrop(value) {
   };
 }
 
+async function simulateSeaDropDirectWalletMint({
+  provider,
+  seaDropContractAddress,
+  nftContractAddress,
+  feeRecipient,
+  walletAddress,
+  quantity,
+  value
+}) {
+  try {
+    await provider.call({
+      from: walletAddress,
+      to: seaDropContractAddress,
+      data: seaDropPublicMintInterface.encodeFunctionData("mintPublic", [
+        nftContractAddress,
+        feeRecipient,
+        walletAddress,
+        quantity
+      ]),
+      value
+    });
+    return {
+      success: true,
+      error: null
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error
+    };
+  }
+}
+
 async function buildSeaDropPublicAutofill({
   chainKey,
   nftContractAddress,
@@ -4159,6 +4269,10 @@ async function buildSeaDropPublicAutofill({
   let publicDrop = null;
   let allowedPayers = [];
   let executionBlocker = "";
+  const selectedWallets = (appState?.wallets || []).filter((wallet) =>
+    (walletIds || []).includes(wallet.id)
+  );
+  let walletEligibility = [];
   const providerResult = await createReadProviderForChain(chainKey, rpcNodeIds);
 
   if (!providerResult.provider) {
@@ -4212,30 +4326,67 @@ async function buildSeaDropPublicAutofill({
       allowedPayers = Array.isArray(payersResult.value)
         ? payersResult.value.filter((entry) => ethers.isAddress(entry))
         : [];
+    } else {
+      warnings.push(`SeaDrop payer read failed: ${formatError(payersResult.reason)}`);
+    }
+
+    if (selectedWallets.length > 0 && publicDrop) {
+      const mintValue = BigInt(publicDrop.mintPrice || 0n) * BigInt(normalizedQuantity);
+      walletEligibility = await Promise.all(
+        selectedWallets.map(async (wallet) => {
+          const simulation = await simulateSeaDropDirectWalletMint({
+            provider: providerResult.provider,
+            seaDropContractAddress,
+            nftContractAddress,
+            feeRecipient,
+            walletAddress: wallet.address,
+            quantity: normalizedQuantity,
+            value: mintValue
+          });
+
+          if (simulation.success) {
+            return {
+              walletId: wallet.id,
+              walletLabel: wallet.label,
+              status: "eligible",
+              source: "seadrop_direct_wallet_simulation"
+            };
+          }
+
+          return {
+            walletId: wallet.id,
+            walletLabel: wallet.label,
+            status: "review",
+            source: "seadrop_direct_wallet_simulation",
+            reason: formatError(simulation.error)
+          };
+        })
+      );
     }
   } finally {
     await destroyProvider(providerResult.provider);
   }
 
-  if (allowedPayers.length > 0) {
-    const selectedWallets = (appState?.wallets || []).filter((wallet) =>
-      (walletIds || []).includes(wallet.id)
-    );
-    const selectedWalletAllowed = selectedWallets.some((wallet) =>
-      allowedPayers.some(
-        (payer) => payer.toLowerCase() === String(wallet.address || "").toLowerCase()
-      )
-    );
+  if (selectedWallets.length > 0) {
+    const eligibleWalletLabels = walletEligibility
+      .filter((entry) => entry.status === "eligible")
+      .map((entry) => entry.walletLabel);
 
-    if (selectedWallets.length > 0 && !selectedWalletAllowed) {
+    if (eligibleWalletLabels.length === 0) {
+      const firstFailureReason =
+        walletEligibility.find((entry) => entry.reason)?.reason || "direct wallet mint simulation reverted";
       executionBlocker =
         "This collection restricts mint calls to approved payer contracts, so a direct wallet mint task will not succeed without the project’s relayer or website-backed flow.";
       warnings.push(executionBlocker);
-    } else if (selectedWallets.length === 0) {
-      warnings.push(
-        "SeaDrop uses approved payer contracts for this collection. Select a wallet to verify whether direct minting is allowed."
-      );
+      executionBlocker =
+        `Direct wallet public-mint simulation failed for the selected wallet, so this collection is not currently mintable through the bot. (${firstFailureReason})`;
+      warnings[warnings.length - 1] = executionBlocker;
     }
+  }
+
+  if (selectedWallets.length === 0 && allowedPayers.length > 0) {
+    warnings[warnings.length - 1] =
+      "SeaDrop exposes approved payer entries for this collection. Select a wallet to verify whether direct self-minting succeeds.";
   }
 
   const waitUntilMs = waitUntilIso ? new Date(waitUntilIso).getTime() : null;
@@ -4251,6 +4402,20 @@ async function buildSeaDropPublicAutofill({
           waitUntilIso: "",
           reason: "SeaDrop public drop"
         };
+  const eligibleWalletLabels = walletEligibility
+    .filter((entry) => entry.status === "eligible")
+    .map((entry) => entry.walletLabel);
+  const reviewWalletLabels = walletEligibility
+    .filter((entry) => entry.status !== "eligible")
+    .map((entry) => entry.walletLabel);
+  const eligibilityStatus =
+    selectedWallets.length === 0 ? "review" : eligibleWalletLabels.length > 0 ? "eligible" : "review";
+  const eligibilityLabel =
+    selectedWallets.length === 0
+      ? "select a wallet to verify direct minting"
+      : eligibleWalletLabels.length > 0
+        ? `${eligibleWalletLabels.length} eligible`
+        : `${reviewWalletLabels.length} require review`;
 
   return {
     mintFunction: "mintPublic",
@@ -4289,14 +4454,19 @@ async function buildSeaDropPublicAutofill({
           launchRecommendation.mode === "utc"
             ? "scheduled from SeaDrop public drop"
             : "ready to launch through SeaDrop",
-        eligibilityStatus: "review",
-        eligibilityLabel: "SeaDrop route derived from contract metadata",
-        eligibleWalletLabels: [],
-        reviewWalletLabels: [],
+        eligibilityStatus,
+        eligibilityLabel,
+        eligibilityWallets: walletEligibility,
+        eligibleWalletLabels,
+        reviewWalletLabels,
         ineligibleWalletLabels: [],
-        requiresReview: Boolean(executionBlocker),
+        requiresReview: selectedWallets.length > 0 ? eligibleWalletLabels.length === 0 : Boolean(executionBlocker),
         rpcNodeName,
-        warning: executionBlocker || warnings[0] || null
+        warning:
+          executionBlocker ||
+          walletEligibility.find((entry) => entry.reason)?.reason ||
+          warnings[0] ||
+          null
       }
     ],
     priceSource,
@@ -8894,6 +9064,10 @@ async function requestTaskStop(taskId) {
 function validateAndPrepareTask(task, existingTask, payload) {
   let abiEntries = null;
 
+  if (task.sourceExecutionBlocker) {
+    throw new Error(task.sourceExecutionBlocker);
+  }
+
   if (!task.contractAddress) {
     throw new Error("Contract address is required");
   }
@@ -11294,10 +11468,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  applyMintAutofillToTask,
   extractOpenSeaCollectionSlug,
   parseOpenSeaMintRadarEntries,
   resolveHost,
   resolvePort,
+  seaDropContractAddressForChain,
   startServer,
   stopServer
 };

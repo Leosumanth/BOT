@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MintBot Quantum Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Sora:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -77,16 +83,27 @@
 
       <main class="workspace">
         <header class="topbar">
-          <div>
+          <div class="topbar-copy">
+            <p class="eyebrow">Mint Operations Grid</p>
+            <h2 class="topbar-title">Control Deck</h2>
+            <div class="topbar-signal-row">
+              <span class="hero-chip hero-chip-primary">Public Mint Focus</span>
+              <span class="hero-chip">Autofill Discovery</span>
+              <span class="hero-chip">Secure Local Wallets</span>
+            </div>
             <p id="hero-mode-copy" class="view-subtitle"></p>
           </div>
           <div class="topbar-actions">
-            <div class="time-card hud-panel">
-              <span class="micro-label">Local Time</span>
-              <strong id="live-clock">--:--:--</strong>
+            <div class="topbar-command-deck">
+              <div class="time-card hud-panel">
+                <span class="micro-label">Local Time</span>
+                <strong id="live-clock">--:--:--</strong>
+              </div>
+              <div class="topbar-command-row">
+                <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
+                <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Launch Task Builder</button>
+              </div>
             </div>
-            <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
-            <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Launch Task Builder</button>
           </div>
         </header>
 

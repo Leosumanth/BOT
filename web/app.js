@@ -9119,6 +9119,7 @@ function buildTaskPayload() {
     sourceTarget,
     sourceStage: "public",
     sourceConfigJson: sourceTarget ? taskSourceConfigInput.value.trim() : "",
+    sourceExecutionBlocker: currentTaskExecutionBlocker,
     quantityPerWallet: taskQuantityInput.value,
     priceEth: taskPriceInput.value,
     abiJson: taskAbiInput.value,

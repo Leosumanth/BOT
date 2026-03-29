@@ -12,13 +12,16 @@ const {
 } = require("../src/mint-source-adapters");
 const mintSources = require("../src/mint-sources");
 const integrations = require("../src/integrations");
+const { simulateMintMethod } = require("../src/bot");
 const { normalizeConfig } = require("../src/config");
 const { createDefaultPersistentState, normalizePersistentState } = require("../src/database");
 const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = require("../src/queue");
 const { resolveHost, resolvePort } = require("../src/server");
 const {
+  applyMintAutofillToTask,
   extractOpenSeaCollectionSlug,
-  parseOpenSeaMintRadarEntries
+  parseOpenSeaMintRadarEntries,
+  seaDropContractAddressForChain
 } = require("../src/dashboard-server");
 
 const sampleAbi = [
@@ -405,4 +408,140 @@ test("dashboard radar parser can recover mint metadata from nearby OpenSea card 
   assert.equal(entries[0].slug, "house-cats");
   assert.equal(entries[0].status, "live");
   assert.equal(entries[0].priceText, "0.0008 ETH");
+});
+
+test("dashboard autofill applies SeaDrop public mint route, schedule, and blocker state", () => {
+  const baseTask = {
+    contractAddress: "0x1111111111111111111111111111111111111111",
+    abiJson: JSON.stringify(sampleAbi),
+    mintFunction: "",
+    mintArgs: "",
+    quantityPerWallet: 1,
+    priceEth: "",
+    platform: "Generic EVM (auto-detect)",
+    useSchedule: false,
+    waitUntilIso: "",
+    schedulePending: false,
+    mintStartDetectionEnabled: true,
+    mintStartDetectionConfig: {
+      enabled: true,
+      saleActiveFunction: "saleActive"
+    },
+    sourceExecutionBlocker: ""
+  };
+
+  const nextTask = applyMintAutofillToTask(baseTask, {
+    mintFunction: "mintPublic",
+    mintArgs: [
+      "0xD479349A4818A5523BC36464cD9ea746f03CCB4B",
+      "0x0000a26b00c1F0DF003000390027140000fAa719",
+      "{{wallet}}",
+      1
+    ],
+    priceEth: "0.01",
+    platform: "OpenSea SeaDrop",
+    contractAddressOverride: "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5",
+    abiOverride: [
+      {
+        type: "function",
+        name: "mintPublic",
+        stateMutability: "payable",
+        inputs: [
+          { name: "nftContract", type: "address" },
+          { name: "feeRecipient", type: "address" },
+          { name: "minterIfNotPayer", type: "address" },
+          { name: "quantity", type: "uint256" }
+        ],
+        outputs: []
+      }
+    ],
+    mintStartDetection: {
+      enabled: false,
+      signals: []
+    },
+    launchRecommendation: {
+      mode: "utc",
+      waitUntilIso: "2026-04-02T17:00:00.000Z"
+    },
+    executionBlocker:
+      "This collection restricts mint calls to approved payer contracts, so a direct wallet mint task will not succeed without the project's relayer or website-backed flow."
+  });
+
+  assert.equal(nextTask.contractAddress, "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5");
+  assert.match(nextTask.abiJson, /mintPublic/);
+  assert.equal(nextTask.mintFunction, "mintPublic");
+  assert.equal(
+    nextTask.mintArgs,
+    JSON.stringify([
+      "0xD479349A4818A5523BC36464cD9ea746f03CCB4B",
+      "0x0000a26b00c1F0DF003000390027140000fAa719",
+      "{{wallet}}",
+      1
+    ])
+  );
+  assert.equal(nextTask.priceEth, "0.01");
+  assert.equal(nextTask.platform, "OpenSea SeaDrop");
+  assert.equal(nextTask.useSchedule, true);
+  assert.equal(nextTask.waitUntilIso, "2026-04-02T17:00:00.000Z");
+  assert.equal(nextTask.schedulePending, true);
+  assert.equal(nextTask.mintStartDetectionEnabled, false);
+  assert.equal(
+    nextTask.sourceExecutionBlocker,
+    "This collection restricts mint calls to approved payer contracts, so a direct wallet mint task will not succeed without the project's relayer or website-backed flow."
+  );
+});
+
+test("dashboard knows the SeaDrop shared mint contract on Base", () => {
+  assert.equal(
+    seaDropContractAddressForChain("base"),
+    "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5"
+  );
+  assert.equal(
+    seaDropContractAddressForChain("ethereum"),
+    "0x00005EA00Ac477B1030CE78506496e8C2dE24bf5"
+  );
+});
+
+test("mint simulation accepts estimateGas fallback when staticCall returns a false revert", async () => {
+  const staticCallError = Object.assign(new Error("missing revert data"), {
+    shortMessage: "missing revert data"
+  });
+  const observedCalls = [];
+  const method = {
+    async staticCall(...callArgs) {
+      observedCalls.push({
+        kind: "staticCall",
+        callArgs
+      });
+      throw staticCallError;
+    },
+    async estimateGas(...callArgs) {
+      observedCalls.push({
+        kind: "estimateGas",
+        callArgs
+      });
+      return 135104n;
+    }
+  };
+  const args = ["0x1111111111111111111111111111111111111111", 1];
+  const overrides = {
+    value: 400000000000000n
+  };
+
+  const simulation = await simulateMintMethod(method, args, overrides);
+
+  assert.equal(simulation.success, true);
+  assert.equal(simulation.estimatedGas, 135104n);
+  assert.equal(simulation.usedGasEstimateFallback, true);
+  assert.equal(simulation.staticCallError, staticCallError);
+  assert.deepEqual(observedCalls, [
+    {
+      kind: "staticCall",
+      callArgs: [...args, overrides]
+    },
+    {
+      kind: "estimateGas",
+      callArgs: [...args, overrides]
+    }
+  ]);
 });

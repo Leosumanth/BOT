@@ -754,14 +754,60 @@ async function simulateMintMethod(method, args, overrides) {
     await method.staticCall(...args, overrides);
     return {
       success: true,
-      error: null
+      error: null,
+      estimatedGas: null,
+      staticCallError: null,
+      usedGasEstimateFallback: false
     };
-  } catch (error) {
+  } catch (staticCallError) {
+    try {
+      const estimatedGas = await method.estimateGas(...args, overrides);
+      return {
+        success: true,
+        error: null,
+        estimatedGas,
+        staticCallError,
+        usedGasEstimateFallback: true
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error,
+        estimatedGas: null,
+        staticCallError,
+        usedGasEstimateFallback: false
+      };
+    }
+  }
+}
+
+function logSimulationFallback(logger, walletIndex, simulation) {
+  if (!simulation?.usedGasEstimateFallback) {
+    return;
+  }
+
+  const fallbackReason = extractRevertMessage(simulation.staticCallError) || "static call reverted";
+  logger.info(
+    `[wallet ${walletIndex}] Static-call simulation reverted (${fallbackReason}), but gas estimation succeeded; continuing with the estimated-gas result`
+  );
+}
+
+async function ensureSimulationPasses(method, args, overrides, walletIndex, logger) {
+  const simulation = await simulateMintMethod(method, args, overrides);
+  if (!simulation.success) {
+    throw simulation.error;
+  }
+
+  logSimulationFallback(logger, walletIndex, simulation);
+  if (simulation.estimatedGas != null) {
     return {
-      success: false,
-      error
+      estimatedGas: simulation.estimatedGas
     };
   }
+
+  return {
+    estimatedGas: await method.estimateGas(...args, overrides)
+  };
 }
 
 async function discoverAutomatedMintValue({ config, session, candidate, method, args, claimRecord }) {
@@ -864,6 +910,7 @@ async function buildAutomatedMintPlan(config, session, context, attempt) {
       ...feeOverrides,
       value: discoveredValue.value
     };
+    let estimatedGas = null;
 
     if (config.autoMintMode || config.simulateTransaction) {
       const simulation = await simulateMintMethod(method, argResolution.args, simulationOverrides);
@@ -874,17 +921,21 @@ async function buildAutomatedMintPlan(config, session, context, attempt) {
         });
         continue;
       }
+
+      logSimulationFallback(logger, session.walletIndex, simulation);
+      estimatedGas = simulation.estimatedGas;
     }
 
-    let estimatedGas;
-    try {
-      estimatedGas = await method.estimateGas(...argResolution.args, simulationOverrides);
-    } catch (error) {
-      failures.push({
-        signature: candidate.signature,
-        error: extractRevertMessage(error) || "gas estimation failed"
-      });
-      continue;
+    if (estimatedGas == null) {
+      try {
+        estimatedGas = await method.estimateGas(...argResolution.args, simulationOverrides);
+      } catch (error) {
+        failures.push({
+          signature: candidate.signature,
+          error: extractRevertMessage(error) || "gas estimation failed"
+        });
+        continue;
+      }
     }
 
     const txRequest = await method.populateTransaction(...argResolution.args, {
@@ -2950,8 +3001,13 @@ async function tryPreparePresignedMint(config, session, context) {
     });
 
     if (config.simulateTransaction) {
-      await mintMethod.staticCall(...mintArgs, overrides);
-      const estimatedGas = await mintMethod.estimateGas(...mintArgs, overrides);
+      const { estimatedGas } = await ensureSimulationPasses(
+        mintMethod,
+        mintArgs,
+        overrides,
+        walletIndex,
+        logger
+      );
       logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
     }
 
@@ -3176,8 +3232,13 @@ async function executeWalletSession(config, session, context) {
           });
 
           if (config.simulateTransaction) {
-            await mintMethod.staticCall(...manualMintArgs, overrides);
-            const estimatedGas = await mintMethod.estimateGas(...manualMintArgs, overrides);
+            const { estimatedGas } = await ensureSimulationPasses(
+              mintMethod,
+              manualMintArgs,
+              overrides,
+              walletIndex,
+              logger
+            );
             logger.info(`[wallet ${walletIndex}] Simulation passed. Estimated gas: ${estimatedGas}`);
           }
 
@@ -3552,5 +3613,6 @@ async function runMintBot(config, hooks = {}) {
 module.exports = {
   AbortRunError,
   formatError,
-  runMintBot
+  runMintBot,
+  simulateMintMethod
 };
