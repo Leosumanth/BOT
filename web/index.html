@@ -84,12 +84,12 @@
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-copy">
-            <p class="eyebrow">Live NFT Mint Operations</p>
-            <h2 class="topbar-title">Mint Operations Deck</h2>
+            <p class="eyebrow">Autonomous Public Minting</p>
+            <h2 class="topbar-title">MintBot Studio</h2>
             <div class="topbar-signal-row">
-              <span class="hero-chip hero-chip-primary">Execution Mesh</span>
-              <span class="hero-chip">Drop Radar</span>
-              <span class="hero-chip">Wallet Matrix</span>
+              <span class="hero-chip hero-chip-primary">Drop Routing</span>
+              <span class="hero-chip">Wallet Control</span>
+              <span class="hero-chip">RPC Mesh</span>
             </div>
             <p id="hero-mode-copy" class="view-subtitle"></p>
           </div>
@@ -101,7 +101,7 @@
               </div>
               <div class="topbar-command-row">
                 <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
-                <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Launch Task Builder</button>
+                <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Advanced Builder</button>
               </div>
             </div>
           </div>
@@ -110,15 +110,88 @@
         <section class="view active" data-view-panel="dashboard">
           <div class="view-header dashboard-view-header">
             <div>
-              <h2>Dashboard</h2>
+              <p class="eyebrow">Mint landing page</p>
+              <h2>Paste a collection URL and let MintBot do the rest</h2>
+              <p class="view-subtitle">
+                Start from a single OpenSea collection link. MintBot will auto-discover the contract, chain, ABI, price path, and task setup in the background.
+              </p>
             </div>
           </div>
+
+          <section class="surface dashboard-market-hero" data-tilt>
+            <div class="dashboard-market-copy">
+              <p class="eyebrow">Paste. Route. Mint.</p>
+              <h3>One front door for public mints</h3>
+              <p class="helper-copy dashboard-market-copy-text">
+                Drop an OpenSea collection URL, press Mint, and MintBot will create an auto-routed public mint task using your default wallet lane and active RPC mesh.
+              </p>
+              <form id="dashboard-mint-form" class="dashboard-mint-form">
+                <label class="dashboard-mint-input-shell" for="dashboard-mint-url-input">
+                  <span class="dashboard-mint-input-icon" aria-hidden="true">M</span>
+                  <input
+                    id="dashboard-mint-url-input"
+                    type="url"
+                    placeholder="Paste an OpenSea collection URL to create a mint task"
+                    spellcheck="false"
+                    autocomplete="off"
+                  />
+                </label>
+                <button id="dashboard-mint-submit-button" class="primary-button fx-button dashboard-mint-submit" type="submit">Mint</button>
+              </form>
+              <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status">
+                Uses your first available wallet and the active RPC mesh. Advanced tuning still stays available in Tasks.
+              </p>
+              <div class="dashboard-market-points">
+                <span class="dashboard-market-point">Auto route discovery</span>
+                <span class="dashboard-market-point">Chain-aware RPC selection</span>
+                <span class="dashboard-market-point">Task saved in background</span>
+              </div>
+            </div>
+
+            <div class="dashboard-market-visual">
+              <div class="dashboard-market-art-panel">
+                <div class="dashboard-market-orbit orbit-a" aria-hidden="true"></div>
+                <div class="dashboard-market-orbit orbit-b" aria-hidden="true"></div>
+                <div class="dashboard-market-token" aria-hidden="true">MB</div>
+
+                <article class="dashboard-market-floating-card floating-primary">
+                  <span class="micro-label">Auto Route</span>
+                  <strong>Contract + ABI</strong>
+                  <p>Discovered after you paste the collection URL.</p>
+                </article>
+
+                <article class="dashboard-market-floating-card floating-secondary">
+                  <span class="micro-label">Background Flow</span>
+                  <strong>Wallet + RPC Mesh</strong>
+                  <p>Task creation, routing, and launch setup continue behind the scenes.</p>
+                </article>
+              </div>
+
+              <div class="dashboard-market-stats">
+                <article class="dashboard-market-stat">
+                  <span>Default wallet</span>
+                  <strong id="dashboard-mint-default-wallet">No wallet loaded</strong>
+                  <p id="dashboard-mint-wallet-copy">Import a wallet to arm one-click mint.</p>
+                </article>
+                <article class="dashboard-market-stat">
+                  <span>Active RPC mesh</span>
+                  <strong id="dashboard-mint-rpc-count">0 live lanes</strong>
+                  <p id="dashboard-mint-rpc-copy">Enable RPC nodes so MintBot can broadcast when the route is ready.</p>
+                </article>
+                <article class="dashboard-market-stat">
+                  <span>Saved tasks</span>
+                  <strong id="dashboard-mint-task-count">0 sessions</strong>
+                  <p id="dashboard-mint-task-copy">Every one-click mint still lands in the Tasks workspace for review and control.</p>
+                </article>
+              </div>
+            </div>
+          </section>
 
           <section class="surface" data-tilt>
             <div class="surface-header compact">
               <div>
-                <h3>Command Surface</h3>
-                <p class="helper-copy">Launch the highest-priority task, refresh the RPC mesh, or capture a runtime snapshot without leaving the dashboard.</p>
+                <h3>Automation Deck</h3>
+                <p class="helper-copy">Use the quick-mint home flow above or trigger priority runs, RPC checks, and snapshots from here without leaving the dashboard.</p>
               </div>
               <div class="surface-actions">
                 <button id="run-priority-button" class="ghost-button fx-button" type="button">Run Priority Task</button>
@@ -132,7 +205,7 @@
             <section class="surface dashboard-history-surface" data-tilt>
               <div class="surface-header">
                 <div>
-                  <h3>Run History</h3>
+                  <h3>Launch Feed</h3>
                   <p class="helper-copy">Currently running tasks and the latest task execution results.</p>
                 </div>
               </div>
@@ -490,19 +563,29 @@
         <section class="view" data-view-panel="settings">
           <div class="view-header">
             <div>
-              <h2>Settings</h2>
-              <p class="view-subtitle">Update the API keys used by explorer ABI fetches, premium RPC providers, OpenSea source discovery, and OpenAI-powered tools.</p>
+              <h2>Integrations</h2>
+              <p class="view-subtitle">Connect the API providers that power ABI recovery, marketplace discovery, premium RPC routing, and operator intelligence.</p>
             </div>
           </div>
 
           <section class="surface settings-shell" data-tilt>
             <div class="settings-layout">
               <form id="settings-form" class="settings-panel">
-                <section class="surface inset-surface settings-card">
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="explorer">
                   <div class="surface-header compact settings-card-header">
-                    <div>
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <rect x="7" y="9" width="34" height="30" rx="10" fill="currentColor" opacity="0.14"></rect>
+                          <path d="M18 16h12v5h-7v5h6v5h-6v5h-5V16Z" fill="currentColor"></path>
+                          <path d="M31 16h5v20h-5z" fill="currentColor" opacity="0.68"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">ABI Recovery</p>
                       <h4>Etherscan API</h4>
                       <p class="helper-copy">Save an Etherscan V2 API key to pull verified ABI JSON from the task builder.</p>
+                      </div>
                     </div>
                     <span id="explorer-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
                   </div>
@@ -510,6 +593,10 @@
                     <input id="explorer-api-key-input" type="password" placeholder="Etherscan V2 API key" />
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Verified ABI</span>
+                    <span class="settings-integration-tag">Contract Recovery</span>
+                  </div>
                   <div class="settings-actions">
                     <button id="delete-explorer-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
@@ -522,11 +609,19 @@
                   </div>
                 </section>
 
-                <section class="surface inset-surface settings-card">
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="openai">
                   <div class="surface-header compact settings-card-header">
-                    <div>
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <path d="M24 8c2.65 0 5.08 1.18 6.71 3.1A7.96 7.96 0 0 1 39 19.07c0 1.43-.37 2.83-1.06 4.06A7.96 7.96 0 0 1 39 28.93a7.96 7.96 0 0 1-8.29 7.97A8 8 0 0 1 24 40a8 8 0 0 1-6.71-3.1A7.96 7.96 0 0 1 9 28.93c0-1.43.37-2.83 1.06-4.06A7.96 7.96 0 0 1 9 19.07a7.96 7.96 0 0 1 8.29-7.97A8 8 0 0 1 24 8Zm-3.28 6.04-3.14 1.82v3.64l3.14 1.82 3.15-1.82v-3.64l-3.15-1.82Zm8.56 4.94-3.14 1.82v3.64l3.14 1.82 3.15-1.82V20.8l-3.15-1.82Zm-8.56 9.98-3.14 1.82v3.64l3.14 1.82 3.15-1.82v-3.64l-3.15-1.82Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Operator Intelligence</p>
                       <h4>OpenAI API</h4>
                       <p class="helper-copy">Save an OpenAI API key to enable the operator assistant and other AI-assisted features.</p>
+                      </div>
                     </div>
                     <span id="openai-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
                   </div>
@@ -534,6 +629,10 @@
                     <input id="openai-api-key-input" type="password" placeholder="OpenAI API key" />
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw OpenAI API key only. Do not paste a link, curl command, or URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">AI Copilot</span>
+                    <span class="settings-integration-tag">Control Actions</span>
+                  </div>
                   <div class="settings-actions">
                     <button id="delete-openai-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
@@ -546,11 +645,19 @@
                   </div>
                 </section>
 
-                <section class="surface inset-surface settings-card">
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="alchemy">
                   <div class="surface-header compact settings-card-header">
-                    <div>
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <path d="M24 8 38 16v16L24 40 10 32V16L24 8Zm0 6.2-8 4.57v9.46l8 4.57 8-4.57v-9.46l-8-4.57Zm0 4.15 4.4 2.53v5.06L24 28.47l-4.4-2.53v-5.06L24 18.35Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Primary RPC Provider</p>
                       <h4>Alchemy API</h4>
                       <p class="helper-copy">Save an Alchemy API key for premium RPC endpoints, WebSocket setup, and future NFT ownership indexing.</p>
+                      </div>
                     </div>
                     <span id="alchemy-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
                   </div>
@@ -558,6 +665,10 @@
                     <input id="alchemy-api-key-input" type="password" placeholder="Alchemy API key" />
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw Alchemy API key only. Do not paste a link, curl command, or full RPC URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Premium RPC</span>
+                    <span class="settings-integration-tag">WebSockets</span>
+                  </div>
                   <div class="settings-actions">
                     <button id="delete-alchemy-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-alchemy-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
@@ -570,11 +681,20 @@
                   </div>
                 </section>
 
-                <section class="surface inset-surface settings-card">
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="drpc">
                   <div class="surface-header compact settings-card-header">
-                    <div>
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <rect x="8" y="10" width="32" height="28" rx="12" fill="currentColor" opacity="0.12"></rect>
+                          <path d="M17 16h7.5c5.25 0 8.5 2.95 8.5 8s-3.25 8-8.5 8H17V16Zm6.9 11.2c2.73 0 4.4-1.15 4.4-3.2s-1.67-3.2-4.4-3.2h-2.2v6.4h2.2Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Backup RPC Mesh</p>
                       <h4>dRPC API</h4>
                       <p class="helper-copy">Save a dRPC API key for premium backup RPC endpoints, multichain coverage, and WebSocket subscriptions.</p>
+                      </div>
                     </div>
                     <span id="drpc-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
                   </div>
@@ -582,6 +702,10 @@
                     <input id="drpc-api-key-input" type="password" placeholder="dRPC API key" />
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw dRPC API key only. Do not paste a link, command, or full RPC URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Failover Mesh</span>
+                    <span class="settings-integration-tag">Multichain</span>
+                  </div>
                   <div class="settings-actions">
                     <button id="delete-drpc-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-drpc-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
@@ -594,11 +718,20 @@
                   </div>
                 </section>
 
-                <section class="surface inset-surface settings-card">
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="opensea">
                   <div class="surface-header compact settings-card-header">
-                    <div>
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <circle cx="24" cy="24" r="18" fill="currentColor" opacity="0.12"></circle>
+                          <path d="M27.7 12.5c-1.7 0-3.1 1.37-3.1 3.06v12.08l-7.15 4.12c-.5.29-.8.82-.8 1.39 0 .9.73 1.63 1.63 1.63h15.48c2.35 0 4.25-1.9 4.25-4.25 0-1.73-1.03-3.22-2.52-3.89l-4.73-2.14v-8.94a3.06 3.06 0 0 0-3.05-3.06Zm-.45 6.05 4.32 7.1-4.32-1.96v-5.14ZM14 33.1c1.77-2.1 4.24-3.16 7.42-3.16h5.74c2.58 0 4.51.7 5.79 2.09H14Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Marketplace Discovery</p>
                       <h4>OpenSea API</h4>
                       <p class="helper-copy">Save an OpenSea API key for public collection metadata and source discovery on OpenSea tasks.</p>
+                      </div>
                     </div>
                     <span id="opensea-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
                   </div>
@@ -606,6 +739,10 @@
                     <input id="opensea-api-key-input" type="password" placeholder="OpenSea API key" />
                   </label>
                   <p class="helper-copy settings-field-note">Paste the raw OpenSea API key only. Do not paste a link, curl command, or header.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Collection Data</span>
+                    <span class="settings-integration-tag">Source Routing</span>
+                  </div>
                   <div class="settings-actions">
                     <button id="delete-opensea-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
                     <button id="test-opensea-key-button" class="ghost-button fx-button" type="button">Test API Key</button>

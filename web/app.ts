@@ -130,6 +130,16 @@ const clearLogsButton = document.getElementById("clear-logs-button");
 const dashboardRefreshButton = document.getElementById("dashboard-refresh-button");
 const newTaskButton = document.getElementById("new-task-button");
 const dashboardOpenTaskButton = document.getElementById("dashboard-open-task-button");
+const dashboardMintForm = document.getElementById("dashboard-mint-form");
+const dashboardMintUrlInput = document.getElementById("dashboard-mint-url-input");
+const dashboardMintSubmitButton = document.getElementById("dashboard-mint-submit-button");
+const dashboardMintInlineStatus = document.getElementById("dashboard-mint-inline-status");
+const dashboardMintDefaultWallet = document.getElementById("dashboard-mint-default-wallet");
+const dashboardMintWalletCopy = document.getElementById("dashboard-mint-wallet-copy");
+const dashboardMintRpcCount = document.getElementById("dashboard-mint-rpc-count");
+const dashboardMintRpcCopy = document.getElementById("dashboard-mint-rpc-copy");
+const dashboardMintTaskCount = document.getElementById("dashboard-mint-task-count");
+const dashboardMintTaskCopy = document.getElementById("dashboard-mint-task-copy");
 const runPriorityButton = document.getElementById("run-priority-button");
 const rpcPulseButton = document.getElementById("rpc-pulse-button");
 const snapshotButton = document.getElementById("snapshot-button");
@@ -2109,9 +2119,12 @@ function classifyTaskLogEntry(entry = {}) {
   };
 }
 
-function renderTaskVerboseFeed(task, statusKey) {
+function renderTaskVerboseFeed(task, statusKey, stages = []) {
   const entries = taskScopedLogs(task, 12);
   const failureReason = taskFailureReason(task);
+  const faultStage = stages.find((stage) => stage.state === "error") || null;
+  const lastFaultEntry =
+    [...entries].reverse().find((entry) => String(entry?.level || "").trim().toLowerCase() === "error") || null;
   const emptyMessage =
     statusKey === "draft" || statusKey === "ready"
       ? "Launch this task and this panel will start streaming backend events like route lock, RPC scoring, gas derivation, transaction broadcast, and receipt capture."
@@ -2135,19 +2148,41 @@ function renderTaskVerboseFeed(task, statusKey) {
 
   return `
     <section class="task-session-console">
+      <div class="task-console-shell-head">
+        <div class="task-console-shell-dots" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <span class="task-console-shell-path">operator@mintbot:~/${escapeHtml(task.id || "task")}.log</span>
+        <span class="wallet-chip">${entries.length} ${entries.length === 1 ? "event" : "events"}</span>
+      </div>
       <div class="task-console-head">
         <div>
-          <span class="task-console-title">Backend Activity</span>
-          <p class="muted-copy task-console-subtitle">Verbose task-scoped events from the live runner.</p>
+          <span class="task-console-title">Verbose Background Terminal</span>
+          <p class="muted-copy task-console-subtitle">Live task-scoped backend events, routing traces, and failure surfaces.</p>
         </div>
-        <span class="wallet-chip">${entries.length} ${entries.length === 1 ? "event" : "events"}</span>
       </div>
       ${
         failureReason
-          ? `<div class="task-console-alert error">${escapeHtml(failureReason)}</div>`
+          ? `
+            <div class="task-console-alert error">
+              <strong>${escapeHtml(failureReason)}</strong>
+              <p>${escapeHtml(
+                faultStage
+                  ? `Failure surfaced during ${faultStage.label.toLowerCase()}.`
+                  : "Failure surfaced in the backend runner."
+              )}</p>
+              ${
+                lastFaultEntry
+                  ? `<div class="task-console-fault-line">${escapeHtml(normalizeTaskLogMessage(lastFaultEntry.message))}</div>`
+                  : ""
+              }
+            </div>
+          `
           : statusKey === "running" || statusKey === "queued"
             ? `<div class="task-console-alert info">${escapeHtml(
-                "Backend lane is live. Watch this feed for RPC selection, fee planning, transaction submission, and chain results."
+                "Backend lane is live. Watch this terminal for RPC selection, fee planning, transaction submission, and chain results."
               )}</div>`
             : ""
       }
@@ -2433,6 +2468,110 @@ function buildTaskTraceWindow(pipeline, stageIndex, mode = "running") {
       state
     };
   });
+}
+
+function buildTaskProgressStages(task, statusKey = "draft") {
+  const progress = task?.progress || { phase: "Ready", percent: 0 };
+  const progressPercent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const phaseKey = normalizeTaskPhaseKey(progress.phase);
+  const pipeline = buildTaskRuntimePipeline(task);
+  const segmentWidth = pipeline.length > 0 ? 100 / pipeline.length : 100;
+  const stageIndex = resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent);
+
+  return pipeline.map((stage, index) => {
+    let state = "pending";
+    let fillPercent = Math.max(
+      0,
+      Math.min(100, ((progressPercent - index * segmentWidth) / segmentWidth) * 100)
+    );
+
+    if (statusKey === "draft" || statusKey === "ready") {
+      state = index === 0 ? "standby" : "pending";
+      fillPercent = 0;
+    } else if (statusKey === "completed") {
+      state = "complete";
+      fillPercent = 100;
+    } else if (statusKey === "failed" || statusKey === "stopped") {
+      if (index < stageIndex) {
+        state = "complete";
+        fillPercent = 100;
+      } else if (index === stageIndex) {
+        state = "error";
+        fillPercent = Math.max(fillPercent, 34);
+      } else {
+        state = "pending";
+        fillPercent = 0;
+      }
+    } else if (index < stageIndex) {
+      state = "complete";
+      fillPercent = 100;
+    } else if (index === stageIndex) {
+      state = "active";
+      fillPercent = Math.max(fillPercent, 18);
+    } else {
+      state = "pending";
+      fillPercent = 0;
+    }
+
+    return {
+      ...stage,
+      index,
+      state,
+      fillPercent: Math.round(fillPercent)
+    };
+  });
+}
+
+function renderTaskRuntimeBoard(task, statusKey, runtime, progressPercent, stages) {
+  const activeStage =
+    stages.find((stage) => stage.state === "error") ||
+    stages.find((stage) => stage.state === "active") ||
+    [...stages].reverse().find((stage) => stage.state === "complete") ||
+    stages[0] ||
+    null;
+  const stageCopy =
+    statusKey === "failed" || statusKey === "stopped"
+      ? "Fault surfaced on this execution stage."
+      : activeStage?.detail || runtime.detail;
+
+  return `
+    <section class="task-session-runtime">
+      <div class="task-runtime-overview">
+        <div>
+          <span class="task-console-title">Execution Pipeline</span>
+          <p class="muted-copy task-runtime-overview-copy">${escapeHtml(stageCopy || "Waiting for runtime events.")}</p>
+        </div>
+        <div class="task-runtime-overview-side">
+          <span class="task-runtime-phase">${escapeHtml(runtime.phaseLabel)}</span>
+          <strong>${escapeHtml(String(progressPercent))}%</strong>
+        </div>
+      </div>
+      <div class="task-runtime-master-track">
+        <div class="task-runtime-master-fill" style="width:${progressPercent}%"></div>
+      </div>
+      <div class="task-runtime-stage-list">
+        ${stages
+          .map(
+            (stage) => `
+              <article class="task-runtime-stage ${escapeHtml(stage.state)}">
+                <div class="task-runtime-stage-head">
+                  <div class="task-runtime-stage-meta">
+                    <span class="task-runtime-stage-code">${escapeHtml(stage.code)}</span>
+                    <strong>${escapeHtml(stage.label)}</strong>
+                  </div>
+                  <span class="task-runtime-stage-value">${escapeHtml(String(stage.fillPercent))}%</span>
+                </div>
+                <p class="task-runtime-stage-copy">${escapeHtml(stage.detail)}</p>
+                <div class="task-runtime-stage-track">
+                  <div class="task-runtime-stage-fill" style="width:${stage.fillPercent}%"></div>
+                </div>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
 }
 
 function taskRuntimeNarrative(task, statusKey = "draft") {
@@ -4063,12 +4202,80 @@ function renderDashboardRunHistory() {
   `;
 }
 
+function preferredDashboardQuickMintWallet() {
+  return (
+    state.wallets.find((wallet) => String(wallet.status || "ready").trim().toLowerCase() === "ready") ||
+    state.wallets[0] ||
+    null
+  );
+}
+
+function setDashboardMintInlineStatus(message = "", tone = "info") {
+  if (!dashboardMintInlineStatus) {
+    return;
+  }
+
+  dashboardMintInlineStatus.textContent = message;
+  dashboardMintInlineStatus.dataset.tone = tone;
+}
+
+function renderDashboardMintHero() {
+  const defaultWallet = preferredDashboardQuickMintWallet();
+  const enabledRpcCount = state.rpcNodes.filter((node) => node.enabled).length;
+  const completedHistoryCount = state.tasks.reduce(
+    (total, task) => total + (Array.isArray(task.history) ? task.history.length : 0),
+    0
+  );
+
+  if (dashboardMintDefaultWallet) {
+    dashboardMintDefaultWallet.textContent = defaultWallet
+      ? truncateMiddle(defaultWallet.label || defaultWallet.addressShort || defaultWallet.address || "Wallet", 24, 8)
+      : "No wallet loaded";
+  }
+
+  if (dashboardMintWalletCopy) {
+    dashboardMintWalletCopy.textContent = defaultWallet
+      ? `${defaultWallet.addressShort || truncateMiddle(defaultWallet.address || "", 10, 6)} · ${defaultWallet.group || "Imported"}`
+      : "Import a wallet to arm one-click mint.";
+  }
+
+  if (dashboardMintRpcCount) {
+    dashboardMintRpcCount.textContent = `${enabledRpcCount} ${enabledRpcCount === 1 ? "live lane" : "live lanes"}`;
+  }
+
+  if (dashboardMintRpcCopy) {
+    dashboardMintRpcCopy.textContent =
+      enabledRpcCount > 0
+        ? "MintBot can auto-pick the right chain mesh after route discovery."
+        : "Enable RPC nodes so MintBot can broadcast when the route is ready.";
+  }
+
+  if (dashboardMintTaskCount) {
+    dashboardMintTaskCount.textContent = `${state.tasks.length} ${state.tasks.length === 1 ? "session" : "sessions"}`;
+  }
+
+  if (dashboardMintTaskCopy) {
+    dashboardMintTaskCopy.textContent =
+      completedHistoryCount > 0
+        ? `${completedHistoryCount} saved run ${completedHistoryCount === 1 ? "record" : "records"} already live in the archive.`
+        : "Every one-click mint still lands in the Tasks workspace for review and control.";
+  }
+
+  if (dashboardMintInlineStatus && !dashboardMintInlineStatus.textContent.trim()) {
+    setDashboardMintInlineStatus(
+      "Uses your first available wallet and the active RPC mesh. Advanced tuning still stays available in Tasks.",
+      "info"
+    );
+  }
+}
+
 function renderDashboard() {
   const telemetry = telemetryView();
   const activeAlerts = buildSystemAlerts(telemetry);
   const hasActionableAlert = activeAlerts.some((alert) => ["critical", "warning"].includes(alert.severity));
   renderSystemAlerts(telemetry);
   renderDashboardRunHistory();
+  renderDashboardMintHero();
 
   if (hasActionableAlert) {
     setStatusPill(dashboardHealthPill, "failed", "Needs Attention");
@@ -4095,6 +4302,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
   const sourceLabel = task.sourceLabel || findMintSourceDefinition(task.sourceType).label;
   const sourceSummary = task.sourceSummary || sourceLabel;
   const runtime = taskRuntimeNarrative(task, statusKey);
+  const progressStages = buildTaskProgressStages(task, statusKey);
   const subtitle = buildTaskCardSubtitle(task, statusKey);
 
   if (task.multiRpcBroadcast) {
@@ -4154,14 +4362,16 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
           <div class="task-actions">
             ${buildTaskActionMarkup(statusKey, active, queued)}
           </div>
-
-          <div class="history-block">
-            <div class="muted-copy">Recent Runs (${task.history?.length || 0})</div>
-            ${renderTaskHistoryItems(task)}
-          </div>
         </section>
 
-        ${renderTaskVerboseFeed(task, statusKey)}
+        ${renderTaskRuntimeBoard(task, statusKey, runtime, progressPercent, progressStages)}
+
+        ${renderTaskVerboseFeed(task, statusKey, progressStages)}
+
+        <div class="history-block">
+          <div class="muted-copy">Recent Runs (${task.history?.length || 0})</div>
+          ${renderTaskHistoryItems(task)}
+        </div>
       </div>
     </article>
   `;
@@ -9591,7 +9801,7 @@ async function fetchAbiForCurrentTask(options = {}) {
   }
 }
 
-function openTaskModal(task = null) {
+function prepareTaskDraft(task = null) {
   modalTitle.textContent = task ? "Edit Task" : "New Task";
   taskSubmitButton.textContent = task ? "Save Task" : "Create Task";
   window.clearTimeout(abiExplorerFetchTimer);
@@ -9726,15 +9936,19 @@ function openTaskModal(task = null) {
   renderWalletSelector(task?.walletIds || (!task && state.wallets.length === 1 ? [state.wallets[0].id] : []));
   renderRpcSelector(task?.rpcNodeIds || []);
   updateTaskMintSummary();
-  taskModal.classList.remove("hidden");
-  document.body.classList.add("task-modal-open");
-  initializeMotionSurfaces(taskModal);
 
   if ((task?.sourceType || taskSourceTypeInput.value) === "opensea" && String(taskSourceTargetInput.value || "").trim()) {
     scheduleTaskSourceDiscovery({ force: true, quiet: true });
   } else {
     updateTaskSourceInputs();
   }
+}
+
+function openTaskModal(task = null) {
+  prepareTaskDraft(task);
+  taskModal.classList.remove("hidden");
+  document.body.classList.add("task-modal-open");
+  initializeMotionSurfaces(taskModal);
 }
 
 function closeTaskModal() {
@@ -10169,6 +10383,194 @@ function buildTaskPayload() {
   };
 }
 
+function describeTaskSaveOutcome(payload) {
+  const savedTasks = Array.isArray(payload?.tasks) ? payload.tasks : payload?.task ? [payload.task] : [];
+  const launchedCount = savedTasks.filter((task) => ["running", "queued"].includes(task.status)).length;
+  const scheduledCount = savedTasks.filter((task) => task.schedulePending).length;
+  const reviewCount = savedTasks.filter(
+    (task) => task.autoArm && !task.autoArmPending && !task.schedulePending && !["running", "queued"].includes(task.status)
+  ).length;
+
+  if (Array.isArray(payload?.tasks) && payload.tasks.length > 1) {
+    return {
+      savedTasks,
+      launchedCount,
+      scheduledCount,
+      reviewCount,
+      tone: "success",
+      title: "Phase Tasks Created",
+      message: `${payload.tasks.length} phase tasks created. ${launchedCount} armed now, ${scheduledCount} scheduled, ${reviewCount} awaiting review.`
+    };
+  }
+
+  if (launchedCount > 0) {
+    return {
+      savedTasks,
+      launchedCount,
+      scheduledCount,
+      reviewCount,
+      tone: "success",
+      title: "Task Armed",
+      message: "Task saved and auto-armed immediately."
+    };
+  }
+
+  if (scheduledCount > 0) {
+    return {
+      savedTasks,
+      launchedCount,
+      scheduledCount,
+      reviewCount,
+      tone: "success",
+      title: "Task Scheduled",
+      message: "Task saved and scheduled automatically."
+    };
+  }
+
+  return {
+    savedTasks,
+    launchedCount,
+    scheduledCount,
+    reviewCount,
+    tone: "success",
+    title: "Task Saved",
+    message: "Task preset saved locally."
+  };
+}
+
+async function saveTaskFromCurrentDraft(options = {}) {
+  const { closeAfterSave = true, showResultToast = true } = options;
+
+  try {
+    await ensureTaskSourceDiscoveryBeforeSave();
+  } catch (error) {
+    showToast(error.message || "OpenSea auto-discovery failed.", "error", "Auto-Discovery Failed");
+    throw error;
+  }
+
+  if (!validateTaskQuickStrategy()) {
+    return null;
+  }
+
+  const payload = await request("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildTaskPayload())
+  });
+
+  if (closeAfterSave) {
+    closeTaskModal();
+  }
+
+  const outcome = describeTaskSaveOutcome(payload);
+  if (showResultToast) {
+    showToast(outcome.message, outcome.tone, outcome.title);
+  }
+
+  return {
+    payload,
+    ...outcome
+  };
+}
+
+async function submitDashboardQuickMint() {
+  const sourceTarget = String(dashboardMintUrlInput?.value || "").trim();
+  if (!sourceTarget) {
+    setDashboardMintInlineStatus("Paste an OpenSea collection URL before launching the mint flow.", "warning");
+    showToast("Paste an OpenSea collection URL first.", "info", "Collection URL Required");
+    dashboardMintUrlInput?.focus();
+    return;
+  }
+
+  const defaultWallet = preferredDashboardQuickMintWallet();
+  if (!defaultWallet) {
+    setDashboardMintInlineStatus("Import a wallet first so MintBot has a destination lane for the NFT.", "error");
+    showToast("Import at least one wallet before using one-click mint.", "info", "Wallet Required");
+    setView("wallets");
+    return;
+  }
+
+  await withButtonBusyState(dashboardMintSubmitButton, "Routing...", async () => {
+    try {
+      setDashboardMintInlineStatus("Preparing the one-click mint lane and selecting the default wallet...", "info");
+      prepareTaskDraft();
+      renderWalletSelector([defaultWallet.id]);
+      renderRpcSelector([]);
+      taskNameInput.value = "";
+      taskSourceTypeInput.value = "opensea";
+      taskSourceTargetInput.value = sourceTarget;
+      taskSourceStageInput.value = "public";
+      syncTaskSourceTypeFromTarget();
+      updateTaskSourceInputs();
+      updateTaskMintSummary();
+
+      setDashboardMintInlineStatus("Discovering the collection route, contract, chain, and ABI...", "info");
+      await requestTaskSourceDiscovery({
+        force: true,
+        quiet: false
+      });
+
+      const activeChainKey = String(taskChainInput?.value || "").trim();
+      const enabledChainRpcCount = state.rpcNodes.filter(
+        (node) => node.enabled && String(node.chainKey || "").trim() === activeChainKey
+      ).length;
+
+      if (enabledChainRpcCount === 0) {
+        setDashboardMintInlineStatus(
+          `No enabled RPC nodes are saved for ${chainLabel(activeChainKey)} yet. Add one and retry.`,
+          "error"
+        );
+        showToast(
+          `Add at least one enabled RPC node for ${chainLabel(activeChainKey)} before using one-click mint.`,
+          "info",
+          "RPC Required"
+        );
+        setView("rpc");
+        return;
+      }
+
+      if (currentTaskExecutionBlocker) {
+        setDashboardMintInlineStatus(currentTaskExecutionBlocker, "error");
+      } else {
+        setDashboardMintInlineStatus("Route locked. Saving and auto-arming the mint task now...", "info");
+      }
+
+      const result = await saveTaskFromCurrentDraft({
+        closeAfterSave: false,
+        showResultToast: false
+      });
+
+      if (!result) {
+        setDashboardMintInlineStatus(
+          currentTaskExecutionBlocker || "Mint task could not be saved from the pasted collection URL.",
+          "error"
+        );
+        return;
+      }
+
+      const primaryTask = result.savedTasks[0] || null;
+      const taskLabel = primaryTask?.name || taskNameInput.value || "Mint task";
+      const chainName = chainLabel(primaryTask?.chainKey || taskChainInput.value);
+      const statusCopy =
+        result.launchedCount > 0
+          ? `${taskLabel} is armed on ${chainName}. Discovery finished and the live mint lane is active in the background.`
+          : result.scheduledCount > 0
+            ? `${taskLabel} was created on ${chainName} and scheduled automatically.`
+            : `${taskLabel} was created on ${chainName} and saved to Tasks for review.`;
+
+      dashboardMintUrlInput.value = "";
+      setDashboardMintInlineStatus(statusCopy, "success");
+      await loadState().catch(() => {});
+      showToast(result.message, result.tone, result.title);
+    } catch (error) {
+      setDashboardMintInlineStatus(
+        error?.message || "MintBot could not finish the one-click mint setup for this collection.",
+        "error"
+      );
+    }
+  });
+}
+
 async function request(url, options = {}) {
   const { quiet = false, ...fetchOptions } = options;
   let response;
@@ -10263,6 +10665,11 @@ dashboardRefreshButton?.addEventListener("click", () => {
   loadState()
     .then(() => showToast("Application state refreshed.", "success", "Refreshed"))
     .catch(() => {});
+});
+
+dashboardMintForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await submitDashboardQuickMint();
 });
 
 mintRadarRefreshButton?.addEventListener("click", async () => {
@@ -11432,53 +11839,7 @@ abiDropzone.addEventListener("drop", async (event) => {
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    await ensureTaskSourceDiscoveryBeforeSave();
-  } catch (error) {
-    showToast(error.message || "OpenSea auto-discovery failed.", "error", "Auto-Discovery Failed");
-    return;
-  }
-
-  if (!validateTaskQuickStrategy()) {
-    return;
-  }
-
-  try {
-    const payload = await request("/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildTaskPayload())
-    });
-    closeTaskModal();
-    const savedTasks = Array.isArray(payload.tasks)
-      ? payload.tasks
-      : payload.task
-        ? [payload.task]
-        : [];
-    const launchedCount = savedTasks.filter((task) => ["running", "queued"].includes(task.status)).length;
-    const scheduledCount = savedTasks.filter((task) => task.schedulePending).length;
-    const reviewCount = savedTasks.filter(
-      (task) => task.autoArm && !task.autoArmPending && !task.schedulePending && !["running", "queued"].includes(task.status)
-    ).length;
-    if (Array.isArray(payload.tasks) && payload.tasks.length > 1) {
-      showToast(
-        `${payload.tasks.length} phase tasks created. ${launchedCount} armed now, ${scheduledCount} scheduled, ${reviewCount} awaiting review.`,
-        "success",
-        "Phase Tasks Created"
-      );
-      return;
-    }
-
-    if (launchedCount > 0) {
-      showToast("Task saved and auto-armed immediately.", "success", "Task Armed");
-      return;
-    }
-
-    if (scheduledCount > 0) {
-      showToast("Task saved and scheduled automatically.", "success", "Task Scheduled");
-      return;
-    }
-
-    showToast("Task preset saved locally.", "success", "Task Saved");
+    await saveTaskFromCurrentDraft();
   } catch {}
 });
 
