@@ -2787,7 +2787,7 @@ async function executeAssistantToolCall(call) {
 
     if (call.name === "run_task") {
       const task = resolveAssistantTask(parsedArgs.taskRef);
-      const result = await requestTaskRun(task.id);
+      const result = await requestTaskRun(task.id, { preferInline: true });
       return {
         ok: true,
         changedState: true,
@@ -3146,6 +3146,43 @@ function getQueueConfig() {
 
 function queueModeEnabled() {
   return getQueueConfig().enabled;
+}
+
+function resolveQueueLaunchStrategy(env = process.env) {
+  const normalized = String(env.QUEUE_LAUNCH_STRATEGY || "inline").trim().toLowerCase();
+  return ["queue", "queued", "worker"].includes(normalized) ? "queue" : "inline";
+}
+
+function shouldQueueTaskLaunch(options = {}) {
+  const queueEnabled = options.queueEnabled ?? queueModeEnabled();
+  const coordinatorEnabled = options.coordinatorEnabled ?? Boolean(queueCoordinator?.enabled);
+  const env = options.env || process.env;
+
+  if (!queueEnabled || !coordinatorEnabled) {
+    return false;
+  }
+
+  if (options.preferInline) {
+    return false;
+  }
+
+  if (options.preferQueue) {
+    return true;
+  }
+
+  return resolveQueueLaunchStrategy(env) === "queue";
+}
+
+async function publishTaskSyncEvent(taskId) {
+  if (!taskId || !queueModeEnabled() || !queueCoordinator?.enabled) {
+    return;
+  }
+
+  try {
+    await queueCoordinator.publishEvent("task-sync", { taskId });
+  } catch (error) {
+    reportBackgroundError(error);
+  }
 }
 
 function sortActiveRuns(left, right) {
@@ -7876,6 +7913,7 @@ function buildTaskResponse(task) {
   const runtime = appState.taskRuntimeById?.[task.id] || null;
   const history = appState.taskHistoryByTaskId?.[task.id] || task.history || [];
   const runtimePatch = distributedTaskPatches.get(task.id) || null;
+  const localRun = localTaskRuns.get(task.id) || null;
   const sourceType = task.sourceType || defaultMintSourceType;
   const sourceDefinition = getMintSourceDefinition(sourceType);
   const sourceContext = resolveMintSourceContext(sourceType, {
@@ -7912,6 +7950,12 @@ function buildTaskResponse(task) {
   if (distributedQueuedTaskIds.has(task.id) && response.status !== "running") {
     response.status = "queued";
     response.progress = response.progress?.percent > 0 ? response.progress : { phase: "Queued", percent: 4 };
+  }
+
+  if (localRun && !localRun.active) {
+    response.status = "running";
+    response.progress = { phase: "Preparing", percent: 2 };
+    response.summary = createEmptySummary(walletIds.length);
   }
 
   if (runtimePatch) {
@@ -8837,7 +8881,7 @@ async function scanAndRunAutomaticTasks() {
       });
 
       try {
-        await requestTaskRun(task.id);
+        await requestTaskRun(task.id, { preferInline: true });
       } catch (error) {
         if (error?.statusCode === 409) {
           continue;
@@ -8873,6 +8917,10 @@ async function startTaskRunLocal(taskId) {
     throw createHttpError("Task not found", 404);
   }
 
+  if (queueModeEnabled() && (distributedQueuedTaskIds.has(taskId) || isTaskActive(taskId))) {
+    throw createHttpError("Task is already queued or running", 409);
+  }
+
   if (localTaskRuns.has(taskId)) {
     throw createHttpError("Task is already running", 409);
   }
@@ -8896,6 +8944,7 @@ async function startTaskRunLocal(taskId) {
     message: `[task ${task.name}] Launch accepted on ${runContext.workerId || `dashboard_${process.pid}`} (local execution mode)`,
     timestamp: new Date(launchRequestedAtMs).toISOString()
   });
+  emitState();
   try {
     const configBuildStartedAtMs = Date.now();
     const config = await buildConfigForTask(task);
@@ -8954,6 +9003,7 @@ async function startTaskRunLocal(taskId) {
         hashes: []
       }
     });
+    await publishTaskSyncEvent(taskId);
 
     runMintBot(config, {
       signal: runContext.controller.signal,
@@ -9005,6 +9055,7 @@ async function startTaskRunLocal(taskId) {
             ...(taskAfterRun.history || [])
           ].slice(0, 8)
         });
+        await publishTaskSyncEvent(taskId);
         pushLog({
           level: "info",
           taskId,
@@ -9041,6 +9092,7 @@ async function startTaskRunLocal(taskId) {
           },
           lastRunAt: failedAt
         });
+        await publishTaskSyncEvent(taskId);
         pushLog({
           level: stopped ? "warning" : "error",
           taskId,
@@ -9068,6 +9120,7 @@ async function startTaskRunLocal(taskId) {
   } catch (error) {
     localTaskRuns.delete(taskId);
     clearDistributedTaskPatch(taskId);
+    emitState();
     throw error;
   }
 }
@@ -9195,8 +9248,8 @@ async function startTaskRunQueued(taskId) {
   return { ok: true, queued: true };
 }
 
-async function requestTaskRun(taskId) {
-  if (queueModeEnabled()) {
+async function requestTaskRun(taskId, options = {}) {
+  if (shouldQueueTaskLaunch(options)) {
     return startTaskRunQueued(taskId);
   }
 
@@ -9205,7 +9258,7 @@ async function requestTaskRun(taskId) {
 
 async function handleTaskRun(taskId, response) {
   try {
-    const payload = await requestTaskRun(taskId);
+    const payload = await requestTaskRun(taskId, { preferInline: true });
     sendJson(response, 200, payload);
   } catch (error) {
     sendJson(response, error.statusCode || 400, { error: formatError(error) });
@@ -11796,8 +11849,10 @@ module.exports = {
   parseOpenSeaMintRadarEntries,
   resolveHost,
   resolvePort,
+  resolveQueueLaunchStrategy,
   selectPreferredSimulationError,
   seaDropContractAddressForChain,
+  shouldQueueTaskLaunch,
   startServer,
   stopServer
 };

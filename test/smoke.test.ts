@@ -23,8 +23,10 @@ const {
   extractOpenSeaCollectionSlug,
   formatTerminalLogEntry,
   parseOpenSeaMintRadarEntries,
+  resolveQueueLaunchStrategy,
   selectPreferredSimulationError,
-  seaDropContractAddressForChain
+  seaDropContractAddressForChain,
+  shouldQueueTaskLaunch
 } = require("../src/dashboard-server");
 
 const sampleAbi = [
@@ -355,6 +357,38 @@ test("server host/port helpers honor env fallbacks", () => {
     assert.equal(resolveHost(), "0.0.0.0");
     assert.equal(resolvePort(), 4567);
   });
+});
+
+test("dashboard queue launch strategy defaults task runs to inline execution", () => {
+  assert.equal(resolveQueueLaunchStrategy({}), "inline");
+  assert.equal(resolveQueueLaunchStrategy({ QUEUE_LAUNCH_STRATEGY: "queue" }), "queue");
+  assert.equal(resolveQueueLaunchStrategy({ QUEUE_LAUNCH_STRATEGY: "worker" }), "queue");
+  assert.equal(resolveQueueLaunchStrategy({ QUEUE_LAUNCH_STRATEGY: "anything-else" }), "inline");
+
+  assert.equal(
+    shouldQueueTaskLaunch({
+      queueEnabled: true,
+      coordinatorEnabled: true
+    }),
+    false
+  );
+  assert.equal(
+    shouldQueueTaskLaunch({
+      queueEnabled: true,
+      coordinatorEnabled: true,
+      env: { QUEUE_LAUNCH_STRATEGY: "queue" }
+    }),
+    true
+  );
+  assert.equal(
+    shouldQueueTaskLaunch({
+      queueEnabled: true,
+      coordinatorEnabled: true,
+      env: { QUEUE_LAUNCH_STRATEGY: "queue" },
+      preferInline: true
+    }),
+    false
+  );
 });
 
 test("dashboard radar parser extracts live and upcoming OpenSea drops", () => {
