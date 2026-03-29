@@ -12206,3 +12206,613 @@ body[data-current-view="dashboard"] .dashboard-mint-inline-status.hidden {
     min-height: calc(100vh - 118px);
   }
 }
+
+/* Final readable workspace reset */
+:root {
+  --readable-bg: #f4e8d5;
+  --readable-bg-soft: #fbf5ec;
+  --readable-panel: rgba(255, 251, 245, 0.96);
+  --readable-panel-strong: #fffdf9;
+  --readable-panel-soft: rgba(250, 242, 230, 0.92);
+  --readable-border: rgba(108, 78, 47, 0.14);
+  --readable-border-strong: rgba(108, 78, 47, 0.22);
+  --readable-heading: #211710;
+  --readable-text: #34261c;
+  --readable-muted: #7a624e;
+  --readable-brand: #4a3427;
+  --readable-brand-soft: #765540;
+  --readable-accent: #52b8a7;
+  --readable-accent-strong: #2b8f80;
+  --readable-warm: #dc9548;
+  --readable-danger: #bf6170;
+  --readable-danger-soft: #fff1f2;
+  --readable-success: #2b8f68;
+  --readable-success-soft: #edf9f3;
+  --readable-shadow: 0 18px 42px rgba(96, 72, 45, 0.1);
+}
+
+body {
+  color: var(--readable-text) !important;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif !important;
+  background:
+    radial-gradient(circle at 12% 16%, rgba(82, 184, 167, 0.12), transparent 20%),
+    radial-gradient(circle at 88% 14%, rgba(220, 149, 72, 0.12), transparent 18%),
+    linear-gradient(180deg, #f7ecdd 0%, var(--readable-bg) 50%, #efe0ca 100%) !important;
+}
+
+body[data-current-view] .workspace {
+  width: min(100%, 1380px);
+  margin: 0 auto;
+  padding: 26px 0 44px !important;
+  background: transparent !important;
+}
+
+body[data-current-view] .topbar {
+  position: sticky;
+  top: 16px;
+  z-index: 50;
+  margin-bottom: 24px;
+  border: 1px solid var(--readable-border) !important;
+  border-radius: 32px !important;
+  background: rgba(255, 248, 240, 0.98) !important;
+  box-shadow: var(--readable-shadow) !important;
+  backdrop-filter: blur(18px) !important;
+}
+
+body[data-current-view] .topbar::before,
+body[data-current-view] .topbar::after,
+body[data-current-view] .surface::after,
+body[data-current-view] .task-card::after,
+body[data-current-view] .rpc-node-card::after,
+body[data-current-view] .rpc-chain-command-card::after,
+body[data-current-view] .rpc-chain-group::after,
+body[data-current-view] .assistant-panel::after,
+body[data-current-view] .view-header::after {
+  display: none !important;
+}
+
+body[data-current-view] .surface,
+body[data-current-view] .task-card,
+body[data-current-view] .rpc-node-card,
+body[data-current-view] .rpc-chain-command-card,
+body[data-current-view] .rpc-chain-group,
+body[data-current-view] .assistant-panel,
+body[data-current-view] .wallet-list-row,
+body[data-current-view] .history-item,
+body[data-current-view] .settings-shell,
+body[data-current-view] .settings-card,
+body[data-current-view] .task-session-runtime,
+body[data-current-view] .task-session-console,
+body[data-current-view] .history-block,
+body[data-current-view] .modal-card,
+body[data-current-view] .empty-state {
+  border: 1px solid var(--readable-border) !important;
+  background: var(--readable-panel) !important;
+  box-shadow: var(--readable-shadow) !important;
+  backdrop-filter: none !important;
+}
+
+body[data-current-view] .surface::before,
+body[data-current-view] .task-card::before,
+body[data-current-view] .rpc-node-card::before,
+body[data-current-view] .rpc-chain-command-card::before,
+body[data-current-view] .rpc-chain-group::before,
+body[data-current-view] .assistant-panel::before,
+body[data-current-view] .modal-card::before {
+  background: linear-gradient(90deg, transparent, rgba(82, 184, 167, 0.34), transparent) !important;
+  opacity: 1 !important;
+}
+
+body[data-current-view] .topbar-brand-mini strong,
+body[data-current-view] .view-header h2,
+body[data-current-view] .surface h3,
+body[data-current-view] .surface h4,
+body[data-current-view] .assistant-panel-heading h3,
+body[data-current-view] .task-card h3,
+body[data-current-view] .empty-state h3,
+body[data-current-view] .modal-header h3 {
+  color: var(--readable-heading) !important;
+  font-family: "Oxanium", "Space Grotesk", sans-serif !important;
+  letter-spacing: 0.01em !important;
+  text-transform: none !important;
+}
+
+body[data-current-view] .view-header {
+  position: relative;
+  z-index: 1;
+  align-items: end;
+  gap: 18px;
+  margin-bottom: 20px !important;
+  padding: 6px 2px 0;
+}
+
+body[data-current-view] .view-header h2 {
+  font-size: clamp(32px, 3.2vw, 44px) !important;
+  line-height: 0.98 !important;
+}
+
+body[data-current-view] .topbar-brand-mini span,
+body[data-current-view] .helper-copy,
+body[data-current-view] .muted-copy,
+body[data-current-view] .view-subtitle,
+body[data-current-view] .selection-copy,
+body[data-current-view] .account-card p,
+body[data-current-view] .task-console-subtitle,
+body[data-current-view] .task-runtime-stage-copy,
+body[data-current-view] .task-runtime-overview-copy,
+body[data-current-view] .rpc-node-detail,
+body[data-current-view] .rpc-node-url,
+body[data-current-view] .settings-card .helper-copy,
+body[data-current-view] .settings-field-note,
+body[data-current-view] .settings-card-header-copy,
+body[data-current-view] .assistant-message-meta,
+body[data-current-view] .mint-radar-summary,
+body[data-current-view] .task-head-timestamp,
+body[data-current-view] .wallet-assets-meta,
+body[data-current-view] .operation-progress-meta .helper-copy {
+  color: var(--readable-muted) !important;
+  opacity: 1 !important;
+}
+
+body[data-current-view] .eyebrow,
+body[data-current-view] .micro-label,
+body[data-current-view] .tasks-session-metric-label,
+body[data-current-view] .task-runtime-stage-code,
+body[data-current-view] .task-console-code,
+body[data-current-view] .task-console-time,
+body[data-current-view] .settings-provider-kicker {
+  color: var(--readable-accent-strong) !important;
+  letter-spacing: 0.14em !important;
+}
+
+body[data-current-view] .topbar-nav {
+  gap: 10px !important;
+  align-items: center;
+}
+
+body[data-current-view] .topbar-nav .nav-button,
+body[data-current-view] .topbar-signout {
+  min-height: 42px !important;
+  padding: 0 16px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--readable-border) !important;
+  background: #fffaf3 !important;
+  color: var(--readable-brand) !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  white-space: nowrap;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .topbar-nav .nav-button.active {
+  background: linear-gradient(135deg, var(--readable-brand), #2f2119) !important;
+  border-color: transparent !important;
+  color: #fff9f1 !important;
+}
+
+body[data-current-view] .topbar-signout {
+  background: rgba(255, 239, 242, 0.98) !important;
+  border-color: rgba(191, 97, 112, 0.18) !important;
+  color: #b05766 !important;
+}
+
+body[data-current-view] .header-actions,
+body[data-current-view] .surface-actions,
+body[data-current-view] .assistant-panel-actions,
+body[data-current-view] .assistant-composer-actions {
+  gap: 10px !important;
+}
+
+body[data-current-view] .header-input,
+body[data-current-view] .header-select,
+body[data-current-view] input,
+body[data-current-view] textarea,
+body[data-current-view] select {
+  color: var(--readable-text) !important;
+  border: 1px solid var(--readable-border) !important;
+  background: rgba(255, 252, 247, 0.98) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] input::placeholder,
+body[data-current-view] textarea::placeholder,
+body[data-current-view] .header-input::placeholder {
+  color: rgba(122, 98, 78, 0.82) !important;
+}
+
+body[data-current-view] label > span {
+  color: var(--readable-brand-soft) !important;
+  font-weight: 700 !important;
+}
+
+body[data-current-view] .primary-button,
+body[data-current-view] .assistant-send-toggle,
+body[data-current-view] .assistant-header-button,
+body[data-current-view] .task-status-chip.active {
+  background: linear-gradient(135deg, var(--readable-brand), #2d211a) !important;
+  border: 1px solid transparent !important;
+  color: #fff8ef !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .ghost-button,
+body[data-current-view] .mini-button,
+body[data-current-view] .task-status-chip,
+body[data-current-view] .group-tab,
+body[data-current-view] .icon-button {
+  background: #fffaf3 !important;
+  color: var(--readable-brand) !important;
+  border: 1px solid var(--readable-border) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .danger-button,
+body[data-current-view] .mini-button.danger {
+  background: var(--readable-danger-soft) !important;
+  color: #b25361 !important;
+  border: 1px solid rgba(191, 97, 112, 0.2) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .tag-chip,
+body[data-current-view] .wallet-chip,
+body[data-current-view] .settings-integration-tag {
+  background: #f6efe5 !important;
+  color: var(--readable-brand-soft) !important;
+  border: 1px solid var(--readable-border) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .status-pill {
+  border: 1px solid var(--readable-border) !important;
+  background: #fff8f1 !important;
+  color: var(--readable-brand-soft) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .status-pill.running,
+body[data-current-view] .status-pill.healthy,
+body[data-current-view] .task-signal-chip.running,
+body[data-current-view] .task-signal-chip.healthy {
+  background: var(--readable-success-soft) !important;
+  border-color: rgba(43, 143, 104, 0.2) !important;
+  color: var(--readable-success) !important;
+}
+
+body[data-current-view] .status-pill.queued,
+body[data-current-view] .status-pill.draft,
+body[data-current-view] .task-signal-chip.queued {
+  background: #fff5e8 !important;
+  border-color: rgba(220, 149, 72, 0.2) !important;
+  color: #9f6729 !important;
+}
+
+body[data-current-view] .status-pill.failed,
+body[data-current-view] .status-pill.error,
+body[data-current-view] .status-pill.stopped,
+body[data-current-view] .task-signal-chip.failed,
+body[data-current-view] .task-signal-chip.stopped {
+  background: var(--readable-danger-soft) !important;
+  border-color: rgba(191, 97, 112, 0.2) !important;
+  color: var(--readable-danger) !important;
+}
+
+body[data-current-view] .task-signal-chip {
+  border-radius: 999px;
+  padding: 8px 12px;
+  border: 1px solid var(--readable-border) !important;
+  background: #fff8f1 !important;
+  color: var(--readable-brand-soft) !important;
+}
+
+body[data-current-view] .meta-item,
+body[data-current-view] .stat-box,
+body[data-current-view] .task-session-progress,
+body[data-current-view] .task-runtime-stage,
+body[data-current-view] .task-console-entry,
+body[data-current-view] .task-console-alert,
+body[data-current-view] .task-console-empty,
+body[data-current-view] .wallet-selector-item,
+body[data-current-view] .rpc-alert-card,
+body[data-current-view] .settings-status-badge,
+body[data-current-view] .operation-progress {
+  border: 1px solid var(--readable-border) !important;
+  background: var(--readable-panel-strong) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .meta-item label,
+body[data-current-view] .stat-box label {
+  color: var(--readable-muted) !important;
+}
+
+body[data-current-view] .meta-item strong,
+body[data-current-view] .stat-box strong,
+body[data-current-view] .wallet-assets-balance,
+body[data-current-view] .rpc-node-title-row strong,
+body[data-current-view] .rpc-chain-group-header h4,
+body[data-current-view] .rpc-chain-command-card strong,
+body[data-current-view] .task-runtime-overview-side,
+body[data-current-view] .task-runtime-stage-value,
+body[data-current-view] .task-console-copy,
+body[data-current-view] .wallet-list-row strong {
+  color: var(--readable-heading) !important;
+}
+
+body[data-current-view] .stat-box.success strong {
+  color: var(--readable-success) !important;
+}
+
+body[data-current-view] .stat-box.failed strong {
+  color: var(--readable-danger) !important;
+}
+
+body[data-current-view] .progress-track,
+body[data-current-view] .task-runtime-master-track,
+body[data-current-view] .task-runtime-stage-track,
+body[data-current-view] .rpc-latency-bar {
+  border: 1px solid var(--readable-border) !important;
+  background: #ece1d1 !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view] .progress-bar,
+body[data-current-view] .task-runtime-master-fill,
+body[data-current-view] .task-runtime-stage-fill,
+body[data-current-view] .rpc-latency-bar span,
+body[data-current-view] .operation-progress .progress-bar {
+  background: linear-gradient(90deg, var(--readable-accent), var(--readable-warm)) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view="dashboard"] .dashboard-home-surface {
+  min-height: calc(100vh - 210px) !important;
+  padding: 22px 0 !important;
+}
+
+body[data-current-view="dashboard"] .dashboard-home-form {
+  width: min(100%, 940px) !important;
+}
+
+body[data-current-view="dashboard"] .dashboard-mint-input-shell {
+  background: rgba(255, 252, 247, 0.98) !important;
+  border: 1px solid var(--readable-border) !important;
+  box-shadow: 0 18px 34px rgba(96, 72, 45, 0.08) !important;
+}
+
+body[data-current-view="dashboard"] .dashboard-mint-input-shell input {
+  color: var(--readable-heading) !important;
+  font-size: clamp(20px, 2.4vw, 28px) !important;
+}
+
+body[data-current-view="dashboard"] .dashboard-mint-submit {
+  min-width: 180px;
+}
+
+body[data-current-view="dashboard"] .dashboard-mint-inline-status {
+  color: var(--readable-muted) !important;
+}
+
+body[data-current-view="tasks"] .tasks-command-surface {
+  padding: 24px !important;
+}
+
+body[data-current-view="tasks"] .tasks-session-shell {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 18px !important;
+  align-items: end !important;
+}
+
+body[data-current-view="tasks"] .tasks-session-stage {
+  display: grid !important;
+  gap: 12px !important;
+}
+
+body[data-current-view="tasks"] .tasks-session-metrics {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) !important;
+  gap: 12px !important;
+}
+
+body[data-current-view="tasks"] .tasks-session-metric {
+  background: var(--readable-panel-strong) !important;
+  border: 1px solid var(--readable-border) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view="tasks"] .tasks-command-controls {
+  justify-items: end !important;
+  align-content: end !important;
+  gap: 12px !important;
+}
+
+body[data-current-view="tasks"] .task-card {
+  padding: 24px !important;
+}
+
+body[data-current-view="tasks"] .task-session-layout {
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr) !important;
+}
+
+body[data-current-view="tasks"] .task-console-entry {
+  grid-template-columns: 88px 82px minmax(0, 1fr) !important;
+}
+
+body[data-current-view="tasks"] .task-console-alert.info {
+  background: var(--readable-success-soft) !important;
+  color: var(--readable-success) !important;
+}
+
+body[data-current-view="tasks"] .task-console-alert.error,
+body[data-current-view="tasks"] .task-console-fault-line {
+  background: var(--readable-danger-soft) !important;
+  color: var(--readable-danger) !important;
+}
+
+body[data-current-view="mint-radar"] .mint-radar-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)) !important;
+  gap: 18px !important;
+}
+
+body[data-current-view="mint-radar"] .mint-radar-card-note {
+  background: #fff5e8 !important;
+  color: #9f6729 !important;
+  border: 1px solid rgba(220, 149, 72, 0.18) !important;
+}
+
+body[data-current-view="wallets"] .wallets-detail-grid {
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr) !important;
+  gap: 18px !important;
+  align-items: start !important;
+}
+
+body[data-current-view="wallets"] .wallet-list-row {
+  padding: 18px !important;
+  background: var(--readable-panel-strong) !important;
+}
+
+body[data-current-view="wallets"] .wallet-list-row.selected,
+body[data-current-view="wallets"] .wallet-selector-item.selected {
+  background: rgba(82, 184, 167, 0.12) !important;
+  border-color: rgba(43, 143, 128, 0.2) !important;
+}
+
+body[data-current-view="wallets"] .wallet-assets-balance {
+  font-size: clamp(24px, 2.4vw, 34px) !important;
+}
+
+body[data-current-view="rpc"] .rpc-chain-command-card,
+body[data-current-view="rpc"] .rpc-chain-group,
+body[data-current-view="rpc"] .rpc-node-card {
+  background: var(--readable-panel-strong) !important;
+}
+
+body[data-current-view="assistant"] .assistant-panel.assistant-panel-view {
+  padding: 0 !important;
+}
+
+body[data-current-view="assistant"] .assistant-panel-header {
+  padding: 22px 22px 18px !important;
+  border-bottom: 1px solid var(--readable-border) !important;
+  background: transparent !important;
+}
+
+body[data-current-view="assistant"] #assistant-messages {
+  min-height: 340px !important;
+  padding: 22px !important;
+  background: rgba(255, 251, 245, 0.76) !important;
+}
+
+body[data-current-view="assistant"] .assistant-bubble {
+  color: var(--readable-text) !important;
+}
+
+body[data-current-view="assistant"] .assistant-message.user .assistant-bubble {
+  color: #fff8ef !important;
+}
+
+body[data-current-view="assistant"] .assistant-composer {
+  padding: 22px !important;
+  border-top: 1px solid var(--readable-border) !important;
+  background: var(--readable-panel-soft) !important;
+}
+
+body[data-current-view="assistant"] .assistant-composer textarea {
+  min-height: 120px !important;
+}
+
+body[data-current-view="settings"] .settings-shell {
+  padding: 18px !important;
+  background: rgba(255, 249, 241, 0.96) !important;
+}
+
+body[data-current-view="settings"] .settings-panel {
+  gap: 18px !important;
+}
+
+body[data-current-view="settings"] .settings-card,
+body[data-current-view="settings"] .settings-integration-card {
+  padding: 18px !important;
+  background: var(--readable-panel-strong) !important;
+}
+
+body[data-current-view="settings"] .settings-provider-logo {
+  background: linear-gradient(135deg, rgba(82, 184, 167, 0.12), rgba(220, 149, 72, 0.18)) !important;
+  border: 1px solid var(--readable-border) !important;
+  color: var(--readable-heading) !important;
+  box-shadow: none !important;
+}
+
+body[data-current-view="settings"] .settings-status-badge[data-status="saved"] {
+  background: var(--readable-success-soft) !important;
+  color: var(--readable-success) !important;
+}
+
+body[data-current-view="settings"] .settings-status-badge[data-status="error"] {
+  background: var(--readable-danger-soft) !important;
+  color: var(--readable-danger) !important;
+}
+
+@media (max-width: 1120px) {
+  body[data-current-view] .topbar {
+    top: 10px;
+  }
+
+  body[data-current-view] .topbar-compact-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body[data-current-view] .topbar-nav {
+    justify-content: flex-start !important;
+  }
+
+  body[data-current-view="tasks"] .tasks-session-shell,
+  body[data-current-view="tasks"] .task-session-layout,
+  body[data-current-view="wallets"] .wallets-detail-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body[data-current-view="tasks"] .tasks-command-controls {
+    justify-items: start !important;
+  }
+}
+
+@media (max-width: 760px) {
+  body[data-current-view] .workspace {
+    padding: 16px 0 30px !important;
+  }
+
+  body[data-current-view] .topbar {
+    border-radius: 24px !important;
+    margin-bottom: 18px;
+  }
+
+  body[data-current-view] .topbar-nav .nav-button,
+  body[data-current-view] .topbar-signout,
+  body[data-current-view] .header-actions > *,
+  body[data-current-view] .surface-actions > * {
+    width: 100%;
+  }
+
+  body[data-current-view] .header-actions,
+  body[data-current-view] .surface-actions {
+    width: 100%;
+  }
+
+  body[data-current-view="dashboard"] .dashboard-home-surface {
+    min-height: calc(100vh - 160px) !important;
+  }
+
+  body[data-current-view="dashboard"] .dashboard-home-form {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body[data-current-view="tasks"] .tasks-session-metrics,
+  body[data-current-view="tasks"] .task-stats,
+  body[data-current-view="tasks"] .task-meta,
+  body[data-current-view="tasks"] .task-console-entry {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

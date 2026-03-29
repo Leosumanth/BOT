@@ -4606,6 +4606,45 @@ function mintRadarChainOptions() {
   return [...options.entries()].map(([value, label]) => ({ value, label }));
 }
 
+function sanitizeReadableCopy(value = "") {
+  return String(value || "")
+    .replace(/Â·/g, " / ")
+    .replace(/\b(?:span|div|p|section|article)\s*[\[{]/gi, " ")
+    .replace(/[\[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeMintRadarCopy(value = "", fallback = "") {
+  const normalized = sanitizeReadableCopy(value).replace(/Â·|·/g, " / ");
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (/(?:\b0\b\s*){6,}/.test(normalized)) {
+    return fallback;
+  }
+
+  if (/(?:\bUpcoming(?: Tab| Page)?(?: \d+)?\b(?:,\s*|$)){2,}/i.test(normalized)) {
+    return "OpenSea Radar";
+  }
+
+  return normalized;
+}
+
+function formatMintRadarSources(entry = {}) {
+  const sources = (Array.isArray(entry.sources) ? entry.sources : [])
+    .map((source) => sanitizeMintRadarCopy(source))
+    .filter(Boolean);
+
+  if (!sources.length || sources.length > 2) {
+    return "OpenSea Radar";
+  }
+
+  const stableSources = sources.filter((source) => !/^(?:upcoming|live\s*&\s*upcoming)/i.test(source));
+  return stableSources.length ? stableSources.join(" / ") : "OpenSea Radar";
+}
+
 function filteredMintRadarItems() {
   const filter = String(state.mintRadar.filter || "all").trim().toLowerCase();
   const chainFilter = String(state.mintRadar.chainFilter || "all").trim();
@@ -4747,6 +4786,10 @@ function renderMintRadar() {
       : "Auto-sync every 5m";
   }
 
+  if (mintRadarUpdated && fetchedAt) {
+    mintRadarUpdated.textContent = `Updated ${relativeTime(fetchedAt)} / auto-sync every 5m`;
+  }
+
   if (mintRadarLimitation) {
     mintRadarLimitation.textContent =
       limitation ||
@@ -4788,10 +4831,29 @@ function renderMintRadar() {
       const tone = mintRadarStatusTone(entry.status);
       const statusLabel = mintRadarStatusLabel(entry.status);
       const contractLabel = entry.nftContractAddress ? truncateMiddle(entry.nftContractAddress) : "Discover on task load";
-      const chainValue = entry.chainLabel || chainLabel(entry.chainKey) || "OpenSea";
+      const chainValue = sanitizeMintRadarCopy(entry.chainLabel || chainLabel(entry.chainKey) || "OpenSea", "OpenSea");
       const sourceSummary =
         [entry.priceText, entry.scheduleText, entry.totalItemsText, entry.mintedCountText].filter(Boolean).join(" · ") ||
         entry.summary ||
+        "OpenSea drop detected.";
+      const collectionName = sanitizeMintRadarCopy(entry.collectionName || entry.name || "OpenSea Drop", "OpenSea Drop");
+      const creatorName = sanitizeMintRadarCopy(entry.creator || entry.slug || "", "");
+      const priceText = sanitizeMintRadarCopy(entry.priceText);
+      const scheduleText = sanitizeMintRadarCopy(entry.scheduleText);
+      const totalItemsText = sanitizeMintRadarCopy(entry.totalItemsText);
+      const mintedCountText = sanitizeMintRadarCopy(entry.mintedCountText);
+      const collectionSlug = sanitizeMintRadarCopy(entry.slug || "Unknown", "Unknown");
+      const sourceLabel = formatMintRadarSources(entry);
+      const cleanSourceSummary =
+        [
+          priceText,
+          scheduleText,
+          totalItemsText ? `Total ${totalItemsText}` : "",
+          mintedCountText ? `Minted ${mintedCountText}` : ""
+        ]
+          .filter(Boolean)
+          .join(" / ") ||
+        sanitizeMintRadarCopy(sourceSummary) ||
         "OpenSea drop detected.";
 
       return `
@@ -4799,25 +4861,25 @@ function renderMintRadar() {
           <div class="mint-radar-card-header">
             <div>
               <p class="eyebrow">${escapeHtml(chainValue)}</p>
-              <h3>${escapeHtml(entry.collectionName || entry.name || "OpenSea Drop")}</h3>
-              <p class="helper-copy">${escapeHtml(entry.creator || entry.slug || "")}</p>
+              <h3>${escapeHtml(collectionName)}</h3>
+              <p class="helper-copy">${escapeHtml(creatorName)}</p>
             </div>
             <span class="status-pill ${escapeHtml(tone)}">${escapeHtml(statusLabel)}</span>
           </div>
 
           <div class="chip-row">
-            ${entry.priceText ? `<span class="tag-chip">${escapeHtml(entry.priceText)}</span>` : ""}
-            ${entry.scheduleText ? `<span class="tag-chip">${escapeHtml(entry.scheduleText)}</span>` : ""}
-            ${entry.totalItemsText ? `<span class="tag-chip">Total ${escapeHtml(entry.totalItemsText)}</span>` : ""}
-            ${entry.mintedCountText ? `<span class="tag-chip">Minted ${escapeHtml(entry.mintedCountText)}</span>` : ""}
+            ${priceText ? `<span class="tag-chip">${escapeHtml(priceText)}</span>` : ""}
+            ${scheduleText ? `<span class="tag-chip">${escapeHtml(scheduleText)}</span>` : ""}
+            ${totalItemsText ? `<span class="tag-chip">Total ${escapeHtml(totalItemsText)}</span>` : ""}
+            ${mintedCountText ? `<span class="tag-chip">Minted ${escapeHtml(mintedCountText)}</span>` : ""}
           </div>
 
-          <p class="muted-copy mint-radar-summary">${escapeHtml(sourceSummary)}</p>
+          <p class="muted-copy mint-radar-summary">${escapeHtml(cleanSourceSummary)}</p>
 
           <div class="task-meta mint-radar-meta">
             <div class="meta-item">
               <label>Collection</label>
-              <strong>${escapeHtml(entry.slug || "Unknown")}</strong>
+              <strong>${escapeHtml(collectionSlug)}</strong>
             </div>
             <div class="meta-item">
               <label>NFT Contract</label>
@@ -4825,7 +4887,7 @@ function renderMintRadar() {
             </div>
             <div class="meta-item">
               <label>Source</label>
-              <strong>${escapeHtml((entry.sources || []).join(", ") || "OpenSea")}</strong>
+              <strong>${escapeHtml(sourceLabel)}</strong>
             </div>
           </div>
 

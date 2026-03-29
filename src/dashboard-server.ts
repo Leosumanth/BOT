@@ -7007,6 +7007,31 @@ function normalizeWhitespace(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function sanitizeOpenSeaMintRadarText(value = "", fallback = "") {
+  const normalized = normalizeWhitespace(
+    decodeHtmlEntities(
+      String(value || "")
+        .replace(/Â·|·/g, " / ")
+        .replace(/\b(?:span|div|p|section|article)\s*[\[{]/gi, " ")
+        .replace(/[\[\]{}]/g, " ")
+    )
+  );
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (/(?:\b0\b\s*){6,}/.test(normalized)) {
+    return fallback;
+  }
+
+  if (/(?:\bUpcoming(?: Tab| Page)?(?: \d+)?\b(?:,\s*|$)){2,}/i.test(normalized)) {
+    return "OpenSea Radar";
+  }
+
+  return normalized;
+}
+
 function decodeHtmlEntities(value = "") {
   const namedEntities = {
     amp: "&",
@@ -7114,7 +7139,7 @@ function shouldKeepOpenSeaMintRadarCard(text = "") {
 }
 
 function extractOpenSeaMintRadarMetadata(text = "") {
-  const normalized = collapseRepeatedText(stripOpenSeaWidgetCssNoise(text));
+  const normalized = sanitizeOpenSeaMintRadarText(collapseRepeatedText(stripOpenSeaWidgetCssNoise(text)));
   const creatorMatch = normalized.match(
     /\bBy\s+(.+?)(?=\s+(?:Minting now|Status Minting|Mint price|Total items|Items minted|Mint starts in)\b|$)/i
   );
@@ -7147,16 +7172,22 @@ function extractOpenSeaMintRadarMetadata(text = "") {
     summaryParts.push(`Items minted ${normalizeWhitespace(mintedCountMatch[1])}`);
   }
 
+  const priceText = priceMatch ? sanitizeOpenSeaMintRadarText(`${priceMatch[1]} ${String(priceMatch[2] || "").toUpperCase()}`) : "";
+  const scheduleText = startsMatch ? sanitizeOpenSeaMintRadarText(`Starts in ${startsMatch[1]}`) : "";
+  const totalItemsText = sanitizeOpenSeaMintRadarText(totalItemsMatch?.[1] || "");
+  const mintedCountText = sanitizeOpenSeaMintRadarText(mintedCountMatch?.[1] || "");
+  const summary = sanitizeOpenSeaMintRadarText(summaryParts.join(" / "), normalized);
+
   return {
     rawText: normalized,
-    name: normalizeWhitespace(nameMatch?.[1] || ""),
-    creator: normalizeWhitespace(creatorMatch?.[1] || ""),
+    name: sanitizeOpenSeaMintRadarText(nameMatch?.[1] || ""),
+    creator: sanitizeOpenSeaMintRadarText(creatorMatch?.[1] || ""),
     status,
-    priceText: priceMatch ? `${priceMatch[1]} ${String(priceMatch[2] || "").toUpperCase()}` : "",
-    scheduleText: startsMatch ? `Starts in ${normalizeWhitespace(startsMatch[1])}` : "",
-    totalItemsText: normalizeWhitespace(totalItemsMatch?.[1] || ""),
-    mintedCountText: normalizeWhitespace(mintedCountMatch?.[1] || ""),
-    summary: summaryParts.join(" · ")
+    priceText,
+    scheduleText,
+    totalItemsText,
+    mintedCountText,
+    summary
   };
 }
 
