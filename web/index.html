@@ -40,14 +40,13 @@
     <div class="app-shell">
       <main class="workspace">
         <header class="topbar app-topbar">
-          <div class="topbar-main-row">
-            <div class="brand-card hud-panel" data-tilt>
-              <div class="brand-icon">MB</div>
+          <div class="topbar-compact-row">
+            <div class="topbar-brand-mini">
+              <span class="topbar-brand-badge" aria-hidden="true">MB</span>
               <div>
-                <h1>MintBot</h1>
-                <p>Unified workspace</p>
+                <strong>MintBot</strong>
+                <span>Command Nexus</span>
               </div>
-              <span class="version-pill">v3.0</span>
             </div>
 
             <nav class="topbar-nav" aria-label="Primary">
@@ -60,58 +59,38 @@
               <button class="nav-button" data-view="settings" type="button">Settings</button>
             </nav>
 
-            <div class="topbar-utility">
-              <div class="sidebar-pulse hud-panel topbar-status">
-                <div>
-                  <span class="micro-label">System Mode</span>
-                  <strong id="sidebar-mode-label">Activated</strong>
-                </div>
+            <div class="topbar-toolbar">
+              <div class="topbar-pill topbar-mode-pill">
                 <span id="sidebar-mode-dot" class="signal-dot"></span>
+                <span class="micro-label">Mode</span>
+                <strong id="sidebar-mode-label">Activated</strong>
               </div>
-
-              <div class="time-card hud-panel">
-                <span class="micro-label">Local Time</span>
+              <div class="topbar-pill topbar-time-pill">
+                <span class="micro-label">Time</span>
                 <strong id="live-clock">--:--:--</strong>
               </div>
-
-              <div class="account-card hud-panel" data-tilt>
-                <div class="account-avatar" aria-hidden="true">OP</div>
-                <div>
-                  <strong id="account-label">Secure Operator</strong>
-                  <p id="account-status">Sign in required</p>
-                </div>
-                <span class="status-dot" aria-hidden="true"></span>
-              </div>
-
+              <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
+              <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Tasks</button>
               <button id="logout-button" class="danger-button fx-button" type="button">Sign Out</button>
             </div>
           </div>
 
-          <div class="topbar-meta-row">
-            <div class="topbar-copy">
-              <p class="eyebrow">All pages live in the top bar now</p>
-              <h2 class="topbar-title">MintBot Workspace</h2>
-              <p id="hero-mode-copy" class="view-subtitle hidden"></p>
-            </div>
-            <div class="topbar-actions">
-              <div class="topbar-command-row">
-                <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
-                <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Tasks</button>
+          <div class="topbar-hidden-mount hidden" aria-hidden="true">
+            <div class="account-card hud-panel" data-tilt>
+              <div class="account-avatar" aria-hidden="true">OP</div>
+              <div>
+                <strong id="account-label">Secure Operator</strong>
+                <p id="account-status">Sign in required</p>
               </div>
+              <span class="status-dot" aria-hidden="true"></span>
             </div>
           </div>
+
+          <p id="hero-mode-copy" class="view-subtitle hidden"></p>
         </header>
 
         <section class="view active" data-view-panel="dashboard">
           <section class="surface dashboard-home-surface" data-tilt>
-            <div class="dashboard-home-copy">
-              <p class="eyebrow">Dedicated Home</p>
-              <h2>Paste a collection URL</h2>
-              <p class="view-subtitle">
-                Home is now just one action: paste a supported collection link and press Mint. Task setup, live sessions, and run history stay in Tasks.
-              </p>
-            </div>
-
             <form id="dashboard-mint-form" class="dashboard-mint-form dashboard-home-form">
               <label class="dashboard-mint-input-shell" for="dashboard-mint-url-input">
                 <span class="dashboard-mint-input-icon" aria-hidden="true">URL</span>
@@ -127,7 +106,7 @@
             </form>
 
             <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status">
-              Uses your default wallet and active RPC mesh. Advanced tuning stays in Tasks.
+              Paste a collection URL and MintBot will route it into Tasks.
             </p>
           </section>
 
