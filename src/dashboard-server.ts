@@ -3595,6 +3595,7 @@ function defaultTaskState() {
       stopped: 0,
       hashes: []
     },
+    error: null,
     history: [],
     lastRunAt: null,
     done: false,
@@ -8422,6 +8423,7 @@ function cloneTask(task) {
       stopped: 0,
       hashes: []
     },
+    error: null,
     history: [],
     lastRunAt: null,
     createdAt: new Date().toISOString(),
@@ -9078,6 +9080,7 @@ async function startTaskRunLocal(taskId) {
       autoArmPending: false,
       schedulePending: false,
       status: "running",
+      error: null,
       progress: {
         phase: "Preparing",
         percent: 8
@@ -9133,6 +9136,7 @@ async function startTaskRunLocal(taskId) {
         }
         await updateTask(taskId, {
           status: "completed",
+          error: null,
           progress: {
             phase: "Completed",
             percent: 100
@@ -9182,6 +9186,7 @@ async function startTaskRunLocal(taskId) {
         }
         await updateTask(taskId, {
           status,
+          error: formatError(error),
           progress: {
             phase: stopped ? "Stopped" : "Failed",
             percent: stopped ? 0 : 100
@@ -9285,6 +9290,7 @@ async function reclaimQueuedTaskRun(taskId) {
     });
     await updateTask(taskId, {
       status: "failed",
+      error: formatError(error),
       progress: {
         phase: "Failed",
         percent: 100

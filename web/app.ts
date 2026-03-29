@@ -10,7 +10,9 @@ const state = {
   session: { authenticated: false, user: null, authRequired: true },
   currentView: "dashboard",
   walletGroupFilter: "All",
+  taskViewMode: "overview",
   taskStatusFilter: "all",
+  taskHistoryFilter: "failed",
   mintRadar: {
     items: [],
     loading: false,
@@ -111,7 +113,9 @@ const mintRadarLimitation = document.getElementById("mint-radar-limitation");
 const mintRadarWarningList = document.getElementById("mint-radar-warning-list");
 const mintRadarList = document.getElementById("mint-radar-list");
 const tasksSummaryCopy = document.getElementById("tasks-summary-copy");
+const tasksViewToggle = document.getElementById("tasks-view-toggle");
 const taskStatusLegend = document.getElementById("task-status-legend");
+const tasksHistoryFilterBar = document.getElementById("tasks-history-filter-bar");
 const systemAlerts = document.getElementById("system-alerts");
 const dashboardHealthPill = document.getElementById("dashboard-health-pill");
 const sidebarModeLabel = document.getElementById("sidebar-mode-label");
@@ -1869,6 +1873,8 @@ function activeTaskIds() {
 }
 
 const TASK_STATUS_ORDER = ["queued", "running", "completed", "failed", "stopped", "draft"];
+const TASK_VIEW_MODE_ORDER = ["overview", "history"];
+const TASK_HISTORY_FILTER_ORDER = ["live", "completed", "failed"];
 
 const TASK_STATUS_META = {
   running: {
@@ -1925,6 +1931,97 @@ function taskStatusMeta(status) {
     tone: "draft",
     detail: "Task state available"
   };
+}
+
+const TASK_VIEW_MODE_META = {
+  overview: {
+    label: "Overview",
+    tone: "all",
+    detail: "Task cards and live controls"
+  },
+  history: {
+    label: "History",
+    tone: "queued",
+    detail: "Completed, live, and failed run sessions"
+  }
+};
+
+function taskViewModeMeta(mode) {
+  const key = String(mode || "overview").toLowerCase();
+  const meta = TASK_VIEW_MODE_META[key] || TASK_VIEW_MODE_META.overview;
+  return {
+    key,
+    ...meta
+  };
+}
+
+const TASK_HISTORY_FILTER_META = {
+  live: {
+    label: "Live",
+    tone: "running",
+    detail: "Tasks that are actively executing right now."
+  },
+  completed: {
+    label: "Completed",
+    tone: "completed",
+    detail: "Successful mint sessions already sealed."
+  },
+  failed: {
+    label: "Failed",
+    tone: "failed",
+    detail: "Runs that failed or were stopped before completion."
+  }
+};
+
+function taskHistoryFilterMeta(filter) {
+  const key = String(filter || "failed").toLowerCase();
+  const meta = TASK_HISTORY_FILTER_META[key] || TASK_HISTORY_FILTER_META.failed;
+  return {
+    key,
+    ...meta
+  };
+}
+
+function latestTaskHistoryEntry(task) {
+  return Array.isArray(task?.history) && task.history.length > 0 ? task.history[0] : null;
+}
+
+function sanitizeTaskErrorCopy(value = "") {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.replace(/^All wallet runs failed:\s*/i, "").trim();
+}
+
+function taskFailureReason(task) {
+  const candidates = [task?.error, latestTaskHistoryEntry(task)?.error];
+  for (const candidate of candidates) {
+    const normalized = sanitizeTaskErrorCopy(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function buildTaskCardSubtitle(task, statusKey) {
+  if (statusKey === "failed" || statusKey === "stopped") {
+    const failureReason = taskFailureReason(task);
+    if (failureReason) {
+      return truncateMiddle(failureReason, 120, 36);
+    }
+
+    return statusKey === "stopped" ? "Run stopped by operator." : "Run fault captured.";
+  }
+
+  const sourceLabel = task?.sourceLabel || findMintSourceDefinition(task?.sourceType).label;
+  return `${sourceLabel} / ${humanizePriority(task?.priority || "standard")} priority`;
 }
 
 function buildTaskRuntimePipeline(task) {
@@ -2179,12 +2276,13 @@ function taskRuntimeNarrative(task, statusKey = "draft") {
 
   if (statusKey === "failed" || statusKey === "stopped") {
     const stageIndex = resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent);
+    const failureReason = taskFailureReason(task);
     return {
       phaseLabel: statusKey === "stopped" ? "Operator abort" : "Route fault",
       detail:
         statusKey === "stopped"
           ? "Execution was interrupted by operator command before the strike completed."
-          : "Execution fault captured. Inspect the backend terminal and latest logs for the failure surface.",
+          : failureReason || "Execution fault captured.",
       signalLabel: statusKey === "stopped" ? "Abort signal pushed" : "Fault captured",
       sidebarLabel: statusKey === "stopped" ? "Abort Signal" : "Route Fault",
       trace: buildTaskTraceWindow(pipeline, stageIndex, statusKey)
@@ -2319,6 +2417,143 @@ function renderTaskHistoryItems(task) {
       })
       .join("")}
   </div>`;
+}
+
+function summarizeLiveTaskHistoryEntry(task) {
+  const summary = task?.summary || {};
+  const hashCount = Array.isArray(summary.hashes) ? summary.hashes.length : 0;
+  const total = Number(summary.total || task?.walletCount || 0);
+  const success = Number(summary.success || 0);
+  const failed = Number(summary.failed || 0);
+
+  return `${pluralize(total, "wallet")} armed / ${success} success / ${failed} failed / ${hashCount} ${
+    hashCount === 1 ? "hash" : "hashes"
+  }`;
+}
+
+function buildTaskHistoryCollections(tasks, activeTaskIdSet = null) {
+  const activeIds = activeTaskIdSet || new Set(activeTaskIds());
+  const collections = {
+    live: [],
+    completed: [],
+    failed: []
+  };
+
+  tasks.forEach((task) => {
+    const statusKey = taskVisualStatus(task, activeIds);
+    const sourceLabel = task?.sourceLabel || findMintSourceDefinition(task?.sourceType).label;
+
+    if (statusKey === "running" || statusKey === "queued") {
+      const runtime = taskRuntimeNarrative(task, statusKey);
+      const statusMeta = taskStatusMeta(statusKey);
+      collections.live.push({
+        id: `live:${task.id}`,
+        taskId: task.id,
+        taskName: task.name || "Untitled Task",
+        chainLabel: chainLabel(task.chainKey),
+        sourceLabel,
+        tone: statusMeta.tone,
+        label: statusMeta.label,
+        at: task.updatedAt || task.lastRunAt || task.createdAt || new Date().toISOString(),
+        summaryCopy: summarizeLiveTaskHistoryEntry(task),
+        detail: runtime.detail,
+        error: ""
+      });
+    }
+
+    const historyEntries = Array.isArray(task?.history) ? task.history : [];
+    historyEntries.forEach((entry, index) => {
+      const statusMeta = taskHistoryStatusMeta(entry);
+      const filterKey = statusMeta.tone === "completed" ? "completed" : "failed";
+      const entryTone = filterKey === "failed" && statusMeta.tone === "queued" ? "failed" : statusMeta.tone;
+      collections[filterKey].push({
+        id: `${task.id}:${entry?.id || index}`,
+        taskId: task.id,
+        taskName: task.name || "Untitled Task",
+        chainLabel: chainLabel(task.chainKey),
+        sourceLabel,
+        tone: entryTone,
+        label: statusMeta.label,
+        at: entry?.ranAt || task.updatedAt || task.createdAt || new Date().toISOString(),
+        durationMs: Number(entry?.durationMs || 0),
+        summaryCopy: taskHistorySummaryCopy(entry),
+        detail: "",
+        error: sanitizeTaskErrorCopy(entry?.error || "")
+      });
+    });
+  });
+
+  Object.values(collections).forEach((entries) => {
+    entries.sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
+  });
+
+  return collections;
+}
+
+function renderTaskHistoryBoard(entries, filterKey) {
+  const filterMeta = taskHistoryFilterMeta(filterKey);
+  const emptyTitle =
+    filterKey === "live"
+      ? "No live sessions"
+      : filterKey === "completed"
+        ? "No completed sessions"
+        : "No failed sessions";
+  const emptyMessage =
+    filterKey === "live"
+      ? "No tasks are executing right now."
+      : filterKey === "completed"
+        ? "Successful task sessions will appear here after a completed mint."
+        : "Failed or stopped task sessions will appear here after a fault.";
+
+  if (!entries.length) {
+    return `
+      <section class="task-history-board">
+        <div class="empty-state">
+          <h3>${emptyTitle}</h3>
+          <p>${emptyMessage}</p>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="task-history-board">
+      <div class="task-history-board-head">
+        <div>
+          <p class="eyebrow">Run History</p>
+          <h3>${escapeHtml(filterMeta.label)} Sessions</h3>
+          <p class="helper-copy">${escapeHtml(filterMeta.detail)}</p>
+        </div>
+      </div>
+      <div class="task-history-feed">
+        ${entries
+          .map((entry) => {
+            const durationLabel = entry.durationMs > 0 ? ` in ${formatDuration(entry.durationMs)}` : "";
+            const timeLabel =
+              filterKey === "live"
+                ? `Updated ${relativeTime(entry.at)}`
+                : `${new Date(entry.at).toLocaleString()}${durationLabel}`;
+
+            return `
+              <article class="history-session-card ${escapeHtml(entry.tone)}">
+                <div class="history-session-head">
+                  <div>
+                    <p class="eyebrow">${escapeHtml(entry.chainLabel)}</p>
+                    <h4>${escapeHtml(entry.taskName)}</h4>
+                    <p class="muted-copy">${escapeHtml(entry.sourceLabel)} / ${escapeHtml(timeLabel)}</p>
+                  </div>
+                  <span class="status-pill ${escapeHtml(entry.tone)}">${escapeHtml(entry.label)}</span>
+                </div>
+                <p class="muted-copy history-session-summary">${escapeHtml(entry.summaryCopy)}</p>
+                ${entry.detail ? `<p class="muted-copy history-session-detail">${escapeHtml(entry.detail)}</p>` : ""}
+                ${entry.error ? `<p class="muted-copy history-session-error">${escapeHtml(entry.error)}</p>` : ""}
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    </section>
+  `;
 }
 
 function summarizeTaskStatuses(tasks, activeTaskIdSet = null) {
@@ -3665,6 +3900,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
   const sourceLabel = task.sourceLabel || findMintSourceDefinition(task.sourceType).label;
   const sourceSummary = task.sourceSummary || sourceLabel;
   const runtime = taskRuntimeNarrative(task, statusKey);
+  const subtitle = buildTaskCardSubtitle(task, statusKey);
 
   if (task.multiRpcBroadcast) {
     tags.push("RPC Mesh");
@@ -3676,7 +3912,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
         <div>
           <p class="eyebrow">${escapeHtml(chainLabel(task.chainKey))}</p>
           <h3>${escapeHtml(task.name || "Untitled Task")}</h3>
-          <p class="muted-copy">${escapeHtml(task.platform || "Mint Flow")} / ${escapeHtml(humanizePriority(task.priority || "standard"))} priority / ${escapeHtml(runtime.detail)}</p>
+          <p class="muted-copy">${escapeHtml(subtitle)}</p>
         </div>
         <div class="task-head-side">
           <span class="status-pill ${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.label)}</span>
@@ -3750,42 +3986,117 @@ function renderTasks() {
   const activeTaskIdSet = new Set(activeTaskIds());
   const tasks = filteredTasks();
   const allStatusCounts = summarizeTaskStatuses(state.tasks, activeTaskIdSet);
+  const historyCollections = buildTaskHistoryCollections(state.tasks, activeTaskIdSet);
+  const historyCounts = {
+    live: historyCollections.live.length,
+    completed: historyCollections.completed.length,
+    failed: historyCollections.failed.length
+  };
   const totalTasks = state.tasks.length;
   const activeFilterMeta = taskStatusMeta(state.taskStatusFilter);
+  const activeHistoryMeta = taskHistoryFilterMeta(state.taskHistoryFilter);
+
+  taskGrid.dataset.mode = state.taskViewMode;
+
+  if (tasksViewToggle) {
+    tasksViewToggle.innerHTML = TASK_VIEW_MODE_ORDER.map((mode) => {
+      const meta = taskViewModeMeta(mode);
+      return `
+        <button type="button" class="task-status-chip ${escapeHtml(meta.tone)}${state.taskViewMode === meta.key ? " active" : ""}" data-task-view-mode="${escapeHtml(meta.key)}">
+          <span>${escapeHtml(meta.label)}</span>
+        </button>
+      `;
+    }).join("");
+
+    tasksViewToggle.querySelectorAll("[data-task-view-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.taskViewMode = button.dataset.taskViewMode === "history" ? "history" : "overview";
+
+        if (state.taskViewMode === "history" && !historyCounts[state.taskHistoryFilter]) {
+          state.taskHistoryFilter =
+            TASK_HISTORY_FILTER_ORDER.find((key) => historyCounts[key] > 0) || state.taskHistoryFilter;
+        }
+
+        renderTasks();
+      });
+    });
+  }
 
   if (tasksSummaryCopy) {
-    let summaryText = `${pluralize(totalTasks, "task")} in the command center. `;
-    if (state.taskStatusFilter === "all") {
-      summaryText += `${pluralize(allStatusCounts.queued, "task")} queued, ${pluralize(allStatusCounts.running, "task")} running, and ${pluralize(allStatusCounts.completed, "task")} completed.`;
+    let summaryText = "";
+    if (state.taskViewMode === "overview") {
+      summaryText = `${pluralize(totalTasks, "task")} in the command center. `;
+      if (state.taskStatusFilter === "all") {
+        summaryText += `${pluralize(allStatusCounts.queued, "task")} queued, ${pluralize(allStatusCounts.running, "task")} running, and ${pluralize(allStatusCounts.completed, "task")} completed.`;
+      } else {
+        summaryText += `Showing ${pluralize(tasks.length, activeFilterMeta.label.toLowerCase() + " task")}.`;
+      }
     } else {
-      summaryText += `Showing ${pluralize(tasks.length, activeFilterMeta.label.toLowerCase() + " task")}.`;
+      const visibleEntries = historyCollections[state.taskHistoryFilter] || [];
+      const taskCount = new Set(visibleEntries.map((entry) => entry.taskId)).size;
+      summaryText = `${pluralize(visibleEntries.length, activeHistoryMeta.label.toLowerCase() + " session")} across ${pluralize(
+        taskCount,
+        "task"
+      )}.`;
     }
     tasksSummaryCopy.textContent = summaryText;
   }
 
   if (taskStatusLegend) {
-    const legendItems = TASK_STATUS_ORDER.map((status) => ({
-        count: allStatusCounts[status] || 0,
-        ...taskStatusMeta(status)
-      }));
+    taskStatusLegend.classList.toggle("hidden", state.taskViewMode !== "overview");
 
-    taskStatusLegend.innerHTML = legendItems
-      .map(
-        (item) => `
-          <button type="button" class="task-status-chip ${escapeHtml(item.tone)}${state.taskStatusFilter === item.key ? " active" : ""}" data-task-status-chip="${escapeHtml(item.key)}">
-            <span>${escapeHtml(item.label)}</span>
-            <strong>${item.count}</strong>
-          </button>
-        `
-      )
-      .join("");
+    if (state.taskViewMode === "overview") {
+      const legendItems = TASK_STATUS_ORDER.map((status) => ({
+          count: allStatusCounts[status] || 0,
+          ...taskStatusMeta(status)
+        }));
 
-    taskStatusLegend.querySelectorAll("[data-task-status-chip]").forEach((button) => {
-      button.addEventListener("click", () => {
-        state.taskStatusFilter = state.taskStatusFilter === button.dataset.taskStatusChip ? "all" : button.dataset.taskStatusChip;
-        renderTasks();
+      taskStatusLegend.innerHTML = legendItems
+        .map(
+          (item) => `
+            <button type="button" class="task-status-chip ${escapeHtml(item.tone)}${state.taskStatusFilter === item.key ? " active" : ""}" data-task-status-chip="${escapeHtml(item.key)}">
+              <span>${escapeHtml(item.label)}</span>
+              <strong>${item.count}</strong>
+            </button>
+          `
+        )
+        .join("");
+
+      taskStatusLegend.querySelectorAll("[data-task-status-chip]").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.taskStatusFilter = state.taskStatusFilter === button.dataset.taskStatusChip ? "all" : button.dataset.taskStatusChip;
+          renderTasks();
+        });
       });
-    });
+    }
+  }
+
+  if (tasksHistoryFilterBar) {
+    tasksHistoryFilterBar.classList.toggle("hidden", state.taskViewMode !== "history");
+
+    if (state.taskViewMode === "history") {
+      tasksHistoryFilterBar.innerHTML = TASK_HISTORY_FILTER_ORDER.map((filterKey) => {
+        const meta = taskHistoryFilterMeta(filterKey);
+        return `
+          <button type="button" class="task-status-chip ${escapeHtml(meta.tone)}${state.taskHistoryFilter === meta.key ? " active" : ""}" data-task-history-filter="${escapeHtml(meta.key)}">
+            <span>${escapeHtml(meta.label)}</span>
+            <strong>${historyCounts[meta.key] || 0}</strong>
+          </button>
+        `;
+      }).join("");
+
+      tasksHistoryFilterBar.querySelectorAll("[data-task-history-filter]").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.taskHistoryFilter = button.dataset.taskHistoryFilter || "failed";
+          renderTasks();
+        });
+      });
+    }
+  }
+
+  if (state.taskViewMode === "history") {
+    taskGrid.innerHTML = renderTaskHistoryBoard(historyCollections[state.taskHistoryFilter] || [], state.taskHistoryFilter);
+    return;
   }
 
   const emptyTitle = totalTasks === 0 ? "No task sessions yet" : "No tasks match this view";

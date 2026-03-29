@@ -2957,6 +2957,113 @@ function buildFailureResult(walletIndex, privateKey, error) {
   return result;
 }
 
+function isFundingFailureMessage(message = "") {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return [
+    "insufficient funds",
+    "intrinsic transaction cost",
+    "gas * price + value",
+    "wallet balance",
+    "below min_balance_eth",
+    "balance is below"
+  ].some((fragment) => normalized.includes(fragment));
+}
+
+function isGenericWalletFailureMessage(message = "") {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return [
+    "unknown error",
+    "all wallet runs failed",
+    "missing revert data",
+    "execution reverted",
+    "call exception",
+    "static call reverted",
+    "gas estimation failed",
+    "mint transaction reverted on-chain"
+  ].some((fragment) => normalized === fragment || normalized.includes(fragment));
+}
+
+function preferredFailureMessageFromResult(result) {
+  const errorMessage = String(result?.error || "").trim();
+  const revertMessage = String(result?.lastRevertMessage || "").trim();
+
+  if (isFundingFailureMessage(errorMessage)) {
+    return errorMessage;
+  }
+
+  if (!isGenericWalletFailureMessage(errorMessage)) {
+    return errorMessage;
+  }
+
+  if (revertMessage) {
+    return revertMessage;
+  }
+
+  return errorMessage || revertMessage || "";
+}
+
+function selectPreferredFailureResult(currentResult, nextResult) {
+  if (!currentResult) {
+    return nextResult;
+  }
+
+  if (!nextResult) {
+    return currentResult;
+  }
+
+  const currentMessage = preferredFailureMessageFromResult(currentResult);
+  const nextMessage = preferredFailureMessageFromResult(nextResult);
+
+  if (isFundingFailureMessage(nextMessage) && !isFundingFailureMessage(currentMessage)) {
+    return nextResult;
+  }
+
+  if (isGenericWalletFailureMessage(currentMessage) && !isGenericWalletFailureMessage(nextMessage)) {
+    return nextResult;
+  }
+
+  if (!currentMessage && nextMessage) {
+    return nextResult;
+  }
+
+  return currentResult;
+}
+
+function buildAggregateWalletFailureError(results, signal) {
+  if (signal?.aborted) {
+    return new Error("Run stopped");
+  }
+
+  const failures = (Array.isArray(results) ? results : []).filter((result) =>
+    ["failed", "stopped"].includes(String(result?.status || "").toLowerCase())
+  );
+  const preferredResult = failures.reduce((selected, entry) => selectPreferredFailureResult(selected, entry), null);
+  const preferredMessage = preferredFailureMessageFromResult(preferredResult);
+
+  if (!preferredResult || !preferredMessage) {
+    return new Error("All wallet runs failed");
+  }
+
+  return attachErrorContext(new Error(preferredMessage), {
+    walletAddress: preferredResult.walletAddress,
+    txHash: preferredResult.txHash || preferredResult.mintTxHash,
+    mintTxHash: preferredResult.mintTxHash,
+    receipt: preferredResult.receipt,
+    functionUsed: preferredResult.functionUsed,
+    ethValueUsed: preferredResult.ethValueUsed,
+    gasSettings: preferredResult.gasSettings,
+    lastRevertMessage: preferredResult.lastRevertMessage
+  });
+}
+
 function persistResults(resultsPath, results, logger) {
   if (!resultsPath) {
     return;
@@ -3675,7 +3782,7 @@ async function runMintBotWithPreparedWallets(config, context) {
       const successCount = results.filter((result) => !["failed", "stopped"].includes(result.status)).length;
       if (successCount === 0) {
         persistResults(config.resultsPath, results, logger);
-        throw new Error(signal?.aborted ? "Run stopped" : "All wallet runs failed");
+        throw buildAggregateWalletFailureError(results, signal);
       }
 
       return { results };
@@ -3704,6 +3811,12 @@ async function runMintBotWithPreparedWallets(config, context) {
 
         logger.error(`[wallet ${index}] Continuing after failure`);
       }
+    }
+
+    const successCount = results.filter((result) => !["failed", "stopped"].includes(result.status)).length;
+    if (results.length > 0 && successCount === 0) {
+      persistResults(config.resultsPath, results, logger);
+      throw buildAggregateWalletFailureError(results, signal);
     }
 
     return { results };
