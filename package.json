@@ -2,14 +2,16 @@
   "name": "nft-minting-bot",
   "version": "1.0.0",
   "description": "Configurable EVM NFT minting bot",
-  "main": "src/index.js",
+  "main": "build/src/index.js",
   "scripts": {
-    "start": "node src/start.js",
-    "bot": "node src/index.js",
-    "ui": "node src/server.js",
-    "worker": "node src/worker.js",
-    "check": "node scripts/validate.js",
-    "test": "node --test --test-isolation=none test/smoke.test.js"
+    "build": "tsc --pretty false",
+    "typecheck": "tsc --pretty false --noEmit",
+    "start": "npm run build && node build/src/start.js",
+    "bot": "npm run build && node build/src/index.js",
+    "ui": "npm run build && node build/src/server.js",
+    "worker": "npm run build && node build/src/worker.js",
+    "check": "npm run build && node build/scripts/validate.js",
+    "test": "npm run build && node --test --test-isolation=none build/test/smoke.test.js"
   },
   "keywords": [
     "nft",
@@ -24,5 +26,9 @@
     "ethers": "^6.13.2",
     "pg": "^8.20.0",
     "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
   }
 }

@@ -43,6 +43,7 @@ const {
 const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = require("./queue");
 
 const webRoot = path.resolve(process.cwd(), "web");
+const compiledWebRoot = path.resolve(process.cwd(), "build", "web");
 const legacyStatePath = path.resolve(process.cwd(), "dist", "dashboard-state.json");
 const sessionCookieName = process.env.SESSION_COOKIE_NAME || "mintbot_session";
 const sessionTtlHours = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 168));
@@ -137,9 +138,9 @@ const appContentSecurityPolicy = [
   "frame-ancestors 'none'",
   "object-src 'none'",
   "script-src 'self'",
-  "style-src 'self'",
+  "style-src 'self' https://fonts.googleapis.com",
   "img-src 'self' data:",
-  "font-src 'self' data:",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "connect-src 'self'"
 ].join("; ");
 
@@ -11326,8 +11327,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/styles.css")) {
-      serveFile(response, path.join(webRoot, url.pathname.slice(1)));
+    if (request.method === "GET" && url.pathname === "/app.js") {
+      serveFile(response, path.join(compiledWebRoot, "app.js"));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/styles.css") {
+      serveFile(response, path.join(webRoot, "styles.css"));
       return;
     }
 
