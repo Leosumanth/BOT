@@ -38,227 +38,119 @@
     </div>
 
     <div class="app-shell">
-      <aside class="sidebar" data-tilt>
-        <div class="sidebar-top">
-          <div class="brand-card hud-panel" data-tilt>
-            <div class="brand-icon">MB</div>
-            <div>
-              <h1>MintBot</h1>
-              <p>Command Nexus</p>
-            </div>
-            <span class="version-pill">v3.0</span>
-          </div>
-
-          <div class="sidebar-pulse hud-panel">
-            <div>
-              <span class="micro-label">System Mode</span>
-              <strong id="sidebar-mode-label">Activated</strong>
-            </div>
-            <span id="sidebar-mode-dot" class="signal-dot"></span>
-          </div>
-
-          <nav class="sidebar-nav">
-            <button class="nav-button active" data-view="dashboard" type="button">Dashboard</button>
-            <button class="nav-button" data-view="tasks" type="button">Tasks</button>
-            <button class="nav-button" data-view="mint-radar" type="button">Mint Radar</button>
-            <button class="nav-button" data-view="wallets" type="button">Wallets</button>
-            <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
-            <button class="nav-button" data-view="assistant" type="button">Operator AI</button>
-            <button class="nav-button" data-view="settings" type="button">Settings</button>
-          </nav>
-        </div>
-
-        <div class="sidebar-footer">
-          <div class="account-card hud-panel" data-tilt>
-            <div class="account-avatar" aria-hidden="true">OP</div>
-            <div>
-              <strong id="account-label">Secure Operator</strong>
-              <p id="account-status">Sign in required</p>
-            </div>
-            <span class="status-dot" aria-hidden="true"></span>
-          </div>
-          <button id="logout-button" class="danger-button fx-button" type="button">Sign Out</button>
-        </div>
-      </aside>
-
       <main class="workspace">
-        <header class="topbar">
-          <div class="topbar-copy">
-            <p class="eyebrow">Autonomous Public Minting</p>
-            <h2 class="topbar-title">MintBot Studio</h2>
-            <div class="topbar-signal-row">
-              <span class="hero-chip hero-chip-primary">Drop Routing</span>
-              <span class="hero-chip">Wallet Control</span>
-              <span class="hero-chip">RPC Mesh</span>
+        <header class="topbar app-topbar">
+          <div class="topbar-main-row">
+            <div class="brand-card hud-panel" data-tilt>
+              <div class="brand-icon">MB</div>
+              <div>
+                <h1>MintBot</h1>
+                <p>Unified workspace</p>
+              </div>
+              <span class="version-pill">v3.0</span>
             </div>
-            <p id="hero-mode-copy" class="view-subtitle"></p>
-          </div>
-          <div class="topbar-actions">
-            <div class="topbar-command-deck">
+
+            <nav class="topbar-nav" aria-label="Primary">
+              <button class="nav-button active" data-view="dashboard" type="button">Home</button>
+              <button class="nav-button" data-view="tasks" type="button">Tasks</button>
+              <button class="nav-button" data-view="mint-radar" type="button">Mint Radar</button>
+              <button class="nav-button" data-view="wallets" type="button">Wallets</button>
+              <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
+              <button class="nav-button" data-view="assistant" type="button">Operator AI</button>
+              <button class="nav-button" data-view="settings" type="button">Settings</button>
+            </nav>
+
+            <div class="topbar-utility">
+              <div class="sidebar-pulse hud-panel topbar-status">
+                <div>
+                  <span class="micro-label">System Mode</span>
+                  <strong id="sidebar-mode-label">Activated</strong>
+                </div>
+                <span id="sidebar-mode-dot" class="signal-dot"></span>
+              </div>
+
               <div class="time-card hud-panel">
                 <span class="micro-label">Local Time</span>
                 <strong id="live-clock">--:--:--</strong>
               </div>
+
+              <div class="account-card hud-panel" data-tilt>
+                <div class="account-avatar" aria-hidden="true">OP</div>
+                <div>
+                  <strong id="account-label">Secure Operator</strong>
+                  <p id="account-status">Sign in required</p>
+                </div>
+                <span class="status-dot" aria-hidden="true"></span>
+              </div>
+
+              <button id="logout-button" class="danger-button fx-button" type="button">Sign Out</button>
+            </div>
+          </div>
+
+          <div class="topbar-meta-row">
+            <div class="topbar-copy">
+              <p class="eyebrow">All pages live in the top bar now</p>
+              <h2 class="topbar-title">MintBot Workspace</h2>
+              <p id="hero-mode-copy" class="view-subtitle hidden"></p>
+            </div>
+            <div class="topbar-actions">
               <div class="topbar-command-row">
                 <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
-                <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Advanced Builder</button>
+                <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Tasks</button>
               </div>
             </div>
           </div>
         </header>
 
         <section class="view active" data-view-panel="dashboard">
-          <div class="view-header dashboard-view-header">
-            <div>
-              <p class="eyebrow">Mint landing page</p>
-              <h2>Paste a collection URL and let MintBot do the rest</h2>
+          <section class="surface dashboard-home-surface" data-tilt>
+            <div class="dashboard-home-copy">
+              <p class="eyebrow">Dedicated Home</p>
+              <h2>Paste a collection URL</h2>
               <p class="view-subtitle">
-                Start from a single OpenSea collection link. MintBot will auto-discover the contract, chain, ABI, price path, and task setup in the background.
+                Home is now just one action: paste a supported collection link and press Mint. Task setup, live sessions, and run history stay in Tasks.
               </p>
             </div>
-          </div>
 
-          <section class="surface dashboard-market-hero" data-tilt>
-            <div class="dashboard-market-copy">
-              <p class="eyebrow">Paste. Route. Mint.</p>
-              <h3>One front door for public mints</h3>
-              <p class="helper-copy dashboard-market-copy-text">
-                Drop an OpenSea collection URL, press Mint, and MintBot will create an auto-routed public mint task using your default wallet lane and active RPC mesh.
-              </p>
-              <form id="dashboard-mint-form" class="dashboard-mint-form">
-                <label class="dashboard-mint-input-shell" for="dashboard-mint-url-input">
-                  <span class="dashboard-mint-input-icon" aria-hidden="true">M</span>
-                  <input
-                    id="dashboard-mint-url-input"
-                    type="url"
-                    placeholder="Paste an OpenSea collection URL to create a mint task"
-                    spellcheck="false"
-                    autocomplete="off"
-                  />
-                </label>
-                <button id="dashboard-mint-submit-button" class="primary-button fx-button dashboard-mint-submit" type="submit">Mint</button>
-              </form>
-              <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status">
-                Uses your first available wallet and the active RPC mesh. Advanced tuning still stays available in Tasks.
-              </p>
-              <div class="dashboard-market-points">
-                <span class="dashboard-market-point">Auto route discovery</span>
-                <span class="dashboard-market-point">Chain-aware RPC selection</span>
-                <span class="dashboard-market-point">Task saved in background</span>
-              </div>
-            </div>
+            <form id="dashboard-mint-form" class="dashboard-mint-form dashboard-home-form">
+              <label class="dashboard-mint-input-shell" for="dashboard-mint-url-input">
+                <span class="dashboard-mint-input-icon" aria-hidden="true">URL</span>
+                <input
+                  id="dashboard-mint-url-input"
+                  type="url"
+                  placeholder="Paste an OpenSea collection URL"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+              </label>
+              <button id="dashboard-mint-submit-button" class="primary-button fx-button dashboard-mint-submit" type="submit">Mint</button>
+            </form>
 
-            <div class="dashboard-market-visual">
-              <div class="dashboard-market-art-panel">
-                <div class="dashboard-market-orbit orbit-a" aria-hidden="true"></div>
-                <div class="dashboard-market-orbit orbit-b" aria-hidden="true"></div>
-                <div class="dashboard-market-token" aria-hidden="true">MB</div>
-
-                <article class="dashboard-market-floating-card floating-primary">
-                  <span class="micro-label">Auto Route</span>
-                  <strong>Contract + ABI</strong>
-                  <p>Discovered after you paste the collection URL.</p>
-                </article>
-
-                <article class="dashboard-market-floating-card floating-secondary">
-                  <span class="micro-label">Background Flow</span>
-                  <strong>Wallet + RPC Mesh</strong>
-                  <p>Task creation, routing, and launch setup continue behind the scenes.</p>
-                </article>
-              </div>
-
-              <div class="dashboard-market-stats">
-                <article class="dashboard-market-stat">
-                  <span>Default wallet</span>
-                  <strong id="dashboard-mint-default-wallet">No wallet loaded</strong>
-                  <p id="dashboard-mint-wallet-copy">Import a wallet to arm one-click mint.</p>
-                </article>
-                <article class="dashboard-market-stat">
-                  <span>Active RPC mesh</span>
-                  <strong id="dashboard-mint-rpc-count">0 live lanes</strong>
-                  <p id="dashboard-mint-rpc-copy">Enable RPC nodes so MintBot can broadcast when the route is ready.</p>
-                </article>
-                <article class="dashboard-market-stat">
-                  <span>Saved tasks</span>
-                  <strong id="dashboard-mint-task-count">0 sessions</strong>
-                  <p id="dashboard-mint-task-copy">Every one-click mint still lands in the Tasks workspace for review and control.</p>
-                </article>
-              </div>
-            </div>
+            <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status">
+              Uses your default wallet and active RPC mesh. Advanced tuning stays in Tasks.
+            </p>
           </section>
 
-          <section class="surface" data-tilt>
-            <div class="surface-header compact">
-              <div>
-                <h3>Automation Deck</h3>
-                <p class="helper-copy">Use the quick-mint home flow above or trigger priority runs, RPC checks, and snapshots from here without leaving the dashboard.</p>
-              </div>
-              <div class="surface-actions">
-                <button id="run-priority-button" class="ghost-button fx-button" type="button">Run Priority Task</button>
-                <button id="rpc-pulse-button" class="ghost-button fx-button" type="button">Pulse RPC Mesh</button>
-                <button id="snapshot-button" class="primary-button fx-button" type="button">Capture Snapshot</button>
-              </div>
+          <section class="dashboard-support-mount hidden" aria-hidden="true">
+            <div id="dashboard-run-history" class="stack-list"></div>
+            <span id="dashboard-health-pill" class="status-pill healthy">Healthy</span>
+            <div id="system-alerts" class="alert-stack"></div>
+            <button id="run-priority-button" class="ghost-button fx-button" type="button">Run Priority Task</button>
+            <button id="rpc-pulse-button" class="ghost-button fx-button" type="button">Pulse RPC Mesh</button>
+            <button id="snapshot-button" class="primary-button fx-button" type="button">Capture Snapshot</button>
+            <button id="clear-logs-button" class="ghost-button fx-button" type="button">Clear Logs</button>
+            <pre id="log-output" class="code-panel">Waiting for live logs...</pre>
+            <pre id="runtime-output" class="code-panel">Awaiting runtime snapshot...</pre>
+            <pre id="results-output" class="code-panel">No results yet.</pre>
+            <div class="dashboard-home-data">
+              <span id="dashboard-mint-default-wallet">No wallet loaded</span>
+              <span id="dashboard-mint-wallet-copy">Import a wallet to arm one-click mint.</span>
+              <span id="dashboard-mint-rpc-count">0 live lanes</span>
+              <span id="dashboard-mint-rpc-copy">Enable RPC nodes so MintBot can broadcast when the route is ready.</span>
+              <span id="dashboard-mint-task-count">0 sessions</span>
+              <span id="dashboard-mint-task-copy">Every one-click mint still lands in Tasks for review and control.</span>
             </div>
           </section>
-
-          <div class="content-grid dashboard-focus-grid">
-            <section class="surface dashboard-history-surface" data-tilt>
-              <div class="surface-header">
-                <div>
-                  <h3>Launch Feed</h3>
-                  <p class="helper-copy">Currently running tasks and the latest task execution results.</p>
-                </div>
-              </div>
-              <div id="dashboard-run-history" class="stack-list"></div>
-            </section>
-
-            <section class="surface dashboard-alert-surface" data-tilt>
-              <div class="surface-header compact">
-                <div>
-                  <h3>System Alerts</h3>
-                </div>
-                <span id="dashboard-health-pill" class="status-pill healthy">Healthy</span>
-              </div>
-              <div id="system-alerts" class="alert-stack"></div>
-            </section>
-          </div>
-
-          <div class="content-grid dashboard-focus-grid">
-            <section class="surface" data-tilt>
-              <div class="surface-header compact">
-                <div>
-                  <h3>Live Logs</h3>
-                  <p class="helper-copy">Streaming run logs from the active session and the latest operator actions.</p>
-                </div>
-                <div class="surface-actions">
-                  <button id="clear-logs-button" class="ghost-button fx-button" type="button">Clear Logs</button>
-                </div>
-              </div>
-              <pre id="log-output" class="code-panel">Waiting for live logs...</pre>
-            </section>
-
-            <div class="stack-list">
-              <section class="surface" data-tilt>
-                <div class="surface-header compact">
-                  <div>
-                    <h3>Runtime Snapshot</h3>
-                    <p class="helper-copy">Current shell telemetry, run state, and task counts.</p>
-                  </div>
-                </div>
-                <pre id="runtime-output" class="code-panel">Awaiting runtime snapshot...</pre>
-              </section>
-
-              <section class="surface" data-tilt>
-                <div class="surface-header compact">
-                  <div>
-                    <h3>Latest Result</h3>
-                    <p class="helper-copy">Most recent completed task result payload.</p>
-                  </div>
-                </div>
-                <pre id="results-output" class="code-panel">No results yet.</pre>
-              </section>
-            </div>
-          </div>
         </section>
 
         <section class="view" data-view-panel="tasks">
@@ -1654,6 +1546,8 @@
           <button id="wallet-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
         </div>
       </div>
+    </div>
+      </main>
     </div>
 
     <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>

@@ -545,7 +545,7 @@ let assistantRequestToken = 0;
 const assistantViewCommands = [
   {
     view: "dashboard",
-    label: "Dashboard",
+    label: "Home",
     aliases: ["dashboard", "home", "main dashboard", "control surface"]
   },
   {
