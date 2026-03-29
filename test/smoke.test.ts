@@ -12,7 +12,7 @@ const {
 } = require("../src/mint-source-adapters");
 const mintSources = require("../src/mint-sources");
 const integrations = require("../src/integrations");
-const { simulateMintMethod } = require("../src/bot");
+const { shouldEagerlyPrepareAutomatedMint, simulateMintMethod } = require("../src/bot");
 const { normalizeConfig } = require("../src/config");
 const { createDefaultPersistentState, normalizePersistentState } = require("../src/database");
 const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = require("../src/queue");
@@ -20,6 +20,7 @@ const { resolveHost, resolvePort } = require("../src/server");
 const {
   applyMintAutofillToTask,
   extractOpenSeaCollectionSlug,
+  formatTerminalLogEntry,
   parseOpenSeaMintRadarEntries,
   seaDropContractAddressForChain
 } = require("../src/dashboard-server");
@@ -544,4 +545,52 @@ test("mint simulation accepts estimateGas fallback when staticCall returns a fal
       callArgs: [...args, overrides]
     }
   ]);
+});
+
+test("automated mint warmup pre-sign is only enabled for immediate live runs", () => {
+  const baseConfig = {
+    autoMintMode: true,
+    preSignTransactions: true,
+    dryRun: false,
+    waitUntilIso: "",
+    mintStartDetectionEnabled: false,
+    readyCheckFunction: "",
+    executionTriggerMode: "standard"
+  };
+
+  assert.equal(shouldEagerlyPrepareAutomatedMint(baseConfig), true);
+  assert.equal(
+    shouldEagerlyPrepareAutomatedMint({
+      ...baseConfig,
+      mintStartDetectionEnabled: true
+    }),
+    false
+  );
+  assert.equal(
+    shouldEagerlyPrepareAutomatedMint({
+      ...baseConfig,
+      waitUntilIso: "2026-04-02T17:00:00.000Z"
+    }),
+    false
+  );
+  assert.equal(
+    shouldEagerlyPrepareAutomatedMint({
+      ...baseConfig,
+      executionTriggerMode: "mempool"
+    }),
+    false
+  );
+});
+
+test("dashboard terminal log formatter emits timestamped backend log lines", () => {
+  const line = formatTerminalLogEntry({
+    level: "warning",
+    message: "[task Fast Mint] Runtime prepared in 812ms",
+    timestamp: "2026-03-30T10:22:33.456Z"
+  });
+
+  assert.equal(
+    line,
+    "2026-03-30 10:22:33.456Z [WARNING] [task Fast Mint] Runtime prepared in 812ms"
+  );
 });

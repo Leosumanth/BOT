@@ -288,6 +288,19 @@ const queueInlineFallbackMs = Math.max(
 );
 const queueInlineWorkerId =
   String(process.env.QUEUE_INLINE_WORKER_ID || "").trim() || `dashboard_${process.pid}`;
+const terminalLogMirroringEnabled = !["0", "false", "off"].includes(
+  String(process.env.TERMINAL_LOGGING || "true").trim().toLowerCase()
+);
+const terminalLogLevel = ["info", "warning", "error"].includes(
+  String(process.env.TERMINAL_LOG_LEVEL || "info").trim().toLowerCase()
+)
+  ? String(process.env.TERMINAL_LOG_LEVEL || "info").trim().toLowerCase()
+  : "info";
+const terminalLogSeverity = {
+  info: 0,
+  warning: 1,
+  error: 2
+};
 const walletAssetChainlistUrlBudget = Math.max(
   1,
   Number(process.env.WALLET_ASSET_CHAINLIST_URL_BUDGET || 2)
@@ -8036,12 +8049,82 @@ function serveFile(response, filePath) {
   response.end(fs.readFileSync(filePath));
 }
 
+function normalizeLogLevel(level = "") {
+  const normalized = String(level || "").trim().toLowerCase();
+  if (normalized === "warn") {
+    return "warning";
+  }
+
+  return ["warning", "error"].includes(normalized) ? normalized : "info";
+}
+
+function formatDurationMs(durationMs) {
+  const normalized = Math.max(0, Number(durationMs) || 0);
+  if (normalized < 1_000) {
+    return `${normalized}ms`;
+  }
+
+  if (normalized < 60_000) {
+    return `${(normalized / 1_000).toFixed(normalized >= 10_000 ? 0 : 1)}s`;
+  }
+
+  const minutes = Math.floor(normalized / 60_000);
+  const seconds = ((normalized % 60_000) / 1_000).toFixed(1).replace(/\.0$/, "");
+  return `${minutes}m ${seconds}s`;
+}
+
+function normalizeLogEntry(entry = {}) {
+  const timestampValue = new Date(entry.timestamp || Date.now());
+  return {
+    ...entry,
+    level: normalizeLogLevel(entry.level),
+    message: String(entry.message || "").trim(),
+    timestamp: Number.isNaN(timestampValue.getTime()) ? new Date().toISOString() : timestampValue.toISOString()
+  };
+}
+
+function shouldMirrorLogToTerminal(entry) {
+  if (!terminalLogMirroringEnabled) {
+    return false;
+  }
+
+  return terminalLogSeverity[entry.level] >= terminalLogSeverity[terminalLogLevel];
+}
+
+function formatTerminalLogEntry(entry = {}) {
+  const normalizedEntry = normalizeLogEntry(entry);
+  const timestamp = normalizedEntry.timestamp.replace("T", " ");
+  const levelLabel = normalizedEntry.level.toUpperCase();
+  return `${timestamp} [${levelLabel}] ${normalizedEntry.message}`;
+}
+
+function mirrorLogToTerminal(entry) {
+  if (!shouldMirrorLogToTerminal(entry)) {
+    return;
+  }
+
+  const line = formatTerminalLogEntry(entry);
+  if (entry.level === "error") {
+    console.error(line);
+    return;
+  }
+
+  if (entry.level === "warning") {
+    console.warn(line);
+    return;
+  }
+
+  console.log(line);
+}
+
 function pushLog(entry) {
-  liveLogs.push(entry);
+  const normalizedEntry = normalizeLogEntry(entry);
+  liveLogs.push(normalizedEntry);
   if (liveLogs.length > 400) {
     liveLogs = liveLogs.slice(-400);
   }
-  broadcast("log", entry);
+  mirrorLogToTerminal(normalizedEntry);
+  broadcast("log", normalizedEntry);
 }
 
 function reportBackgroundError(error) {
@@ -8636,20 +8719,47 @@ async function startTaskRunLocal(taskId) {
   }
 
   clearQueuedTaskFallback(taskId);
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const launchRequestedAtMs = Date.now();
   const runContext = {
     taskId,
     taskName: task.name,
     controller: new AbortController(),
     startedAt: null,
     active: false,
-    workerId: queueModeEnabled() ? queueInlineWorkerId : null
+    workerId: queueModeEnabled() ? queueInlineWorkerId : null,
+    requestedAtMs: launchRequestedAtMs
   };
   localTaskRuns.set(taskId, runContext);
+  pushLog({
+    level: "info",
+    taskId,
+    message: `[task ${task.name}] Launch accepted on ${runContext.workerId || `dashboard_${process.pid}`} (local execution mode)`,
+    timestamp: new Date(launchRequestedAtMs).toISOString()
+  });
   try {
+    const configBuildStartedAtMs = Date.now();
     const config = await buildConfigForTask(task);
-    const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
-    runContext.startedAt = new Date().toISOString();
+    const runtimePreparedAtMs = Date.now();
+    runContext.startedAt = new Date(runtimePreparedAtMs).toISOString();
     runContext.active = true;
+
+    pushLog({
+      level: "info",
+      taskId,
+      message: `[task ${task.name}] Runtime prepared in ${formatDurationMs(
+        runtimePreparedAtMs - configBuildStartedAtMs
+      )} (${walletIds.length} wallet${walletIds.length === 1 ? "" : "s"}, ${config.rpcUrls.length} RPC${
+        config.rpcUrls.length === 1 ? "" : "s"
+      }, gas ${config.gasStrategy}, waitForReceipt ${config.waitForReceipt ? "on" : "off"})`,
+      timestamp: runContext.startedAt
+    });
+    pushLog({
+      level: "info",
+      taskId,
+      message: `[task ${task.name}] Local execution started on ${runContext.workerId || `dashboard_${process.pid}`}`,
+      timestamp: runContext.startedAt
+    });
 
     if (queueModeEnabled()) {
       distributedQueuedTaskIds.delete(taskId);
@@ -8701,6 +8811,7 @@ async function startTaskRunLocal(taskId) {
         const summary = summarizeResults(result.results);
         const taskAfterRun = getTaskById(taskId);
         const completedAt = new Date().toISOString();
+        const totalDurationMs = Date.now() - runContext.requestedAtMs;
         clearDistributedTaskPatch(taskId);
         if (queueModeEnabled()) {
           await setTaskRuntimeRecord(taskId, {
@@ -8735,10 +8846,17 @@ async function startTaskRunLocal(taskId) {
             ...(taskAfterRun.history || [])
           ].slice(0, 8)
         });
+        pushLog({
+          level: "info",
+          taskId,
+          message: `[task ${runContext.taskName}] Run completed in ${formatDurationMs(totalDurationMs)} (${summary.success} success, ${summary.failed} failed, ${summary.hashes.length} hash${summary.hashes.length === 1 ? "" : "es"})`,
+          timestamp: completedAt
+        });
       })
       .catch(async (error) => {
         const stopped = error instanceof AbortRunError || runContext.controller.signal.aborted;
         const failedAt = new Date().toISOString();
+        const totalDurationMs = Date.now() - runContext.requestedAtMs;
         clearDistributedTaskPatch(taskId);
         if (queueModeEnabled()) {
           await setTaskRuntimeRecord(taskId, {
@@ -8765,7 +8883,15 @@ async function startTaskRunLocal(taskId) {
           lastRunAt: failedAt
         });
         pushLog({
-          level: "error",
+          level: stopped ? "warning" : "error",
+          taskId,
+          message: `[task ${runContext.taskName}] Run ${stopped ? "stopped" : "failed"} after ${formatDurationMs(
+            totalDurationMs
+          )}`,
+          timestamp: failedAt
+        });
+        pushLog({
+          level: stopped ? "warning" : "error",
           taskId,
           message: `[task ${runContext.taskName}] ${formatError(error)}`,
           timestamp: failedAt
@@ -11476,6 +11602,7 @@ if (require.main === module) {
 module.exports = {
   applyMintAutofillToTask,
   extractOpenSeaCollectionSlug,
+  formatTerminalLogEntry,
   parseOpenSeaMintRadarEntries,
   resolveHost,
   resolvePort,
