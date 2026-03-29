@@ -8448,6 +8448,10 @@ select:focus,
   box-shadow: 0 0 0 4px rgba(255, 98, 127, 0.08), 0 0 14px rgba(255, 98, 127, 0.18);
 }
 
+.task-action-primary {
+  margin-left: auto;
+}
+
 @media (max-width: 700px) {
   .task-trace-line {
     grid-template-columns: 1fr;
@@ -8455,5 +8459,9 @@ select:focus,
 
   .task-trace-code {
     padding-left: 14px;
+  }
+
+  .task-action-primary {
+    margin-left: 0;
   }
 }

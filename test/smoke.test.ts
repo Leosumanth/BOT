@@ -12,12 +12,17 @@ const {
 } = require("../src/mint-source-adapters");
 const mintSources = require("../src/mint-sources");
 const integrations = require("../src/integrations");
-const { shouldEagerlyPrepareAutomatedMint, simulateMintMethod } = require("../src/bot");
+const {
+  shouldEagerlyPrepareAutomatedMint,
+  shouldUseImmediatePreparedMintFastPath,
+  simulateMintMethod
+} = require("../src/bot");
 const { normalizeConfig } = require("../src/config");
 const { createDefaultPersistentState, normalizePersistentState } = require("../src/database");
 const { createIdleRunState, createRedisCoordinator, resolveQueueConfig } = require("../src/queue");
 const { resolveHost, resolvePort } = require("../src/server");
 const {
+  applyFastSubmissionProfile,
   applyMintAutofillToTask,
   buildMintValueFundingAssessment,
   extractOpenSeaCollectionSlug,
@@ -26,6 +31,8 @@ const {
   resolveQueueLaunchStrategy,
   selectPreferredSimulationError,
   seaDropContractAddressForChain,
+  shouldSkipRuntimeSimulationForTask,
+  shouldUseFastSubmissionProfile,
   shouldQueueTaskLaunch
 } = require("../src/dashboard-server");
 
@@ -614,6 +621,114 @@ test("automated mint warmup pre-sign is only enabled for immediate live runs", (
       ...baseConfig,
       executionTriggerMode: "mempool"
     }),
+    false
+  );
+});
+
+test("fast submission profile trims receipt wait and warmup for immediate OpenSea runs", () => {
+  const optimizedTask = applyFastSubmissionProfile({
+    sourceType: "opensea",
+    sourceExecutionBlocker: "",
+    platform: "OpenSea SeaDrop",
+    dryRun: false,
+    transferAfterMinted: false,
+    useSchedule: false,
+    waitUntilIso: "",
+    executionTriggerMode: "standard",
+    mintStartDetectionEnabled: false,
+    readyCheckFunction: "",
+    waitForReceipt: true,
+    warmupRpc: true,
+    simulateTransaction: true,
+    smartGasReplacement: true
+  });
+
+  assert.equal(shouldUseFastSubmissionProfile(optimizedTask), true);
+  assert.equal(shouldSkipRuntimeSimulationForTask(optimizedTask), true);
+  assert.equal(optimizedTask.waitForReceipt, false);
+  assert.equal(optimizedTask.warmupRpc, false);
+  assert.equal(optimizedTask.simulateTransaction, false);
+  assert.equal(optimizedTask.smartGasReplacement, false);
+  assert.equal(optimizedTask.fastSubmissionProfile, true);
+});
+
+test("fast submission profile preserves receipt-bound flows when a task needs confirmation", () => {
+  const scheduledTask = applyFastSubmissionProfile({
+    sourceType: "opensea",
+    platform: "OpenSea SeaDrop",
+    transferAfterMinted: false,
+    dryRun: false,
+    useSchedule: true,
+    waitUntilIso: "2026-04-02T17:00:00.000Z",
+    executionTriggerMode: "standard",
+    mintStartDetectionEnabled: false,
+    readyCheckFunction: "",
+    waitForReceipt: true,
+    warmupRpc: true,
+    simulateTransaction: true,
+    smartGasReplacement: true
+  });
+
+  const transferTask = applyFastSubmissionProfile({
+    sourceType: "generic_contract",
+    dryRun: false,
+    transferAfterMinted: true,
+    useSchedule: false,
+    waitUntilIso: "",
+    executionTriggerMode: "standard",
+    mintStartDetectionEnabled: false,
+    readyCheckFunction: "",
+    waitForReceipt: true,
+    warmupRpc: true,
+    simulateTransaction: true,
+    smartGasReplacement: true
+  });
+
+  assert.equal(shouldUseFastSubmissionProfile(scheduledTask), false);
+  assert.equal(scheduledTask.waitForReceipt, true);
+  assert.equal(scheduledTask.warmupRpc, true);
+  assert.equal(scheduledTask.fastSubmissionProfile, false);
+  assert.equal(shouldUseFastSubmissionProfile(transferTask), false);
+  assert.equal(transferTask.waitForReceipt, true);
+  assert.equal(transferTask.smartGasReplacement, true);
+  assert.equal(transferTask.fastSubmissionProfile, false);
+});
+
+test("prepared mint fast path skips the extra nonce refresh only on immediate submit runs", () => {
+  const fastConfig = {
+    dryRun: false,
+    waitForReceipt: false,
+    transferAfterMinted: false,
+    waitUntilIso: "",
+    mintStartDetectionEnabled: false,
+    readyCheckFunction: "",
+    executionTriggerMode: "standard"
+  };
+  const preparedSession = {
+    preparedMint: {
+      hash: "0xabc"
+    }
+  };
+
+  assert.equal(shouldUseImmediatePreparedMintFastPath(fastConfig, preparedSession), true);
+  assert.equal(
+    shouldUseImmediatePreparedMintFastPath(
+      {
+        ...fastConfig,
+        waitForReceipt: true
+      },
+      preparedSession
+    ),
+    false
+  );
+  assert.equal(
+    shouldUseImmediatePreparedMintFastPath(
+      {
+        ...fastConfig,
+        readyCheckFunction: "saleActive"
+      },
+      preparedSession
+    ),
     false
   );
 });

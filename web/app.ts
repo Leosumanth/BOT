@@ -979,9 +979,9 @@ function applyLatencyProfile(profile) {
       replacementAttempts: "2",
       simulate: true,
       dryRun: false,
-      warmupRpc: true,
+      warmupRpc: false,
       multiRpcBroadcast: true,
-      smartGasReplacement: true
+      smartGasReplacement: false
     },
     ultra_low_latency: {
       walletMode: "parallel",
@@ -998,9 +998,9 @@ function applyLatencyProfile(profile) {
       replacementAttempts: "3",
       simulate: true,
       dryRun: false,
-      warmupRpc: true,
+      warmupRpc: false,
       multiRpcBroadcast: true,
-      smartGasReplacement: true
+      smartGasReplacement: false
     }
   };
 
@@ -1927,72 +1927,106 @@ function taskStatusMeta(status) {
   };
 }
 
-const TASK_RUNTIME_PIPELINE = [
-  {
-    key: "backend",
-    code: "CTRL",
-    label: "Contacting backend",
-    shortLabel: "Backend Link",
-    detail: "Linking the dashboard to the execution control plane.",
-    traceLabel: "contacting backend control plane"
-  },
-  {
-    key: "rpc",
-    code: "RPC",
-    label: "Provisioning RPC mesh",
-    shortLabel: "RPC Mesh",
-    detail: "Selecting healthy broadcast lanes and warming provider sockets.",
-    traceLabel: "provisioning rpc mesh"
-  },
-  {
-    key: "gas",
-    code: "GAS",
-    label: "Checking gas lanes",
-    shortLabel: "Gas Scan",
-    detail: "Sampling fee pressure, boost settings, and replacement thresholds.",
-    traceLabel: "checking gas fees and replacement lanes"
-  },
-  {
-    key: "route",
-    code: "ROUTE",
-    label: "Arming mint route",
-    shortLabel: "Route Armed",
-    detail: "Locking the mint route, launch window, and sale-open trigger logic.",
-    traceLabel: "arming mint route and launch triggers"
-  },
-  {
-    key: "payload",
-    code: "PAYLOAD",
-    label: "Forging payload",
-    shortLabel: "Payload Forge",
-    detail: "Encoding calldata, simulating the path, and pre-signing execution payloads.",
-    traceLabel: "forging calldata and signed payload"
-  },
-  {
-    key: "broadcast",
-    code: "BURST",
-    label: "Broadcasting strike",
-    shortLabel: "Burst Cast",
-    detail: "Submitting the payload across the active RPC mesh.",
-    traceLabel: "broadcasting payload across rpc mesh"
-  },
-  {
-    key: "receipt",
-    code: "TRACE",
-    label: "Sweeping receipts",
-    shortLabel: "Receipt Sweep",
-    detail: "Following mempool echoes, block inclusion, and receipt state.",
-    traceLabel: "sweeping receipts and chain confirmations"
-  },
-  {
-    key: "seal",
-    code: "ARCHIVE",
-    label: "Run sealed",
-    shortLabel: "Run Sealed",
-    detail: "Execution snapshot archived and awaiting the next strike.",
-    traceLabel: "archiving execution snapshot"
-  }
-];
+function buildTaskRuntimePipeline(task) {
+  const rpcCount = Math.max(
+    0,
+    Number(task?.rpcCount || (Array.isArray(task?.rpcNodeIds) ? task.rpcNodeIds.length : 0) || 0)
+  );
+  const walletCount = Math.max(
+    0,
+    Number(task?.walletCount || (Array.isArray(task?.walletIds) ? task.walletIds.length : 0) || 0)
+  );
+  const sourceLabel = task?.sourceLabel || findMintSourceDefinition(task?.sourceType).label;
+  const mintFunction = String(task?.mintFunction || "").trim() || "auto route";
+  const priceLabel = String(task?.priceEth || "").trim() ? `${task.priceEth} ETH` : "auto value";
+  const gasStrategy = String(task?.gasStrategy || "normal").trim().toLowerCase() || "normal";
+  const gasProfileLabel =
+    gasStrategy === "aggressive"
+      ? "aggressive gas profile"
+      : gasStrategy === "custom"
+        ? "custom gas profile"
+        : "standard gas profile";
+  const broadcastLabel = task?.multiRpcBroadcast ? "multi-RPC mesh" : "primary RPC lane";
+  const receiptTraceLabel = task?.waitForReceipt
+    ? "tracking mempool echoes, block inclusion, and receipt outcome"
+    : "capturing the first accepted hash and closing on fast-submit mode";
+  const receiptDetail = task?.waitForReceipt
+    ? "Watching mempool propagation, inclusion, and the final receipt outcome."
+    : "Fast-submit mode closes the run as soon as the first accepted hash is secured.";
+
+  return [
+    {
+      key: "backend",
+      code: "CTRL",
+      label: "Linking execution lane",
+      shortLabel: "Exec Link",
+      detail: "Handshaking with the backend runner and reserving a live launch lane.",
+      traceLabel: "negotiating a live launch lane with the backend runner"
+    },
+    {
+      key: "rpc",
+      code: "RPC",
+      label: "Scoring RPC lanes",
+      shortLabel: "RPC Mesh",
+      detail: "Health-ranking broadcast endpoints and selecting the primary route.",
+      traceLabel:
+        rpcCount > 0
+          ? `health-scoring ${pluralize(rpcCount, "rpc lane")} and selecting the primary broadcaster`
+          : "health-scoring available rpc lanes and selecting the primary broadcaster"
+    },
+    {
+      key: "gas",
+      code: "GAS",
+      label: "Deriving fee plan",
+      shortLabel: "Fee Plan",
+      detail: "Sampling fee data, nonce state, and replacement budget for the live send.",
+      traceLabel: `sampling fee data, nonce state, and ${gasProfileLabel}`
+    },
+    {
+      key: "route",
+      code: "ROUTE",
+      label: "Locking mint route",
+      shortLabel: "Route Lock",
+      detail: "Binding the route, value, and launch guards before payload construction.",
+      traceLabel: `locking ${mintFunction} on ${sourceLabel} with ${priceLabel}`
+    },
+    {
+      key: "payload",
+      code: "PAYLOAD",
+      label: "Forging payload",
+      shortLabel: "Payload Forge",
+      detail: "Encoding calldata, validating the path, and staging signed execution payloads.",
+      traceLabel:
+        walletCount > 0
+          ? `encoding ${mintFunction} for ${pluralize(walletCount, "wallet")} and staging the signed payload`
+          : `encoding ${mintFunction} and staging the signed payload`
+    },
+    {
+      key: "broadcast",
+      code: "BURST",
+      label: "Broadcasting strike",
+      shortLabel: "Burst Cast",
+      detail: "Pushing the signed payload through the active broadcast route.",
+      traceLabel: `propagating the signed payload through the ${broadcastLabel}`
+    },
+    {
+      key: "receipt",
+      code: "TRACE",
+      label: task?.waitForReceipt ? "Tracing chain outcome" : "Capturing accepted hash",
+      shortLabel: task?.waitForReceipt ? "Chain Trace" : "Hash Capture",
+      detail: receiptDetail,
+      traceLabel: receiptTraceLabel
+    },
+    {
+      key: "seal",
+      code: "ARCHIVE",
+      label: "Sealing run snapshot",
+      shortLabel: "Run Seal",
+      detail: "Persisting hashes, summary metrics, and the last-run snapshot.",
+      traceLabel: "writing the execution snapshot, hash ledger, and terminal summary"
+    }
+  ];
+}
 
 function normalizeTaskPhaseKey(phase = "") {
   const normalized = String(phase || "").trim().toLowerCase();
@@ -2079,9 +2113,9 @@ function resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent) {
   return 0;
 }
 
-function buildTaskTraceWindow(stageIndex, mode = "running") {
-  const windowStart = Math.max(0, Math.min(stageIndex - 1, TASK_RUNTIME_PIPELINE.length - 3));
-  const visibleStages = TASK_RUNTIME_PIPELINE.slice(windowStart, Math.min(TASK_RUNTIME_PIPELINE.length, windowStart + 3));
+function buildTaskTraceWindow(pipeline, stageIndex, mode = "running") {
+  const windowStart = Math.max(0, Math.min(stageIndex - 1, pipeline.length - 3));
+  const visibleStages = pipeline.slice(windowStart, Math.min(pipeline.length, windowStart + 3));
 
   return visibleStages.map((stage, index) => {
     const absoluteIndex = windowStart + index;
@@ -2113,6 +2147,7 @@ function taskRuntimeNarrative(task, statusKey = "draft") {
   const progress = task?.progress || { phase: "Ready", percent: 0 };
   const progressPercent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
   const phaseKey = normalizeTaskPhaseKey(progress.phase);
+  const pipeline = buildTaskRuntimePipeline(task);
 
   if (statusKey === "draft" || statusKey === "ready") {
     return {
@@ -2121,9 +2156,9 @@ function taskRuntimeNarrative(task, statusKey = "draft") {
       signalLabel: "Execution standby",
       sidebarLabel: "Standby",
       trace: [
-        { code: "IDLE", label: "awaiting operator launch command", state: "active" },
-        { code: "RPC", label: "rpc mesh idle until launch", state: "pending" },
-        { code: "EXEC", label: "execution payload not armed", state: "pending" }
+        { code: "IDLE", label: "launch lane parked until the next operator strike", state: "active" },
+        { code: "RPC", label: "broadcast routes idle until execution is requested", state: "pending" },
+        { code: "EXEC", label: "payload assembly begins when the run is armed", state: "pending" }
       ]
     };
   }
@@ -2135,9 +2170,9 @@ function taskRuntimeNarrative(task, statusKey = "draft") {
       signalLabel: "Launch lane armed",
       sidebarLabel: "Queue Armed",
       trace: [
-        { code: "QUEUE", label: "launch request accepted by control plane", state: "complete" },
-        { code: "HANDOFF", label: "preparing live execution handoff", state: "active" },
-        { code: "EXEC", label: "execution lane opening next", state: "pending" }
+        { code: "QUEUE", label: "launch request accepted and staged by the scheduler", state: "complete" },
+        { code: "HANDOFF", label: "opening the execution lane on the backend runner", state: "active" },
+        { code: "EXEC", label: "wallet sessions and route locks arming next", state: "pending" }
       ]
     };
   }
@@ -2152,20 +2187,20 @@ function taskRuntimeNarrative(task, statusKey = "draft") {
           : "Execution fault captured. Inspect the backend terminal and latest logs for the failure surface.",
       signalLabel: statusKey === "stopped" ? "Abort signal pushed" : "Fault captured",
       sidebarLabel: statusKey === "stopped" ? "Abort Signal" : "Route Fault",
-      trace: buildTaskTraceWindow(stageIndex, statusKey)
+      trace: buildTaskTraceWindow(pipeline, stageIndex, statusKey)
     };
   }
 
   const stageIndex = resolveTaskRuntimeStageIndex(statusKey, phaseKey, progressPercent);
-  const stage = TASK_RUNTIME_PIPELINE[stageIndex];
+  const stage = pipeline[stageIndex];
 
   if (statusKey === "completed") {
     return {
       phaseLabel: stage.label,
       detail: stage.detail,
-      signalLabel: "Receipt archived",
+      signalLabel: task?.waitForReceipt ? "Receipt archived" : "Hash archived",
       sidebarLabel: stage.shortLabel,
-      trace: buildTaskTraceWindow(stageIndex, "completed")
+      trace: buildTaskTraceWindow(pipeline, stageIndex, "completed")
     };
   }
 
@@ -2174,7 +2209,7 @@ function taskRuntimeNarrative(task, statusKey = "draft") {
     detail: stage.detail,
     signalLabel: stage.shortLabel,
     sidebarLabel: stage.shortLabel,
-    trace: buildTaskTraceWindow(stageIndex, "running")
+    trace: buildTaskTraceWindow(pipeline, stageIndex, "running")
   };
 }
 
@@ -2184,13 +2219,11 @@ function taskVisualStatus(task, activeTaskIdSet = null) {
     return "running";
   }
 
-  if (task.done) {
-    return "completed";
-  }
-
   const normalized = String(task.status || "draft").toLowerCase();
   if (normalized === "done") {
-    return "completed";
+    return Number(task?.summary?.success || 0) > 0 || Number(task?.history?.[0]?.summary?.success || 0) > 0
+      ? "completed"
+      : "draft";
   }
 
   if (normalized === "ready") {
@@ -2213,6 +2246,84 @@ function summarizeTaskStatuses(tasks, activeTaskIdSet = null) {
   });
 
   return counts;
+}
+
+function resolveTaskPrimaryAction(statusKey, active, queued) {
+  if (active) {
+    return {
+      action: "stop",
+      label: "Stop",
+      className: "mini-button fx-button task-action-primary",
+      disabled: false
+    };
+  }
+
+  if (queued) {
+    return {
+      action: "queued",
+      label: "Queued",
+      className: "mini-button fx-button task-action-primary",
+      disabled: true
+    };
+  }
+
+  if (statusKey === "failed" || statusKey === "stopped") {
+    return {
+      action: "run",
+      label: "Re-Run",
+      className: "mini-button primary fx-button task-action-primary",
+      disabled: false
+    };
+  }
+
+  if (statusKey === "completed") {
+    return null;
+  }
+
+  return {
+    action: "run",
+    label: "Run",
+    className: "mini-button primary fx-button task-action-primary",
+    disabled: false
+  };
+}
+
+function buildTaskActionMarkup(statusKey, active, queued) {
+  const actions = [
+    {
+      action: "edit",
+      label: "Edit",
+      className: "mini-button fx-button",
+      disabled: false
+    },
+    {
+      action: "duplicate",
+      label: "Duplicate",
+      className: "mini-button fx-button",
+      disabled: false
+    },
+    {
+      action: "delete",
+      label: "Delete",
+      className: "mini-button danger fx-button",
+      disabled: false
+    }
+  ];
+
+  const primaryAction = resolveTaskPrimaryAction(statusKey, active, queued);
+  if (primaryAction) {
+    actions.push(primaryAction);
+  }
+
+  return actions
+    .map(
+      (action) => `
+        <button class="${escapeHtml(action.className)}" data-task-action="${escapeHtml(action.action)}" ${
+          action.disabled ? "disabled" : ""
+        }>${escapeHtml(action.label)}</button>
+      `
+    )
+    .join("");
 }
 
 function walletGroups() {
@@ -3527,11 +3638,7 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
       ${task.notes ? `<p class="muted-copy">${escapeHtml(task.notes)}</p>` : ""}
 
       <div class="task-actions">
-        <button class="mini-button fx-button" data-task-action="done">${task.done ? "Undone" : "Done"}</button>
-        <button class="mini-button ${active ? "" : queued ? "" : "primary"} fx-button" data-task-action="${active ? "stop" : "run"}" ${queued ? "disabled" : ""}>${active ? "Stop" : queued ? "Queued" : "Run"}</button>
-        <button class="mini-button fx-button" data-task-action="edit">Edit</button>
-        <button class="mini-button fx-button" data-task-action="duplicate">Duplicate</button>
-        <button class="mini-button danger fx-button" data-task-action="delete">Delete</button>
+        ${buildTaskActionMarkup(statusKey, active, queued)}
       </div>
 
       <div class="history-block">
@@ -3621,9 +3728,7 @@ function renderTasks() {
           return;
         }
 
-        if (action === "done") {
-          await request(`/api/tasks/${taskId}/done`, { method: "POST" });
-          showToast(`${task?.name || "Task"} status toggled.`, "success", "Task Updated");
+        if (action === "queued") {
           return;
         }
 
@@ -3635,10 +3740,13 @@ function renderTasks() {
 
         if (action === "run") {
           await request(`/api/tasks/${taskId}/run`, { method: "POST" });
+          const isRerun = ["failed", "stopped"].includes(taskVisualStatus(task, activeTaskIdSet));
           showToast(
-            `${task?.name || "Task"} linked to the control plane. Contacting backend, provisioning RPC mesh, and checking gas lanes now.`,
+            isRerun
+              ? `${task?.name || "Task"} re-entered the live execution lane. Backend handshake, RPC lane scoring, and payload staging are already moving.`
+              : `${task?.name || "Task"} is entering the live execution lane. Backend handshake, RPC lane scoring, and payload staging are in flight.`,
             "success",
-            "Execution Armed"
+            isRerun ? "Re-Launch Armed" : "Execution Armed"
           );
           return;
         }
@@ -9382,6 +9490,14 @@ function buildTaskPayload() {
   syncTaskSourceTypeFromTarget();
   const sourceTarget = String(taskSourceTargetInput?.value || "").trim();
   const sourceType = sourceTarget ? "opensea" : "generic_contract";
+  const triggerMode = String(taskTriggerModeInput.value || "standard").trim().toLowerCase() || "standard";
+  const fastSubmitPreferred =
+    !taskDryRunToggle.checked &&
+    !taskTransferToggle.checked &&
+    !taskScheduleToggle.checked &&
+    !currentMintStartDetection.enabled &&
+    !String(taskReadyFunctionInput.value || "").trim() &&
+    triggerMode === "standard";
 
   return {
     id: taskIdInput.value || undefined,
@@ -9414,13 +9530,14 @@ function buildTaskPayload() {
     gasBoostPercent: taskGasBoostInput.value,
     priorityBoostPercent: taskPriorityBoostInput.value,
     txTimeoutMs: taskTxTimeoutInput.value,
-    smartGasReplacement: taskSmartReplaceToggle.checked,
+    smartGasReplacement: fastSubmitPreferred ? false : taskSmartReplaceToggle.checked,
     replacementBumpPercent: taskReplaceBumpInput.value,
     replacementMaxAttempts: taskReplaceAttemptsInput.value,
-    simulateTransaction: taskSimulateToggle.checked,
+    simulateTransaction:
+      fastSubmitPreferred && sourceType === "opensea" ? false : taskSimulateToggle.checked,
     dryRun: taskDryRunToggle.checked,
-    waitForReceipt: true,
-    warmupRpc: taskWarmupToggle.checked,
+    waitForReceipt: !fastSubmitPreferred,
+    warmupRpc: fastSubmitPreferred ? false : taskWarmupToggle.checked,
     preSignTransactions: true,
     multiRpcBroadcast: taskMultiRpcBroadcastToggle.checked,
     continueOnError: false,

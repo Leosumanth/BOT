@@ -3540,8 +3540,8 @@ function defaultTaskState() {
     priorityBoostPercent: "10",
     simulateTransaction: true,
     dryRun: false,
-    waitForReceipt: true,
-    warmupRpc: true,
+    waitForReceipt: false,
+    warmupRpc: false,
     continueOnError: false,
     walletMode: "parallel",
     autoArm: true,
@@ -3566,7 +3566,7 @@ function defaultTaskState() {
     startJitterMs: "0",
     minBalanceEth: "",
     nonceOffset: "0",
-    smartGasReplacement: true,
+    smartGasReplacement: false,
     replacementBumpPercent: "15",
     replacementMaxAttempts: "3",
     privateRelayEnabled: false,
@@ -3683,8 +3683,8 @@ function sanitizeTaskInput(payload, existingTask = null) {
     ).trim() || "10",
     simulateTransaction: Boolean(payload.simulateTransaction ?? base.simulateTransaction ?? true),
     dryRun: Boolean(payload.dryRun ?? base.dryRun ?? false),
-    waitForReceipt: Boolean(payload.waitForReceipt ?? base.waitForReceipt ?? true),
-    warmupRpc: true,
+    waitForReceipt: Boolean(payload.waitForReceipt ?? base.waitForReceipt ?? false),
+    warmupRpc: Boolean(payload.warmupRpc ?? base.warmupRpc ?? false),
     continueOnError: Boolean(payload.continueOnError ?? base.continueOnError ?? false),
     walletMode: "parallel",
     autoArm,
@@ -3713,7 +3713,7 @@ function sanitizeTaskInput(payload, existingTask = null) {
     startJitterMs: String(payload.startJitterMs ?? base.startJitterMs ?? "0").trim() || "0",
     minBalanceEth: String(payload.minBalanceEth ?? base.minBalanceEth ?? "").trim(),
     nonceOffset: String(payload.nonceOffset ?? base.nonceOffset ?? "0").trim() || "0",
-    smartGasReplacement: true,
+    smartGasReplacement: Boolean(payload.smartGasReplacement ?? base.smartGasReplacement ?? false),
     replacementBumpPercent: String(
       payload.replacementBumpPercent ?? base.replacementBumpPercent ?? "15"
     ).trim() || "15",
@@ -6201,6 +6201,53 @@ function applyPhaseGasProfile(task, phaseType) {
   };
 }
 
+function shouldUseFastSubmissionProfile(task) {
+  const waitUntilIso = String(task?.waitUntilIso || "").trim();
+  const executionTriggerMode =
+    String(task?.executionTriggerMode || "standard").trim().toLowerCase() || "standard";
+
+  return (
+    !Boolean(task?.dryRun) &&
+    !Boolean(task?.transferAfterMinted) &&
+    executionTriggerMode === "standard" &&
+    !Boolean(task?.useSchedule && waitUntilIso) &&
+    !waitUntilIso &&
+    !Boolean(task?.mintStartDetectionEnabled) &&
+    !String(task?.readyCheckFunction || "").trim()
+  );
+}
+
+function shouldSkipRuntimeSimulationForTask(task) {
+  const sourceType = String(task?.sourceType || "").trim().toLowerCase();
+  const platform = String(task?.platform || "").trim().toLowerCase();
+
+  return (
+    shouldUseFastSubmissionProfile(task) &&
+    !String(task?.sourceExecutionBlocker || "").trim() &&
+    (sourceType === "opensea" || platform.includes("seadrop"))
+  );
+}
+
+function applyFastSubmissionProfile(task) {
+  if (!shouldUseFastSubmissionProfile(task)) {
+    return {
+      ...task,
+      fastSubmissionProfile: false
+    };
+  }
+
+  return {
+    ...task,
+    waitForReceipt: false,
+    warmupRpc: false,
+    smartGasReplacement: false,
+    simulateTransaction: shouldSkipRuntimeSimulationForTask(task)
+      ? false
+      : Boolean(task?.simulateTransaction ?? true),
+    fastSubmissionProfile: true
+  };
+}
+
 function isoTimestampValue(isoString) {
   if (!isoString) {
     return null;
@@ -8603,8 +8650,9 @@ async function resolveWalletPrivateKeys(walletIds) {
 }
 
 async function buildConfigForTask(task) {
+  const runtimeTask = applyFastSubmissionProfile(task);
   const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
-  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  const rpcNodeIds = Array.isArray(runtimeTask.rpcNodeIds) ? runtimeTask.rpcNodeIds : [];
   const wallets = appState.wallets.filter((wallet) => walletIds.includes(wallet.id));
   if (wallets.length === 0) {
     throw new Error("Select at least one wallet before running a task");
@@ -8618,93 +8666,98 @@ async function buildConfigForTask(task) {
   const configuredRpcNodes = appState.rpcNodes.filter(
     (node) =>
       node.enabled &&
-      node.chainKey === task.chainKey &&
+      node.chainKey === runtimeTask.chainKey &&
       (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
   );
   const rankedRpcNodes = rankRpcNodesByLatency(configuredRpcNodes);
 
   if (rankedRpcNodes.length === 0) {
-    throw new Error(`No enabled RPC nodes configured for ${task.chainKey}`);
+    throw new Error(`No enabled RPC nodes configured for ${runtimeTask.chainKey}`);
   }
 
-  const chain = findAvailableChainByKey(task.chainKey);
+  const chain = findAvailableChainByKey(runtimeTask.chainKey);
 
-  return normalizeConfig({
+  const normalizedConfig = normalizeConfig({
     ...defaultInputValues,
     RPC_URLS: rankedRpcNodes.map((node) => node.url).join("\n"),
     PRIVATE_KEYS: privateKeys.join("\n"),
-    SOURCE_TYPE: task.sourceType,
-    SOURCE_TARGET: task.sourceTarget,
-    SOURCE_STAGE: task.sourceStage,
-    SOURCE_CONFIG_JSON: task.sourceConfigJson,
-    CONTRACT_ADDRESS: task.contractAddress,
-    ABI_JSON: task.abiJson,
-    MINT_FUNCTION: task.mintFunction,
-    MINT_ARGS: task.mintArgs,
-    QUANTITY_PER_WALLET: task.quantityPerWallet,
-    MINT_VALUE_ETH: task.priceEth,
-    CHAIN_KEY: task.chainKey,
-    CLAIM_INTEGRATION_ENABLED: task.claimIntegrationEnabled,
-    CLAIM_PROJECT_KEY: task.claimProjectKey,
-    WALLET_CLAIMS_JSON: task.walletClaimsJson,
-    CLAIM_FETCH_ENABLED: task.claimFetchEnabled,
-    CLAIM_FETCH_URL: task.claimFetchUrl,
-    CLAIM_FETCH_METHOD: task.claimFetchMethod,
-    CLAIM_FETCH_HEADERS_JSON: task.claimFetchHeadersJson,
-    CLAIM_FETCH_COOKIES_JSON: task.claimFetchCookiesJson,
-    CLAIM_FETCH_BODY_JSON: task.claimFetchBodyJson,
-    CLAIM_RESPONSE_MAPPING_JSON: task.claimResponseMappingJson,
-    CLAIM_RESPONSE_ROOT: task.claimResponseRoot,
-    GAS_STRATEGY: task.gasStrategy,
-    GAS_LIMIT: task.gasLimit,
-    MAX_FEE_GWEI: task.maxFeeGwei,
-    MAX_PRIORITY_FEE_GWEI: task.maxPriorityFeeGwei,
-    GAS_BOOST_PERCENT: task.gasBoostPercent,
-    PRIORITY_BOOST_PERCENT: task.priorityBoostPercent,
-    WAIT_FOR_RECEIPT: task.waitForReceipt,
-    SIMULATE_TRANSACTION: task.simulateTransaction,
-    DRY_RUN: task.dryRun,
-    WARMUP_RPC: task.warmupRpc,
-    CONTINUE_ON_ERROR: task.continueOnError,
-    WALLET_MODE: task.walletMode,
-    WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
+    SOURCE_TYPE: runtimeTask.sourceType,
+    SOURCE_TARGET: runtimeTask.sourceTarget,
+    SOURCE_STAGE: runtimeTask.sourceStage,
+    SOURCE_CONFIG_JSON: runtimeTask.sourceConfigJson,
+    CONTRACT_ADDRESS: runtimeTask.contractAddress,
+    ABI_JSON: runtimeTask.abiJson,
+    MINT_FUNCTION: runtimeTask.mintFunction,
+    MINT_ARGS: runtimeTask.mintArgs,
+    QUANTITY_PER_WALLET: runtimeTask.quantityPerWallet,
+    MINT_VALUE_ETH: runtimeTask.priceEth,
+    CHAIN_KEY: runtimeTask.chainKey,
+    CLAIM_INTEGRATION_ENABLED: runtimeTask.claimIntegrationEnabled,
+    CLAIM_PROJECT_KEY: runtimeTask.claimProjectKey,
+    WALLET_CLAIMS_JSON: runtimeTask.walletClaimsJson,
+    CLAIM_FETCH_ENABLED: runtimeTask.claimFetchEnabled,
+    CLAIM_FETCH_URL: runtimeTask.claimFetchUrl,
+    CLAIM_FETCH_METHOD: runtimeTask.claimFetchMethod,
+    CLAIM_FETCH_HEADERS_JSON: runtimeTask.claimFetchHeadersJson,
+    CLAIM_FETCH_COOKIES_JSON: runtimeTask.claimFetchCookiesJson,
+    CLAIM_FETCH_BODY_JSON: runtimeTask.claimFetchBodyJson,
+    CLAIM_RESPONSE_MAPPING_JSON: runtimeTask.claimResponseMappingJson,
+    CLAIM_RESPONSE_ROOT: runtimeTask.claimResponseRoot,
+    GAS_STRATEGY: runtimeTask.gasStrategy,
+    GAS_LIMIT: runtimeTask.gasLimit,
+    MAX_FEE_GWEI: runtimeTask.maxFeeGwei,
+    MAX_PRIORITY_FEE_GWEI: runtimeTask.maxPriorityFeeGwei,
+    GAS_BOOST_PERCENT: runtimeTask.gasBoostPercent,
+    PRIORITY_BOOST_PERCENT: runtimeTask.priorityBoostPercent,
+    WAIT_FOR_RECEIPT: runtimeTask.waitForReceipt,
+    SIMULATE_TRANSACTION: runtimeTask.simulateTransaction,
+    DRY_RUN: runtimeTask.dryRun,
+    WARMUP_RPC: runtimeTask.warmupRpc,
+    CONTINUE_ON_ERROR: runtimeTask.continueOnError,
+    WALLET_MODE: runtimeTask.walletMode,
+    WAIT_UNTIL_ISO: runtimeTask.useSchedule ? runtimeTask.waitUntilIso : "",
     PRE_SIGN_TRANSACTIONS: true,
-    MULTI_RPC_BROADCAST: task.multiRpcBroadcast,
-    MINT_START_DETECTION_ENABLED: task.mintStartDetectionEnabled,
-    MINT_START_DETECTION_JSON: JSON.stringify(task.mintStartDetectionConfig || {}),
-    READY_CHECK_FUNCTION: task.readyCheckFunction,
-    READY_CHECK_ARGS: task.readyCheckArgs,
-    READY_CHECK_MODE: task.readyCheckMode,
-    READY_CHECK_EXPECTED: task.readyCheckExpected,
-    READY_CHECK_INTERVAL_MS: task.readyCheckIntervalMs,
-    POLL_INTERVAL_MS: task.pollIntervalMs,
-    TX_TIMEOUT_MS: task.txTimeoutMs,
-    MAX_RETRIES: task.maxRetries,
-    RETRY_DELAY_MS: task.retryDelayMs,
-    RETRY_WINDOW_MS: task.retryWindowMs,
-    START_JITTER_MS: task.startJitterMs,
-    MIN_BALANCE_ETH: task.minBalanceEth,
-    NONCE_OFFSET: task.nonceOffset,
-    SMART_GAS_REPLACEMENT: task.smartGasReplacement,
-    REPLACEMENT_BUMP_PERCENT: task.replacementBumpPercent,
-    REPLACEMENT_MAX_ATTEMPTS: task.replacementMaxAttempts,
-    PRIVATE_RELAY_ENABLED: task.privateRelayEnabled,
-    PRIVATE_RELAY_URL: task.privateRelayUrl,
-    PRIVATE_RELAY_METHOD: task.privateRelayMethod,
-    PRIVATE_RELAY_HEADERS_JSON: task.privateRelayHeadersJson,
-    PRIVATE_RELAY_ONLY: task.privateRelayOnly,
-    EXECUTION_TRIGGER_MODE: task.executionTriggerMode,
-    TRIGGER_CONTRACT_ADDRESS: task.triggerContractAddress,
-    TRIGGER_EVENT_SIGNATURE: task.triggerEventSignature,
-    TRIGGER_EVENT_CONDITION: task.triggerEventCondition,
-    TRIGGER_MEMPOOL_SIGNATURE: task.triggerMempoolSignature,
-    TRIGGER_BLOCK_NUMBER: task.triggerBlockNumber,
-    TRIGGER_TIMEOUT_MS: task.triggerTimeoutMs,
-    TRANSFER_AFTER_MINTED: task.transferAfterMinted,
-    TRANSFER_ADDRESS: task.transferAddress,
+    MULTI_RPC_BROADCAST: runtimeTask.multiRpcBroadcast,
+    MINT_START_DETECTION_ENABLED: runtimeTask.mintStartDetectionEnabled,
+    MINT_START_DETECTION_JSON: JSON.stringify(runtimeTask.mintStartDetectionConfig || {}),
+    READY_CHECK_FUNCTION: runtimeTask.readyCheckFunction,
+    READY_CHECK_ARGS: runtimeTask.readyCheckArgs,
+    READY_CHECK_MODE: runtimeTask.readyCheckMode,
+    READY_CHECK_EXPECTED: runtimeTask.readyCheckExpected,
+    READY_CHECK_INTERVAL_MS: runtimeTask.readyCheckIntervalMs,
+    POLL_INTERVAL_MS: runtimeTask.pollIntervalMs,
+    TX_TIMEOUT_MS: runtimeTask.txTimeoutMs,
+    MAX_RETRIES: runtimeTask.maxRetries,
+    RETRY_DELAY_MS: runtimeTask.retryDelayMs,
+    RETRY_WINDOW_MS: runtimeTask.retryWindowMs,
+    START_JITTER_MS: runtimeTask.startJitterMs,
+    MIN_BALANCE_ETH: runtimeTask.minBalanceEth,
+    NONCE_OFFSET: runtimeTask.nonceOffset,
+    SMART_GAS_REPLACEMENT: runtimeTask.smartGasReplacement,
+    REPLACEMENT_BUMP_PERCENT: runtimeTask.replacementBumpPercent,
+    REPLACEMENT_MAX_ATTEMPTS: runtimeTask.replacementMaxAttempts,
+    PRIVATE_RELAY_ENABLED: runtimeTask.privateRelayEnabled,
+    PRIVATE_RELAY_URL: runtimeTask.privateRelayUrl,
+    PRIVATE_RELAY_METHOD: runtimeTask.privateRelayMethod,
+    PRIVATE_RELAY_HEADERS_JSON: runtimeTask.privateRelayHeadersJson,
+    PRIVATE_RELAY_ONLY: runtimeTask.privateRelayOnly,
+    EXECUTION_TRIGGER_MODE: runtimeTask.executionTriggerMode,
+    TRIGGER_CONTRACT_ADDRESS: runtimeTask.triggerContractAddress,
+    TRIGGER_EVENT_SIGNATURE: runtimeTask.triggerEventSignature,
+    TRIGGER_EVENT_CONDITION: runtimeTask.triggerEventCondition,
+    TRIGGER_MEMPOOL_SIGNATURE: runtimeTask.triggerMempoolSignature,
+    TRIGGER_BLOCK_NUMBER: runtimeTask.triggerBlockNumber,
+    TRIGGER_TIMEOUT_MS: runtimeTask.triggerTimeoutMs,
+    TRANSFER_AFTER_MINTED: runtimeTask.transferAfterMinted,
+    TRANSFER_ADDRESS: runtimeTask.transferAddress,
     CHAIN_ID: chain ? String(chain.chainId) : "",
     RESULTS_PATH: appState.settings.resultsPath || "./dist/mint-results.json"
   });
+
+  return {
+    ...normalizedConfig,
+    fastSubmissionProfile: Boolean(runtimeTask.fastSubmissionProfile)
+  };
 }
 
 function createEmptySummary(total = 0) {
@@ -8789,7 +8842,6 @@ function listPendingAutoArmTasks() {
     .filter(
       (task) =>
         Boolean(task.autoArmPending) &&
-        !task.done &&
         !task.schedulePending &&
         !["running", "queued", "completed"].includes(task.status)
     )
@@ -8962,6 +9014,16 @@ async function startTaskRunLocal(taskId) {
       }, gas ${config.gasStrategy}, waitForReceipt ${config.waitForReceipt ? "on" : "off"})`,
       timestamp: runContext.startedAt
     });
+    if (config.fastSubmissionProfile) {
+      pushLog({
+        level: "info",
+        taskId,
+        message: `[task ${task.name}] Fast submission profile active: prioritizing first-hash speed by skipping receipt wait, RPC warmup${
+          config.simulateTransaction ? "" : ", and runtime simulation"
+        }`,
+        timestamp: runContext.startedAt
+      });
+    }
     pushLog({
       level: "info",
       taskId,
@@ -11217,7 +11279,7 @@ async function handleRpcDelete(rpcId, response) {
 function findPriorityTaskForRun() {
   return appState.tasks
     .map(buildTaskResponse)
-    .filter((task) => !task.done && !["queued", "running"].includes(task.status))
+    .filter((task) => !["queued", "running"].includes(task.status))
     .sort((left, right) => {
       const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
       if (priorityDelta !== 0) {
@@ -11842,6 +11904,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  applyFastSubmissionProfile,
   applyMintAutofillToTask,
   buildMintValueFundingAssessment,
   extractOpenSeaCollectionSlug,
@@ -11852,7 +11915,9 @@ module.exports = {
   resolveQueueLaunchStrategy,
   selectPreferredSimulationError,
   seaDropContractAddressForChain,
+  shouldSkipRuntimeSimulationForTask,
   shouldQueueTaskLaunch,
+  shouldUseFastSubmissionProfile,
   startServer,
   stopServer
 };

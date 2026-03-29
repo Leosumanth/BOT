@@ -1294,6 +1294,19 @@ function shouldEagerlyPrepareAutomatedMint(config) {
   );
 }
 
+function shouldUseImmediatePreparedMintFastPath(config, session) {
+  return Boolean(
+    !config.dryRun &&
+      !config.waitForReceipt &&
+      !config.transferAfterMinted &&
+      !config.waitUntilIso &&
+      !config.mintStartDetectionEnabled &&
+      !config.readyCheckFunction &&
+      config.executionTriggerMode === "standard" &&
+      session?.preparedMint
+  );
+}
+
 function attachErrorContext(error, context) {
   if (!error || typeof error !== "object") {
     return error;
@@ -3222,7 +3235,13 @@ async function executeWalletSession(config, session, context) {
 
     await waitForMintStartDetection(contract, config, walletIndex, signal, logger);
     await waitForReadyCheck(contract, config, walletIndex, signal, logger);
-    await session.refreshPlannedNonce();
+    if (shouldUseImmediatePreparedMintFastPath(config, session)) {
+      logger.info(
+        `[wallet ${walletIndex}] Fast-submit path active: using prepared nonce ${session.getPlannedNonce()} without an extra pending refresh`
+      );
+    } else {
+      await session.refreshPlannedNonce();
+    }
 
     if (config.autoMintMode && config.preSignTransactions && !session.preparedMint) {
       try {
@@ -3705,6 +3724,7 @@ async function runMintBot(config, hooks = {}) {
   logger.info(`Dry run: ${preparedConfig.dryRun ? "enabled" : "disabled"}`);
   logger.info(`Mint mode: ${preparedConfig.autoMintMode ? "automated" : "manual"}`);
   logger.info(`Gas strategy: ${preparedConfig.gasStrategy}`);
+  logger.info(`Fast submission profile: ${preparedConfig.fastSubmissionProfile ? "enabled" : "disabled"}`);
   logger.info(
     `Mint start detection: ${
       preparedConfig.mintStartDetectionEnabled
@@ -3765,5 +3785,6 @@ module.exports = {
   formatError,
   runMintBot,
   shouldEagerlyPrepareAutomatedMint,
+  shouldUseImmediatePreparedMintFastPath,
   simulateMintMethod
 };
