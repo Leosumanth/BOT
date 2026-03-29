@@ -102,6 +102,7 @@ const navButtons = [...document.querySelectorAll(".nav-button")];
 const views = [...document.querySelectorAll(".view")];
 const dashboardRunHistory = document.getElementById("dashboard-run-history");
 const taskGrid = document.getElementById("task-grid");
+const tasksSessionMetrics = document.getElementById("tasks-session-metrics");
 const mintRadarSearchInput = document.getElementById("mint-radar-search-input");
 const mintRadarChainInput = document.getElementById("mint-radar-chain-input");
 const mintRadarRefreshButton = document.getElementById("mint-radar-refresh-button");
@@ -2010,6 +2011,200 @@ function taskFailureReason(task) {
   return "";
 }
 
+function taskScopedLogs(task, limit = 14) {
+  const taskId = String(task?.id || "").trim();
+  if (!taskId) {
+    return [];
+  }
+
+  return (state.runState.logs || [])
+    .filter((entry) => String(entry?.taskId || "").trim() === taskId)
+    .slice(-limit);
+}
+
+function normalizeTaskLogMessage(message = "") {
+  return String(message || "")
+    .replace(/^\[task [^\]]+\]\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function classifyTaskLogEntry(entry = {}) {
+  const message = normalizeTaskLogMessage(entry.message).toLowerCase();
+  const level = String(entry.level || "info").toLowerCase();
+
+  if (/insufficient funds|wallet balance|balance is below|below min_balance_eth|gas \* price \+ value/.test(message)) {
+    return {
+      code: "FUNDS",
+      tone: level === "error" ? "error" : "warning"
+    };
+  }
+
+  if (/rpc|provider|websocket|latency|mesh/.test(message)) {
+    return {
+      code: "RPC",
+      tone: level === "error" ? "error" : "info"
+    };
+  }
+
+  if (/gas|fee|nonce|replacement/.test(message)) {
+    return {
+      code: "GAS",
+      tone: level === "error" ? "error" : "info"
+    };
+  }
+
+  if (/route|abi|function|seadrop|discovery|autofill|eligibility/.test(message)) {
+    return {
+      code: "ROUTE",
+      tone: level === "error" ? "error" : "info"
+    };
+  }
+
+  if (/pre-sign|presign|payload|signed payload|calldata|signing/.test(message)) {
+    return {
+      code: "PAYLOAD",
+      tone: level === "error" ? "error" : "info"
+    };
+  }
+
+  if (/broadcast|submitted|submission|send|transaction|tx hash|private relay/.test(message)) {
+    return {
+      code: "TX",
+      tone: level === "error" ? "error" : "info"
+    };
+  }
+
+  if (/receipt|confirmed|confirmation|mempool|included|block/.test(message)) {
+    return {
+      code: "CHAIN",
+      tone: level === "error" ? "error" : "success"
+    };
+  }
+
+  if (/run completed|saved results|run summary|snapshot|archiv|sealed/.test(message)) {
+    return {
+      code: "SEAL",
+      tone: level === "error" ? "error" : "success"
+    };
+  }
+
+  if (level === "error") {
+    return {
+      code: "FAULT",
+      tone: "error"
+    };
+  }
+
+  if (level === "warning") {
+    return {
+      code: "WARN",
+      tone: "warning"
+    };
+  }
+
+  return {
+    code: "CTRL",
+    tone: "info"
+  };
+}
+
+function renderTaskVerboseFeed(task, statusKey) {
+  const entries = taskScopedLogs(task, 12);
+  const failureReason = taskFailureReason(task);
+  const emptyMessage =
+    statusKey === "draft" || statusKey === "ready"
+      ? "Launch this task and this panel will start streaming backend events like route lock, RPC scoring, gas derivation, transaction broadcast, and receipt capture."
+      : "No backend events are retained for this task in the current session yet.";
+
+  const feedMarkup = entries.length
+    ? entries
+        .map((entry) => {
+          const meta = classifyTaskLogEntry(entry);
+          const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--";
+          return `
+            <div class="task-console-entry ${escapeHtml(meta.tone)}">
+              <span class="task-console-time">${escapeHtml(time)}</span>
+              <span class="task-console-code">${escapeHtml(meta.code)}</span>
+              <p class="task-console-copy">${escapeHtml(normalizeTaskLogMessage(entry.message))}</p>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="task-console-empty">${escapeHtml(emptyMessage)}</div>`;
+
+  return `
+    <section class="task-session-console">
+      <div class="task-console-head">
+        <div>
+          <span class="task-console-title">Backend Activity</span>
+          <p class="muted-copy task-console-subtitle">Verbose task-scoped events from the live runner.</p>
+        </div>
+        <span class="wallet-chip">${entries.length} ${entries.length === 1 ? "event" : "events"}</span>
+      </div>
+      ${
+        failureReason
+          ? `<div class="task-console-alert error">${escapeHtml(failureReason)}</div>`
+          : statusKey === "running" || statusKey === "queued"
+            ? `<div class="task-console-alert info">${escapeHtml(
+                "Backend lane is live. Watch this feed for RPC selection, fee planning, transaction submission, and chain results."
+              )}</div>`
+            : ""
+      }
+      <div class="task-console-feed">${feedMarkup}</div>
+    </section>
+  `;
+}
+
+function renderTasksSessionMetrics(totalTasks, allStatusCounts, historyCounts) {
+  if (!tasksSessionMetrics) {
+    return;
+  }
+
+  const liveCount = Number(allStatusCounts.running || 0) + Number(allStatusCounts.queued || 0);
+  const failedCount = Number(allStatusCounts.failed || 0) + Number(allStatusCounts.stopped || 0);
+  const archiveCount = Number(historyCounts.completed || 0) + Number(historyCounts.failed || 0);
+
+  const cards = [
+    {
+      label: "Task Sessions",
+      value: totalTasks,
+      tone: "all",
+      detail: "Saved launch sessions"
+    },
+    {
+      label: "Live Lanes",
+      value: liveCount,
+      tone: "running",
+      detail: "Queued or running now"
+    },
+    {
+      label: "Failure Watch",
+      value: failedCount,
+      tone: "failed",
+      detail: "Needs review or re-run"
+    },
+    {
+      label: "Archive",
+      value: archiveCount,
+      tone: "completed",
+      detail: "Completed and failed session records"
+    }
+  ];
+
+  tasksSessionMetrics.innerHTML = cards
+    .map(
+      (card) => `
+        <article class="tasks-session-metric ${escapeHtml(card.tone)}">
+          <span class="tasks-session-metric-label">${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(String(card.value))}</strong>
+          <p>${escapeHtml(card.detail)}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
 function buildTaskCardSubtitle(task, statusKey) {
   if (statusKey === "failed" || statusKey === "stopped") {
     const failureReason = taskFailureReason(task);
@@ -3908,75 +4103,65 @@ function renderTaskCard(task, activeTaskIdSet = new Set()) {
 
   return `
     <article class="task-card ${escapeHtml(statusMeta.tone)}" data-task-id="${escapeHtml(task.id)}" data-task-status="${escapeHtml(statusMeta.key)}" data-tilt>
-      <div class="task-head">
-        <div>
-          <p class="eyebrow">${escapeHtml(chainLabel(task.chainKey))}</p>
+      <div class="task-head task-session-head">
+        <div class="task-session-title">
+          <div class="chip-row">
+            <span class="tag-chip">${escapeHtml(chainLabel(task.chainKey))}</span>
+            <span class="tag-chip">${escapeHtml(sourceLabel)}</span>
+            <span class="tag-chip">${escapeHtml(humanizePriority(task.priority || "standard"))}</span>
+            ${tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}
+          </div>
           <h3>${escapeHtml(task.name || "Untitled Task")}</h3>
           <p class="muted-copy">${escapeHtml(subtitle)}</p>
         </div>
         <div class="task-head-side">
           <span class="status-pill ${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.label)}</span>
           <span class="task-head-timestamp">${escapeHtml(updatedLabel)}</span>
+          <span class="task-signal-chip ${escapeHtml(statusMeta.tone)}">${escapeHtml(runtime.phaseLabel)} / ${progressPercent}%</span>
         </div>
       </div>
 
-      <div class="chip-row">
-        <span class="tag-chip">${escapeHtml(sourceLabel)}</span>
-        <span class="tag-chip">${escapeHtml(humanizePriority(task.priority || "standard"))}</span>
-        ${tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}
-      </div>
+      <div class="task-session-layout">
+        <section class="task-session-sidebar">
+          <div class="task-stats">
+            <div class="stat-box"><label>Total</label><strong>${summary.total ?? task.walletCount ?? 0}</strong></div>
+            <div class="stat-box success"><label>Success</label><strong>${summary.success ?? 0}</strong></div>
+            <div class="stat-box failed"><label>Failed</label><strong>${summary.failed ?? 0}</strong></div>
+            <div class="stat-box"><label>Hashes</label><strong>${hashCount}</strong></div>
+          </div>
 
-      <div class="task-meta">
-        <div class="meta-item"><label>Contract</label><strong>${escapeHtml(truncateMiddle(task.contractAddress || "Not set"))}</strong></div>
-        <div class="meta-item"><label>Source</label><strong title="${escapeHtml(sourceSummary)}">${escapeHtml(truncateMiddle(sourceSummary, 24, 18) || sourceLabel)}</strong></div>
-        <div class="meta-item"><label>Chain</label><strong>${escapeHtml(chainLabel(task.chainKey))}</strong></div>
-        <div class="meta-item"><label>Wallets</label><strong>${task.walletCount || 0}</strong></div>
-        <div class="meta-item"><label>RPC</label><strong>${task.rpcCount || 0}</strong></div>
-        <div class="meta-item"><label>Qty</label><strong>${task.quantityPerWallet || 0}</strong></div>
-        <div class="meta-item"><label>Price</label><strong>${escapeHtml(task.priceEth || "Auto")}${task.priceEth ? " ETH" : ""}</strong></div>
-      </div>
+          <div class="task-meta">
+            <div class="meta-item"><label>Contract</label><strong>${escapeHtml(truncateMiddle(task.contractAddress || "Not set"))}</strong></div>
+            <div class="meta-item"><label>Source</label><strong title="${escapeHtml(sourceSummary)}">${escapeHtml(truncateMiddle(sourceSummary, 24, 18) || sourceLabel)}</strong></div>
+            <div class="meta-item"><label>Chain</label><strong>${escapeHtml(chainLabel(task.chainKey))}</strong></div>
+            <div class="meta-item"><label>Wallets</label><strong>${task.walletCount || 0}</strong></div>
+            <div class="meta-item"><label>RPC</label><strong>${task.rpcCount || 0}</strong></div>
+            <div class="meta-item"><label>Qty</label><strong>${task.quantityPerWallet || 0}</strong></div>
+            <div class="meta-item"><label>Price</label><strong>${escapeHtml(task.priceEth || "Auto")}${task.priceEth ? " ETH" : ""}</strong></div>
+            <div class="meta-item"><label>Signal</label><strong>${escapeHtml(active || queued ? runtime.signalLabel : updatedLabel)}</strong></div>
+          </div>
 
-      <div class="task-stats">
-        <div class="stat-box"><label>Total</label><strong>${summary.total ?? task.walletCount ?? 0}</strong></div>
-        <div class="stat-box success"><label>Success</label><strong>${summary.success ?? 0}</strong></div>
-        <div class="stat-box failed"><label>Failed</label><strong>${summary.failed ?? 0}</strong></div>
-        <div class="stat-box"><label>Hashes</label><strong>${hashCount}</strong></div>
-      </div>
+          <div class="task-session-progress">
+            <div class="task-progress-row">
+              <span class="muted-copy">${escapeHtml(runtime.detail)}</span>
+              <span class="muted-copy">${progressPercent}%</span>
+            </div>
+            <div class="progress-track"><div class="progress-bar" style="width:${progressPercent}%"></div></div>
+          </div>
 
-      <div class="task-progress-row">
-        <span class="muted-copy">${escapeHtml(runtime.phaseLabel)} / ${progressPercent}%</span>
-        <span class="task-signal-chip ${escapeHtml(statusMeta.tone)}">${escapeHtml(active || queued ? runtime.signalLabel : updatedLabel)}</span>
-      </div>
-      <div class="progress-track"><div class="progress-bar" style="width:${progressPercent}%"></div></div>
+          ${task.notes ? `<p class="muted-copy">${escapeHtml(task.notes)}</p>` : ""}
 
-      <div class="task-trace-panel">
-        <div class="task-trace-header">
-          <span class="task-trace-title">System Trace</span>
-          <span class="task-trace-caption">${escapeHtml(runtime.detail)}</span>
-        </div>
-        <div class="task-trace-lines">
-          ${runtime.trace
-            .map(
-              (entry) => `
-                <div class="task-trace-line ${escapeHtml(entry.state)}">
-                  <span class="task-trace-code">${escapeHtml(entry.code)}</span>
-                  <span class="task-trace-copy">${escapeHtml(entry.label)}</span>
-                </div>
-              `
-            )
-            .join("")}
-        </div>
-      </div>
+          <div class="task-actions">
+            ${buildTaskActionMarkup(statusKey, active, queued)}
+          </div>
 
-      ${task.notes ? `<p class="muted-copy">${escapeHtml(task.notes)}</p>` : ""}
+          <div class="history-block">
+            <div class="muted-copy">Recent Runs (${task.history?.length || 0})</div>
+            ${renderTaskHistoryItems(task)}
+          </div>
+        </section>
 
-      <div class="task-actions">
-        ${buildTaskActionMarkup(statusKey, active, queued)}
-      </div>
-
-      <div class="history-block">
-        <div class="muted-copy">History (${task.history?.length || 0})</div>
-        ${renderTaskHistoryItems(task)}
+        ${renderTaskVerboseFeed(task, statusKey)}
       </div>
     </article>
   `;
@@ -3997,6 +4182,7 @@ function renderTasks() {
   const activeHistoryMeta = taskHistoryFilterMeta(state.taskHistoryFilter);
 
   taskGrid.dataset.mode = state.taskViewMode;
+  renderTasksSessionMetrics(totalTasks, allStatusCounts, historyCounts);
 
   if (tasksViewToggle) {
     tasksViewToggle.innerHTML = TASK_VIEW_MODE_ORDER.map((mode) => {
@@ -4025,9 +4211,9 @@ function renderTasks() {
   if (tasksSummaryCopy) {
     let summaryText = "";
     if (state.taskViewMode === "overview") {
-      summaryText = `${pluralize(totalTasks, "task")} in the command center. `;
+      summaryText = `${pluralize(totalTasks, "task")} in the session grid. `;
       if (state.taskStatusFilter === "all") {
-        summaryText += `${pluralize(allStatusCounts.queued, "task")} queued, ${pluralize(allStatusCounts.running, "task")} running, and ${pluralize(allStatusCounts.completed, "task")} completed.`;
+        summaryText += `Live backend activity, fee planning, RPC routing, and failure surfaces will stream inside each task session below.`;
       } else {
         summaryText += `Showing ${pluralize(tasks.length, activeFilterMeta.label.toLowerCase() + " task")}.`;
       }
