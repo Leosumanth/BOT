@@ -611,6 +611,21 @@ function formatEthValue(value) {
   return formatted.includes(".") ? formatted.replace(/\.?0+$/, "") : formatted;
 }
 
+function formatDurationMs(durationMs) {
+  const normalized = Math.max(0, Number(durationMs) || 0);
+  if (normalized < 1_000) {
+    return `${normalized}ms`;
+  }
+
+  if (normalized < 60_000) {
+    return `${(normalized / 1_000).toFixed(normalized >= 10_000 ? 0 : 1)}s`;
+  }
+
+  const minutes = Math.floor(normalized / 60_000);
+  const seconds = ((normalized % 60_000) / 1_000).toFixed(1).replace(/\.0$/, "");
+  return `${minutes}m ${seconds}s`;
+}
+
 function extractRevertMessage(error) {
   const candidates = [
     error?.shortMessage,
@@ -1121,6 +1136,82 @@ function formatGwei(value) {
   return `${ethers.formatUnits(value, "gwei")} gwei`;
 }
 
+function estimateTransactionSpendCeiling(source = {}) {
+  const gasLimit = normalizeNumberish(source.gasLimit);
+  const gasPrice = normalizeNumberish(source.gasPrice);
+  const maxFeePerGas = normalizeNumberish(source.maxFeePerGas);
+  const value = normalizeNumberish(source.value) ?? 0n;
+  const feePerGas = maxFeePerGas ?? gasPrice;
+
+  if (gasLimit != null && feePerGas != null) {
+    return value + gasLimit * feePerGas;
+  }
+
+  return value > 0n ? value : null;
+}
+
+function describeTransactionGasPlan(source = {}) {
+  const parts = [];
+
+  if (source.gasLimit != null) {
+    parts.push(`gas limit ${source.gasLimit.toString()}`);
+  }
+
+  if (source.maxFeePerGas != null) {
+    parts.push(`max fee ${formatGwei(source.maxFeePerGas)}`);
+  }
+
+  if (source.maxPriorityFeePerGas != null) {
+    parts.push(`priority ${formatGwei(source.maxPriorityFeePerGas)}`);
+  }
+
+  if (source.gasPrice != null) {
+    parts.push(`gas price ${formatGwei(source.gasPrice)}`);
+  }
+
+  if (source.value != null && source.value > 0n) {
+    parts.push(`value ${formatEthValue(source.value)} ETH`);
+  }
+
+  const spendCeiling = estimateTransactionSpendCeiling(source);
+  if (spendCeiling != null) {
+    parts.push(`max total ${formatEthValue(spendCeiling)} ETH`);
+  }
+
+  return parts.join(", ");
+}
+
+function logTransactionGasPlan(logger, walletIndex, label, source = {}) {
+  const description = describeTransactionGasPlan(source);
+  if (!description) {
+    return;
+  }
+
+  logger.info(`[wallet ${walletIndex}] ${label} gas plan: ${description}`);
+}
+
+function logReceiptFeeSummary(logger, walletIndex, label, receipt) {
+  const gasUsed = normalizeNumberish(receipt?.gasUsed);
+  const effectiveGasPrice = normalizeNumberish(receipt?.effectiveGasPrice ?? receipt?.gasPrice);
+
+  if (gasUsed == null && effectiveGasPrice == null) {
+    return;
+  }
+
+  const parts = [];
+  if (gasUsed != null) {
+    parts.push(`${gasUsed.toString()} gas used`);
+  }
+  if (effectiveGasPrice != null) {
+    parts.push(`${formatGwei(effectiveGasPrice)} effective`);
+  }
+  if (gasUsed != null && effectiveGasPrice != null) {
+    parts.push(`${formatEthValue(gasUsed * effectiveGasPrice)} ETH paid`);
+  }
+
+  logger.info(`[wallet ${walletIndex}] ${label} fee paid: ${parts.join(", ")}`);
+}
+
 function messageIncludesAny(error, patterns) {
   const text = [error?.shortMessage, error?.reason, error?.message]
     .filter(Boolean)
@@ -1189,6 +1280,18 @@ function hasRetryBudgetRemaining(config, attempt, retryWindowDeadline) {
   }
 
   return retryWindowDeadline != null && Date.now() < retryWindowDeadline;
+}
+
+function shouldEagerlyPrepareAutomatedMint(config) {
+  return Boolean(
+    config.autoMintMode &&
+      config.preSignTransactions &&
+      !config.dryRun &&
+      !config.waitUntilIso &&
+      !config.mintStartDetectionEnabled &&
+      !config.readyCheckFunction &&
+      config.executionTriggerMode === "standard"
+  );
 }
 
 function attachErrorContext(error, context) {
@@ -1448,6 +1551,7 @@ async function sendManagedTransaction({
   logger.info(
     `[wallet ${walletIndex}] ${label} status: ${result.receipt.status === 1 ? "success" : "failed"}`
   );
+  logReceiptFeeSummary(logger, walletIndex, label, result.receipt);
 
   return result;
 }
@@ -2301,6 +2405,12 @@ async function submitSignedTransactionWithRoute({
   logger,
   signal
 }) {
+  try {
+    logTransactionGasPlan(logger, walletIndex, label, ethers.Transaction.from(signedTransaction));
+  } catch {
+    // Keep broadcasting even if the signed transaction cannot be decoded for logging.
+  }
+
   if (!config.privateRelayEnabled) {
     return submitSignedTransactionToPublicRpcMesh({
       provider,
@@ -2434,6 +2544,7 @@ async function preparePresignedTransactionRequest({
   const populatedTransaction = await wallet.populateTransaction(txRequest);
   const signedTransaction = await wallet.signTransaction(populatedTransaction);
   const transaction = ethers.Transaction.from(signedTransaction);
+  logTransactionGasPlan(logger, walletIndex, `${label} pre-sign`, transaction);
 
   logger.info(
     `[wallet ${walletIndex}] Pre-signed ${label.toLowerCase()} tx: ${transaction.hash} (nonce ${transaction.nonce})`
@@ -2847,6 +2958,7 @@ function persistResults(resultsPath, results, logger) {
 async function createWalletSession(config, privateKey, walletIndex, context) {
   const { signal, logger } = context;
   const { provider, rpcUrl, chainId } = await createProvider(config);
+  const sessionStartedAtMs = Date.now();
   try {
     const wallet = new ethers.Wallet(privateKey, provider);
     const walletAddress = await wallet.getAddress();
@@ -2909,11 +3021,19 @@ async function createWalletSession(config, privateKey, walletIndex, context) {
     logger.info(`[wallet ${walletIndex}] Starting nonce plan: ${nextPlannedNonce}`);
 
     if (config.warmupRpc) {
+      const warmupStartedAtMs = Date.now();
       await warmupProvider(provider, walletAddress, signal);
-      logger.info(`[wallet ${walletIndex}] Provider warmup complete`);
+      logger.info(
+        `[wallet ${walletIndex}] Provider warmup complete in ${formatDurationMs(
+          Date.now() - warmupStartedAtMs
+        )}`
+      );
     }
 
     await ensureMinimumBalance(provider, walletAddress, config, walletIndex, logger);
+    logger.info(
+      `[wallet ${walletIndex}] Session ready in ${formatDurationMs(Date.now() - sessionStartedAtMs)}`
+    );
 
     return {
       config,
@@ -3444,10 +3564,35 @@ async function runSingleWallet(config, privateKey, walletIndex, context) {
 }
 
 async function prepareWalletSlots(config, context) {
+  const { logger } = context;
+  const eagerAutomatedPresign = shouldEagerlyPrepareAutomatedMint(config);
   const prepared = await Promise.allSettled(
     config.privateKeys.map(async (privateKey, index) => {
+      const preparationStartedAtMs = Date.now();
       const session = await createWalletSession(config, privateKey, index, context);
-      session.preparedMint = await tryPreparePresignedMint(config, session, context);
+
+      if (!config.autoMintMode) {
+        session.preparedMint = await tryPreparePresignedMint(config, session, context);
+        return session;
+      }
+
+      if (!eagerAutomatedPresign) {
+        return session;
+      }
+
+      try {
+        session.preparedMint = await tryPrepareAutomatedPresignedMint(config, session, context, 1);
+        if (session.preparedMint) {
+          logger.info(
+            `[wallet ${index}] Automated pre-sign ready during warmup in ${formatDurationMs(
+              Date.now() - preparationStartedAtMs
+            )}`
+          );
+        }
+      } catch (error) {
+        logger.info(`[wallet ${index}] Automated pre-sign warmup skipped: ${formatError(error)}`);
+      }
+
       return session;
     })
   );
@@ -3591,6 +3736,11 @@ async function runMintBot(config, hooks = {}) {
         : "disabled"
     }`
   );
+  logger.info(
+    `Immediate automated pre-sign warmup: ${
+      shouldEagerlyPrepareAutomatedMint(preparedConfig) ? "enabled" : "disabled"
+    }`
+  );
 
   const preparedRun = await runMintBotWithPreparedWallets(preparedConfig, { signal, logger });
   const results = preparedRun.results;
@@ -3614,5 +3764,6 @@ module.exports = {
   AbortRunError,
   formatError,
   runMintBot,
+  shouldEagerlyPrepareAutomatedMint,
   simulateMintMethod
 };
