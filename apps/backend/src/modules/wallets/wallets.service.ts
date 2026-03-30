@@ -6,6 +6,7 @@ import { nowIso } from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { DatabaseService } from "../../database/database.service.js";
 import type { UnlockedWallet } from "@mintbot/bot";
+import type { StoredWalletRecord } from "./wallet.types.js";
 
 @Injectable()
 export class WalletsService {
@@ -29,10 +30,10 @@ export class WalletsService {
       encryptedPrivateKey,
       chain: request.chain,
       enabled: true,
-      tags: request.tags ?? [],
+      tags: (request.tags ?? []).map((tag) => tag.trim()).filter(Boolean),
       createdAt: timestamp,
       updatedAt: timestamp
-    });
+    } satisfies StoredWalletRecord);
   }
 
   async update(walletId: string, request: WalletUpdateRequest): Promise<WalletRecord | null> {
@@ -44,7 +45,7 @@ export class WalletsService {
   }
 
   async getUnlockedWallets(walletIds: string[]): Promise<UnlockedWallet[]> {
-    const wallets = await this.database.listWallets();
+    const wallets = await this.database.listStoredWallets();
 
     return wallets
       .filter((wallet) => walletIds.includes(wallet.id) && wallet.enabled)

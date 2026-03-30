@@ -50,6 +50,8 @@ const envSchema = z.object({
   BACKEND_PORT: z.coerce.number().default(4000),
   API_PREFIX: z.string().default("api"),
   FRONTEND_URL: z.string().default("http://localhost:3000"),
+  ADMIN_API_TOKEN: z.string().min(32),
+  REALTIME_AUTH_SECRET: z.string().min(32).optional(),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   MINT_QUEUE_NAME: z.string().default("mint-jobs"),
@@ -93,6 +95,14 @@ export class AppConfigService {
 
   get frontendUrl(): string {
     return this.env.FRONTEND_URL;
+  }
+
+  get adminApiToken(): string {
+    return this.env.ADMIN_API_TOKEN;
+  }
+
+  get realtimeAuthSecret(): string {
+    return this.env.REALTIME_AUTH_SECRET ?? this.env.ADMIN_API_TOKEN;
   }
 
   get databaseUrl(): string {
@@ -198,6 +208,41 @@ export class AppConfigService {
       relayUrl: this.env.FLASHBOTS_RELAY_URL,
       authPrivateKey: this.env.FLASHBOTS_AUTH_PRIVATE_KEY
     };
+  }
+
+  isAllowedOrigin(origin: string | undefined, requestHost?: string | undefined): boolean {
+    if (!origin) {
+      return true;
+    }
+
+    try {
+      const frontendOrigin = new URL(this.frontendUrl).origin;
+      if (origin === frontendOrigin) {
+        return true;
+      }
+    } catch {
+      // Ignore invalid configured URLs; the env schema already guards the happy path.
+    }
+
+    if (requestHost) {
+      const normalizedRequestHost = requestHost.toLowerCase();
+
+      try {
+        const originUrl = new URL(origin);
+        if (originUrl.host.toLowerCase() === normalizedRequestHost) {
+          return true;
+        }
+      } catch {
+        return false;
+      }
+    }
+
+    const localBackendOrigins = new Set([
+      `http://127.0.0.1:${this.port}`,
+      `http://localhost:${this.port}`
+    ]);
+
+    return localBackendOrigins.has(origin);
   }
 
   private buildChainRpcEndpoints(

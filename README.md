@@ -40,6 +40,9 @@ Copy `.env.example` to `.env` and provide:
 - `DATABASE_URL`
 - `REDIS_URL`
 - `PRIVATE_KEY_ENCRYPTION_SECRET`
+- `ADMIN_API_TOKEN`
+- `DASHBOARD_ACCESS_PASSWORD`
+- `DASHBOARD_SESSION_SECRET`
 - at least one HTTP RPC and one WS RPC endpoint
 - optional Flashbots auth key
 
@@ -83,8 +86,14 @@ If you prefer configuring commands in the Railway dashboard instead of using the
 Set cross-service variables so the deployed frontend talks to the deployed backend and the backend CORS policy allows the frontend origin:
 
 - Backend `FRONTEND_URL=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}`
+- Backend `ADMIN_API_TOKEN=<shared long token>`
+- Backend `REALTIME_AUTH_SECRET=<shared realtime secret>`
 - Frontend `NEXT_PUBLIC_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}/api`
 - Frontend `NEXT_PUBLIC_SOCKET_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}`
+- Frontend `ADMIN_API_TOKEN=<same backend admin token, server-side only>`
+- Frontend `REALTIME_AUTH_SECRET=<same realtime secret, server-side only>`
+- Frontend `DASHBOARD_ACCESS_PASSWORD=<dashboard login password>`
+- Frontend `DASHBOARD_SESSION_SECRET=<dashboard session secret>`
 
 ### Option 2: Single Railway service serving both frontend and backend
 
@@ -93,6 +102,7 @@ Deploy the repository root and let Railway use `/railway.json`. That build runs 
 - Root service config file: `/railway.json`
 - Keep `FRONTEND_URL` unset or on its localhost default so the backend does not redirect away from itself
 - Leave `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SOCKET_URL` unset in Railway so the frontend uses same-origin `/api` and Socket.IO
+- Still set `ADMIN_API_TOKEN`, `REALTIME_AUTH_SECRET`, `DASHBOARD_ACCESS_PASSWORD`, and `DASHBOARD_SESSION_SECRET`
 
 ## API Surface
 
@@ -112,3 +122,10 @@ Deploy the repository root and let Railway use `/railway.json`. That build runs 
 - `mint:feed`
 - `wallet:metrics`
 - `job:status`
+
+## Security Notes
+
+- Backend API routes require the admin bearer token in `ADMIN_API_TOKEN`
+- Realtime Socket.IO connections require a short-lived signed token derived from `REALTIME_AUTH_SECRET`
+- Frontend pages are protected by a dashboard password and an HTTP-only session cookie
+- Browser API calls are proxied through authenticated Next.js route handlers so wallet secrets and backend admin credentials stay server-side

@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, NotFoundException, Param, Patch, Post } from "@nestjs/common";
-import type { ApiEnvelope, WalletRecord, WalletUpdateRequest, WalletUpsertRequest } from "@mintbot/shared";
+import { Body, Controller, Delete, Get, NotFoundException, Param, ParseUUIDPipe, Patch, Post } from "@nestjs/common";
+import type { ApiEnvelope, WalletRecord } from "@mintbot/shared";
 import { WalletsService } from "./wallets.service.js";
+import { WalletUpdateDto, WalletUpsertDto } from "./wallets.dto.js";
 
 @Controller("wallets")
 export class WalletsController {
@@ -12,12 +13,15 @@ export class WalletsController {
   }
 
   @Post()
-  async create(@Body() body: WalletUpsertRequest): Promise<ApiEnvelope<WalletRecord>> {
+  async create(@Body() body: WalletUpsertDto): Promise<ApiEnvelope<WalletRecord>> {
     return { data: await this.walletsService.create(body) };
   }
 
   @Patch(":walletId")
-  async update(@Param("walletId") walletId: string, @Body() body: WalletUpdateRequest): Promise<ApiEnvelope<WalletRecord>> {
+  async update(
+    @Param("walletId", new ParseUUIDPipe()) walletId: string,
+    @Body() body: WalletUpdateDto
+  ): Promise<ApiEnvelope<WalletRecord>> {
     const wallet = await this.walletsService.update(walletId, body);
     if (!wallet) {
       throw new NotFoundException(`Wallet ${walletId} was not found.`);
@@ -27,7 +31,7 @@ export class WalletsController {
   }
 
   @Delete(":walletId")
-  async remove(@Param("walletId") walletId: string): Promise<ApiEnvelope<{ removed: boolean }>> {
+  async remove(@Param("walletId", new ParseUUIDPipe()) walletId: string): Promise<ApiEnvelope<{ removed: boolean }>> {
     return { data: { removed: await this.walletsService.delete(walletId) } };
   }
 }

@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { Logger } from "@nestjs/common";
+import { Logger, ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -107,7 +107,7 @@ async function prepareEmbeddedFrontend(logger: Logger, shouldWarnIfMissing: bool
 async function bootstrap(): Promise<void> {
   const logger = new Logger("Bootstrap");
   const app = await NestFactory.create(AppModule, {
-    cors: true
+    cors: false
   });
   const config = app.get(AppConfigService);
   const expressApp = app.getHttpAdapter().getInstance() as ExpressLikeApp;
@@ -130,9 +130,26 @@ async function bootstrap(): Promise<void> {
     })
   );
   app.setGlobalPrefix(config.apiPrefix);
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transformOptions: {
+        enableImplicitConversion: true
+      }
+    })
+  );
   expressApp.set("json replacer", (_key: string, value: unknown) => (typeof value === "bigint" ? value.toString() : value));
   app.enableCors({
-    origin: [config.frontendUrl],
+    origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+      if (config.isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Origin is not allowed."), false);
+    },
     credentials: true
   });
   expressApp.get("/", (req: FrontendRequest, res: RootServerResponse) => {

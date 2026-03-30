@@ -23,6 +23,8 @@ export class MintStrategyEngine {
     chainBias: number;
     walletSuccessRate: number;
   }): MintStrategyDecision {
+    const heuristicProfitabilityFlag =
+      "heuristic-profitability: expected value uses mint price, gas, hype, and analyzer warnings only, without live liquidity or sale data";
     const mintPriceWei = params.job.target.valueWei ?? params.contractAnalysis?.priceWei ?? 0n;
     const profitability = this.estimateProfitability({
       mintPriceWei,
@@ -34,6 +36,7 @@ export class MintStrategyEngine {
     });
 
     const suspiciousSignals = this.collectRiskFlags(params.contractAnalysis, params.competition, profitability, params.chainBias);
+    const riskFlags = [heuristicProfitabilityFlag, ...suspiciousSignals];
     const demandScore = clamp(
       (params.competition?.hypeScore ?? 0) * 0.5 +
         params.walletSuccessRate * 0.15 +
@@ -57,7 +60,8 @@ export class MintStrategyEngine {
         profitability.roiBps / 25_000 +
         params.gasPrediction.confidence * 0.18 +
         params.timing.confidence * 0.15 -
-        suspiciousSignals.length * 0.12,
+        suspiciousSignals.length * 0.12 -
+        0.05,
       0,
       1
     );
@@ -79,11 +83,11 @@ export class MintStrategyEngine {
     return {
       allowMint,
       strategyScore,
-      confidence: clamp(strategyScore * 0.7 + params.gasPrediction.confidence * 0.15 + params.timing.confidence * 0.15, 0.2, 0.99),
+      confidence: clamp(strategyScore * 0.7 + params.gasPrediction.confidence * 0.15 + params.timing.confidence * 0.15 - 0.08, 0.15, 0.92),
       reason: allowMint
-        ? `Opportunity cleared with strategy score ${strategyScore.toFixed(2)} and projected ROI ${profitability.roiBps}bps.`
-        : `Opportunity rejected with score ${strategyScore.toFixed(2)} due to ${suspiciousSignals[0] ?? "weak profitability"}.`,
-      riskFlags: suspiciousSignals,
+        ? `Heuristic opportunity cleared with strategy score ${strategyScore.toFixed(2)} and projected ROI ${profitability.roiBps}bps.`
+        : `Heuristic opportunity rejected with score ${strategyScore.toFixed(2)} due to ${suspiciousSignals[0] ?? "weak profitability"}.`,
+      riskFlags,
       recommendedGasMode,
       recommendedUseFlashbots,
       bundleTransactions,

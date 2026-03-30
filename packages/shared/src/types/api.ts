@@ -180,8 +180,6 @@ export interface ApiConfigRecord extends ApiProviderDescriptor {
   notes: string;
   secretMask: string;
   secretAvailable: boolean;
-  revealSupported: boolean;
-  copySupported: boolean;
   active: boolean;
   failoverActive: boolean;
   status: ApiHealthStatus;
@@ -292,13 +290,6 @@ export interface ApiConfigUpdateRequest {
   automationEnabled?: boolean;
   maxLatencyMs?: number;
   notes?: string;
-}
-
-export interface ApiSecretRevealResponse {
-  id: string;
-  value: string;
-  masked: string;
-  source: ApiConfigSource;
 }
 
 export interface ApiConfigTestResponse {

@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Post } from "@nestjs/common";
 import type { ApiEnvelope, RpcEndpointImportRequest, RpcEndpointRecord, RpcManagementResponse } from "@mintbot/shared";
 import { RpcService } from "./rpc.service.js";
+import { RpcEndpointImportDto, toRpcEndpointImportRequest } from "./rpc.dto.js";
 
 @Controller("rpc")
 export class RpcController {
@@ -12,8 +13,8 @@ export class RpcController {
   }
 
   @Post()
-  async create(@Body() body: RpcEndpointImportRequest): Promise<ApiEnvelope<RpcEndpointRecord>> {
-    return { data: await this.rpcService.create(body) };
+  async create(@Body() body: RpcEndpointImportDto): Promise<ApiEnvelope<RpcEndpointRecord>> {
+    return { data: await this.rpcService.create(toRpcEndpointImportRequest(body)) };
   }
 
   @Post("warm")

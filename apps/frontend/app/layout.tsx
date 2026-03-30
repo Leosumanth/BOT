@@ -2,7 +2,6 @@ import type { JSX, ReactNode } from "react";
 import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import { AppProviders } from "@/components/providers/app-providers";
-import { WorkspaceShell } from "@/components/shell/workspace-shell";
 import "./globals.css";
 
 const fontSans = Space_Grotesk({
@@ -24,9 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }): JSX.E
   return (
     <html lang="en">
       <body className={`${fontSans.variable} ${fontMono.variable} bg-background text-foreground antialiased`}>
-        <AppProviders>
-          <WorkspaceShell>{children}</WorkspaceShell>
-        </AppProviders>
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

@@ -1,4 +1,13 @@
-function getServerApiBaseUrl(): string {
+function getServerAdminApiToken(): string {
+  const token = process.env.ADMIN_API_TOKEN?.trim();
+  if (!token) {
+    throw new Error("ADMIN_API_TOKEN is required for server-side backend access.");
+  }
+
+  return token;
+}
+
+function getServerBackendApiBaseUrl(): string {
   const configuredUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   if (configuredUrl) {
     return configuredUrl;
@@ -18,24 +27,21 @@ function getServerApiBaseUrl(): string {
 }
 
 function getApiBaseUrl(): string {
-  const configuredUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (configuredUrl) {
-    return configuredUrl;
-  }
-
   if (typeof window !== "undefined") {
-    return "/api";
+    return "/api/backend";
   }
 
-  return getServerApiBaseUrl();
+  return getServerBackendApiBaseUrl();
 }
 
 export async function backendFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const baseUrl = getApiBaseUrl();
+  const isServer = typeof window === "undefined";
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
+      ...(isServer ? { authorization: `Bearer ${getServerAdminApiToken()}` } : {}),
       ...(init?.headers ?? {})
     },
     cache: "no-store"

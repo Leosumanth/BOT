@@ -24,7 +24,6 @@ import type {
   ApiRateLimitSnapshot,
   ApiReadinessReport,
   ApiReliabilityMemory,
-  ApiSecretRevealResponse,
   ApiSelectionScore
 } from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
@@ -329,17 +328,6 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
     }
 
     return { removed };
-  }
-
-  async revealSecret(id: string): Promise<ApiSecretRevealResponse> {
-    const config = await this.getRuntimeConfigById(id);
-    const value = config.secret?.trim();
-
-    if (!value) {
-      throw new BadRequestException(`No secret is available for ${config.label}.`);
-    }
-
-    return { id: config.id, value, masked: this.maskSecret(value), source: config.source };
   }
 
   async testConfig(id: string): Promise<ApiConfigTestResponse> {
@@ -1460,8 +1448,6 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       notes: config.notes,
       secretMask: config.secret ? this.maskSecret(config.secret) : "Not configured",
       secretAvailable: Boolean(config.secret),
-      revealSupported: Boolean(config.secret),
-      copySupported: Boolean(config.secret),
       active: state.active,
       failoverActive: state.failoverActive,
       status: state.status,

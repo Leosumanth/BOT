@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post } from "@nestjs/common";
 import type {
   ApiEnvelope,
   ApiConfigCreateRequest,
@@ -8,10 +8,10 @@ import type {
   ApiDraftKeyTestRequest,
   ApiDraftKeyTestResponse,
   ApiKeysDashboardResponse,
-  ApiMaintenanceRunResponse,
-  ApiSecretRevealResponse
+  ApiMaintenanceRunResponse
 } from "@mintbot/shared";
 import { ApiKeysService } from "./api-keys.service.js";
+import { ApiConfigCreateDto, ApiConfigUpdateDto, ApiDraftKeyTestDto } from "./api-keys.dto.js";
 
 @Controller("api-keys")
 export class ApiKeysController {
@@ -23,32 +23,27 @@ export class ApiKeysController {
   }
 
   @Post("configs")
-  async create(@Body() body: ApiConfigCreateRequest): Promise<ApiEnvelope<ApiConfigRecord>> {
+  async create(@Body() body: ApiConfigCreateDto): Promise<ApiEnvelope<ApiConfigRecord>> {
     return { data: await this.apiKeysService.create(body) };
   }
 
   @Patch("configs/:id")
-  async update(@Param("id") id: string, @Body() body: ApiConfigUpdateRequest): Promise<ApiEnvelope<ApiConfigRecord>> {
+  async update(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: ApiConfigUpdateDto): Promise<ApiEnvelope<ApiConfigRecord>> {
     return { data: await this.apiKeysService.update(id, body) };
   }
 
   @Delete("configs/:id")
-  async remove(@Param("id") id: string): Promise<ApiEnvelope<{ removed: boolean }>> {
+  async remove(@Param("id", new ParseUUIDPipe()) id: string): Promise<ApiEnvelope<{ removed: boolean }>> {
     return { data: await this.apiKeysService.remove(id) };
   }
 
-  @Get("configs/:id/secret")
-  async revealSecret(@Param("id") id: string): Promise<ApiEnvelope<ApiSecretRevealResponse>> {
-    return { data: await this.apiKeysService.revealSecret(id) };
-  }
-
   @Post("configs/:id/test")
-  async testConfig(@Param("id") id: string): Promise<ApiEnvelope<ApiConfigTestResponse>> {
+  async testConfig(@Param("id", new ParseUUIDPipe()) id: string): Promise<ApiEnvelope<ApiConfigTestResponse>> {
     return { data: await this.apiKeysService.testConfig(id) };
   }
 
   @Post("test-draft")
-  async testDraft(@Body() body: ApiDraftKeyTestRequest): Promise<ApiEnvelope<ApiDraftKeyTestResponse>> {
+  async testDraft(@Body() body: ApiDraftKeyTestDto): Promise<ApiEnvelope<ApiDraftKeyTestResponse>> {
     return { data: await this.apiKeysService.testDraft(body) };
   }
 

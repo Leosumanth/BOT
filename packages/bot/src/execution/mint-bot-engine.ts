@@ -302,8 +302,7 @@ export class MintBotEngine {
           return attempt;
         }
 
-        attempt.success = submission.route === "flashbots";
-        attempt.confirmedAt = attempt.success ? nowIso() : undefined;
+        attempt.success = false;
         attempt.latencyMs = Date.now() - attemptStartedAtMs;
 
         this.deps.feedbackLoop.recordAttempt({
@@ -421,6 +420,7 @@ export class MintBotEngine {
       const bundle = await this.deps.flashbots.sendBundle([signed], nextBlock);
 
       return {
+        txHash: bundle.txHashes[0],
         flashbotsBundleHash: bundle.bundleHash,
         rpcKey: "flashbots",
         route: "flashbots",

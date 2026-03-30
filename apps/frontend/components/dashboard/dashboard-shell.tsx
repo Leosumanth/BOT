@@ -49,45 +49,75 @@ export function DashboardShell({ initialData }: DashboardShellProps): JSX.Elemen
 
   useEffect(() => {
     const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL?.trim();
-    const socket = socketUrl
-      ? io(socketUrl, {
-          transports: ["websocket", "polling"]
-        })
-      : io({
-          transports: ["websocket", "polling"]
+    let cancelled = false;
+    let socket: ReturnType<typeof io> | null = null;
+
+    async function connect(): Promise<void> {
+      try {
+        const tokenResponse = await fetch("/api/socket-token", {
+          cache: "no-store"
+        });
+        if (!tokenResponse.ok) {
+          return;
+        }
+
+        const payload = (await tokenResponse.json()) as { token?: string };
+        if (!payload.token || cancelled) {
+          return;
+        }
+
+        socket = socketUrl
+          ? io(socketUrl, {
+              auth: {
+                token: payload.token
+              },
+              transports: ["websocket", "polling"]
+            })
+          : io({
+              auth: {
+                token: payload.token
+              },
+              transports: ["websocket", "polling"]
+            });
+
+        socket.on(SOCKET_EVENTS.dashboardSnapshot, (nextSnapshot) => {
+          startTransition(() => {
+            setSnapshot(nextSnapshot);
+          });
         });
 
-    socket.on(SOCKET_EVENTS.dashboardSnapshot, (payload) => {
-      startTransition(() => {
-        setSnapshot(payload);
-      });
-    });
+        socket.on(SOCKET_EVENTS.mintFeed, (payload) => {
+          startTransition(() => {
+            setSnapshot((current) => ({
+              ...current,
+              recentActivity: [payload, ...current.recentActivity].slice(0, 20)
+            }));
+          });
+          pushToast("Pending mint detected", `${payload.chain} ${payload.to ?? "unknown target"}`);
+        });
 
-    socket.on(SOCKET_EVENTS.mintFeed, (payload) => {
-      startTransition(() => {
-        setSnapshot((current) => ({
-          ...current,
-          recentActivity: [payload, ...current.recentActivity].slice(0, 20)
-        }));
-      });
-      pushToast("Pending mint detected", `${payload.chain} ${payload.to ?? "unknown target"}`);
-    });
+        socket.on(SOCKET_EVENTS.walletMetrics, (payload) => {
+          startTransition(() => {
+            setSnapshot((current) => ({
+              ...current,
+              walletMetrics: payload
+            }));
+          });
+        });
 
-    socket.on(SOCKET_EVENTS.walletMetrics, (payload) => {
-      startTransition(() => {
-        setSnapshot((current) => ({
-          ...current,
-          walletMetrics: payload
-        }));
-      });
-    });
+        socket.on(SOCKET_EVENTS.jobStatus, (payload) => {
+          pushToast("Mint job updated", `${payload.jobId} -> ${payload.status}`);
+        });
+      } catch {
+        // Keep the dashboard usable even if realtime auth/bootstrap fails.
+      }
+    }
 
-    socket.on(SOCKET_EVENTS.jobStatus, (payload) => {
-      pushToast("Mint job updated", `${payload.jobId} -> ${payload.status}`);
-    });
+    void connect();
 
     return () => {
-      socket.close();
+      cancelled = true;
+      socket?.close();
     };
   }, []);
 

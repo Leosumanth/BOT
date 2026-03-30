@@ -23,6 +23,7 @@ import type {
 } from "@mintbot/shared";
 import { AppConfigService } from "../config/app-config.service.js";
 import { stringifyJson } from "../utils/json.js";
+import type { StoredWalletRecord } from "../modules/wallets/wallet.types.js";
 
 interface StoredApiCredentialRecord {
   key: ManagedApiKey;
@@ -144,7 +145,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.logger.log("Database schema ensured.");
   }
 
-  async insertWallet(wallet: WalletRecord): Promise<WalletRecord> {
+  async insertWallet(wallet: StoredWalletRecord): Promise<WalletRecord> {
     const [row] = await this.query<WalletRecord>(
       `
       insert into wallets (
@@ -168,7 +169,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id,
         label,
         address,
-        coalesce(encrypted_private_key, secret_ciphertext) as "encryptedPrivateKey",
         coalesce(chain, 'ethereum') as chain,
         coalesce(enabled, true) as enabled,
         coalesce(tags, '[]'::jsonb) as tags,
@@ -194,6 +194,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async listWallets(): Promise<WalletRecord[]> {
     return this.query<WalletRecord>(
+      `
+      select
+        id,
+        label,
+        address,
+        coalesce(chain, 'ethereum') as chain,
+        coalesce(enabled, true) as enabled,
+        coalesce(tags, '[]'::jsonb) as tags,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      from wallets
+      order by created_at desc
+      `
+    );
+  }
+
+  async listStoredWallets(): Promise<StoredWalletRecord[]> {
+    return this.query<StoredWalletRecord>(
       `
       select
         id,
@@ -225,7 +243,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id,
         label,
         address,
-        coalesce(encrypted_private_key, secret_ciphertext) as "encryptedPrivateKey",
         coalesce(chain, 'ethereum') as chain,
         coalesce(enabled, true) as enabled,
         coalesce(tags, '[]'::jsonb) as tags,

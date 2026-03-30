@@ -8,7 +8,6 @@ export interface WalletRecord {
   id: string;
   label: string;
   address: `0x${string}`;
-  encryptedPrivateKey: string;
   chain: ChainKey;
   enabled: boolean;
   tags: string[];

@@ -1,4 +1,5 @@
 import { Wallet, id, getBytes } from "ethers";
+import { keccak256 } from "viem";
 import type { FlashbotsSimulationResult } from "@mintbot/shared";
 
 interface BundleRequestBody {
@@ -42,7 +43,7 @@ export class FlashbotsBundleClient {
     };
   }
 
-  async sendBundle(signedTransactions: `0x${string}`[], blockNumberHex: `0x${string}`): Promise<{ bundleHash?: string }> {
+  async sendBundle(signedTransactions: `0x${string}`[], blockNumberHex: `0x${string}`): Promise<{ bundleHash?: string; txHashes: `0x${string}`[] }> {
     const body: BundleRequestBody = {
       jsonrpc: "2.0",
       id: Date.now(),
@@ -63,7 +64,10 @@ export class FlashbotsBundleClient {
       throw new Error(`Flashbots bundle rejected: ${result.error.message}`);
     }
 
-    return { bundleHash: result.result?.bundleHash };
+    return {
+      bundleHash: result.result?.bundleHash,
+      txHashes: signedTransactions.map((transaction) => keccak256(transaction))
+    };
   }
 
   private async request(body: BundleRequestBody): Promise<any> {
