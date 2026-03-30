@@ -1,38 +1,28 @@
 {
-  "name": "nft-minting-bot",
+  "name": "mintbot-monorepo",
   "version": "1.0.0",
-  "description": "Configurable EVM NFT minting bot",
-  "main": "build/src/index.js",
-  "scripts": {
-    "build:node": "tsc -p tsconfig.json --pretty false",
-    "build:web": "tsc -p tsconfig.web.json --pretty false",
-    "build": "npm run build:node && npm run build:web",
-    "typecheck:node": "tsc -p tsconfig.json --pretty false --noEmit",
-    "typecheck:web": "tsc -p tsconfig.web.json --pretty false --noEmit",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "start": "npm run build && node build/src/start.js",
-    "bot": "npm run build && node build/src/index.js",
-    "ui": "npm run build && node build/src/server.js",
-    "worker": "npm run build && node build/src/worker.js",
-    "check": "npm run build && node build/scripts/validate.js",
-    "test": "npm run build && node --test --test-isolation=none build/test/smoke.test.js"
-  },
-  "keywords": [
-    "nft",
-    "mint",
-    "bot",
-    "ethers",
-    "ethereum"
+  "private": true,
+  "description": "Production-grade NFT mint bot and tracker monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
   ],
-  "license": "MIT",
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "ethers": "^6.13.2",
-    "pg": "^8.20.0",
-    "redis": "^4.7.0"
+  "scripts": {
+    "build": "npm run build -w @mintbot/shared && npm run build -w @mintbot/blockchain && npm run build -w @mintbot/bot && npm run build -w @mintbot/backend && npm run build -w @mintbot/frontend",
+    "typecheck": "npm run typecheck -w @mintbot/shared && npm run typecheck -w @mintbot/blockchain && npm run typecheck -w @mintbot/bot && npm run typecheck -w @mintbot/backend && npm run typecheck -w @mintbot/frontend",
+    "dev": "concurrently \"npm run dev -w @mintbot/backend\" \"npm run dev -w @mintbot/frontend\"",
+    "dev:backend": "npm run dev -w @mintbot/backend",
+    "dev:frontend": "npm run dev -w @mintbot/frontend",
+    "dev:worker": "npm run dev:worker -w @mintbot/backend"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "typescript": "^6.0.2"
+    "@types/node": "^22.15.3",
+    "concurrently": "^9.1.2",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.11.0"
   }
 }
