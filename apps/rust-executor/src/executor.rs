@@ -1,17 +1,18 @@
 use crate::config::WorkerConfig;
-use crate::models::MintExecutionJob;
+use crate::models::{MintExecutionJob, MintExecutionResult};
 use anyhow::{anyhow, Context, Result};
 use ethers::prelude::{Http, LocalWallet, Middleware, Provider, Signer};
 use ethers::types::transaction::eip2718::TypedTransaction;
-use ethers::types::{Address, BlockNumber, Bytes, Eip1559TransactionRequest, NameOrAddress, TxHash, U256};
+use ethers::types::{Address, BlockNumber, Bytes, Eip1559TransactionRequest, NameOrAddress, TxHash, U256, U64};
 use ethers::utils::keccak256;
 use ethers_flashbots::{BundleRequest, FlashbotsMiddleware};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::sleep;
 use url::Url;
 
-pub async fn execute_job(config: &WorkerConfig, job: &MintExecutionJob) -> Result<String> {
+pub async fn execute_job(config: &WorkerConfig, job: &MintExecutionJob) -> Result<MintExecutionResult> {
     let provider = Provider::<Http>::try_from(job.rpc_url.as_str())
         .with_context(|| format!("invalid RPC URL for {}", job.job_id))?
         .interval(Duration::from_millis(50));
@@ -25,6 +26,13 @@ pub async fn execute_job(config: &WorkerConfig, job: &MintExecutionJob) -> Resul
         let expected = Address::from_str(expected_address).context("invalid walletAddress supplied by TypeScript")?;
         if wallet.address() != expected {
             return Err(anyhow!("walletAddress does not match the signing private key"));
+        }
+    }
+
+    if let Some(not_before_unix_ms) = job.not_before_unix_ms {
+        let now_ms = current_time_ms();
+        if not_before_unix_ms > now_ms {
+            sleep(Duration::from_millis(not_before_unix_ms - now_ms)).await;
         }
     }
 
@@ -62,7 +70,16 @@ pub async fn execute_job(config: &WorkerConfig, job: &MintExecutionJob) -> Resul
     let tx_hash = TxHash::from(keccak256(raw_tx.as_ref()));
 
     if job.use_flashbots {
-        submit_via_flashbots(config, provider.clone(), raw_tx.clone(), job.simulate_before_send.unwrap_or(false)).await?;
+        let bundle_hash = submit_via_flashbots(
+            config,
+            provider.clone(),
+            raw_tx.clone(),
+            job.simulate_before_send.unwrap_or(false),
+            job.target_block_number.as_deref(),
+        )
+        .await?;
+        return Ok(MintExecutionResult::success(job.job_id.clone(), format!("{tx_hash:#x}"), "flashbots")
+            .with_bundle_hash(bundle_hash));
     } else {
         let pending_tx = provider
             .send_raw_transaction(raw_tx.clone())
@@ -75,7 +92,7 @@ pub async fn execute_job(config: &WorkerConfig, job: &MintExecutionJob) -> Resul
         }
     }
 
-    Ok(format!("{tx_hash:#x}"))
+    Ok(MintExecutionResult::success(job.job_id.clone(), format!("{tx_hash:#x}"), "rpc"))
 }
 
 fn parse_u256(value: &str) -> Result<U256> {
@@ -87,7 +104,8 @@ async fn submit_via_flashbots(
     provider: Arc<Provider<Http>>,
     raw_tx: Bytes,
     simulate_before_send: bool,
-) -> Result<()> {
+    target_block_number: Option<&str>,
+) -> Result<String> {
     let auth_key = config
         .flashbots_auth_private_key
         .clone()
@@ -96,7 +114,15 @@ async fn submit_via_flashbots(
     let relay_url = Url::parse(&config.flashbots_relay_url).context("invalid Flashbots relay URL")?;
 
     let flashbots = FlashbotsMiddleware::new(provider.clone(), relay_url, auth_wallet);
-    let target_block = provider.get_block_number().await.context("failed to fetch target block")? + 1u64;
+    let target_block = if let Some(target) = target_block_number {
+        U64::from(
+            target
+                .parse::<u64>()
+                .context("invalid targetBlockNumber")?,
+        )
+    } else {
+        provider.get_block_number().await.context("failed to fetch target block")? + 1u64
+    };
     let bundle = BundleRequest::new().push_transaction(raw_tx).set_block(target_block);
 
     if simulate_before_send {
@@ -111,5 +137,12 @@ async fn submit_via_flashbots(
         .await
         .context("Flashbots bundle submission failed")?;
 
-    Ok(())
+    Ok(format!("bundle:{target_block:#x}"))
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }

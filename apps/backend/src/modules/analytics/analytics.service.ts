@@ -1,5 +1,12 @@
 import { Injectable } from "@nestjs/common";
-import type { AnalyticsSummary, DashboardBootstrapResponse, DashboardSnapshot, GasFeeSnapshot, WalletPerformanceMetric } from "@mintbot/shared";
+import type {
+  AnalyticsSummary,
+  ChainOpportunityScore,
+  DashboardBootstrapResponse,
+  DashboardSnapshot,
+  GasFeeSnapshot,
+  WalletPerformanceMetric
+} from "@mintbot/shared";
 import { CHAIN_LOOKUP } from "@mintbot/shared";
 import { DatabaseService } from "../../database/database.service.js";
 import { RuntimeService } from "../runtime/runtime.service.js";
@@ -41,7 +48,14 @@ export class AnalyticsService {
       gasFeed,
       rpcHealth: this.runtime.rpcRouter.getHealthSnapshot(),
       walletMetrics,
-      trackedContracts: contracts
+      trackedContracts: contracts,
+      gasPredictions: this.runtime.gasPredictor.getPredictions(),
+      blockTiming: this.runtime.blockTiming.getSnapshots(),
+      competition: (Object.keys(CHAIN_LOOKUP) as Array<keyof typeof CHAIN_LOOKUP>).flatMap((chain) =>
+        this.runtime.competitionAnalyzer.getTopContracts(chain, 3)
+      ),
+      chainOpportunities: this.buildChainOpportunities(gasFeed),
+      latencySamples: this.runtime.feedbackLoop.getLatencySamples()
     };
 
     return {
@@ -87,17 +101,29 @@ export class AnalyticsService {
       }
 
       const block = await this.runtime.rpcRouter.executeWithFailover(chain, (runtime) => runtime.publicClient.getBlock());
+      const prediction = this.runtime.gasPredictor.predictNextBlockGas(chain);
       const baseFee = block.baseFeePerGas ?? 0n;
 
       results.push({
         chain,
         baseFeePerGas: baseFee,
-        maxFeePerGas: baseFee * 2n,
+        maxFeePerGas: prediction.predictedNextBaseFeePerGas * 2n,
         maxPriorityFeePerGas: 2_000_000_000n,
         observedAt: new Date().toISOString()
       });
     }
 
     return results;
+  }
+
+  private buildChainOpportunities(gasFeed: GasFeeSnapshot[]): ChainOpportunityScore[] {
+    return gasFeed.map((entry) => ({
+      chain: entry.chain,
+      score: Math.max(0, 0.55 - Number(entry.maxFeePerGas) / 200_000_000_000),
+      expectedProfitWei: 0n,
+      gasPressureScore: Math.min(1.5, Number(entry.maxFeePerGas) / 120_000_000_000),
+      demandScore: this.runtime.competitionAnalyzer.getChainHeat(entry.chain),
+      observedAt: new Date().toISOString()
+    }));
   }
 }

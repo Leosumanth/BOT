@@ -68,9 +68,9 @@ impl RedisWorker {
         };
 
         let result = match execute_job(&self.config, &job).await {
-            Ok(tx_hash) => {
-                tracing::info!(job_id = %job.job_id, wallet_id = ?job.wallet_id, tx_hash = %tx_hash, "transaction submitted");
-                MintExecutionResult::success(job.job_id.clone(), tx_hash)
+            Ok(result) => {
+                tracing::info!(job_id = %job.job_id, wallet_id = ?job.wallet_id, tx_hash = ?result.tx_hash, route = ?result.route, "transaction submitted");
+                result
             }
             Err(error) => {
                 tracing::error!(job_id = %job.job_id, wallet_id = ?job.wallet_id, error = ?error, "transaction execution failed");

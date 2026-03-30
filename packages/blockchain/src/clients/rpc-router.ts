@@ -50,6 +50,10 @@ export class RpcRouter {
       .map((entry) => entry.config);
   }
 
+  getRankedConfigs(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): RpcEndpointConfig[] {
+    return this.sortCandidates(chain, transport).map((entry) => entry.config);
+  }
+
   async warm(chain?: ChainKey): Promise<RpcHealthSnapshot[]> {
     const runtimes = [...this.endpoints.values()].filter((entry) => !chain || entry.config.chain === chain);
 

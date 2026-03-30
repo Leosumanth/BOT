@@ -33,6 +33,12 @@ pub struct MintExecutionJob {
     pub mint_job_id: Option<String>,
     #[serde(default)]
     pub rpc_key: Option<String>,
+    #[serde(default)]
+    pub target_block_number: Option<String>,
+    #[serde(default)]
+    pub not_before_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub submission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,15 +47,21 @@ pub struct MintExecutionResult {
     pub job_id: String,
     pub status: String,
     pub tx_hash: Option<String>,
+    pub bundle_hash: Option<String>,
+    pub route: Option<String>,
+    pub submitted_at_unix_ms: Option<u64>,
     pub error: Option<String>,
 }
 
 impl MintExecutionResult {
-    pub fn success(job_id: impl Into<String>, tx_hash: impl Into<String>) -> Self {
+    pub fn success(job_id: impl Into<String>, tx_hash: impl Into<String>, route: impl Into<String>) -> Self {
         Self {
             job_id: job_id.into(),
             status: "success".to_string(),
             tx_hash: Some(tx_hash.into()),
+            bundle_hash: None,
+            route: Some(route.into()),
+            submitted_at_unix_ms: Some(current_time_ms()),
             error: None,
         }
     }
@@ -59,7 +71,22 @@ impl MintExecutionResult {
             job_id: job_id.into(),
             status: "failed".to_string(),
             tx_hash: None,
+            bundle_hash: None,
+            route: None,
+            submitted_at_unix_ms: Some(current_time_ms()),
             error: Some(error.into()),
         }
     }
+
+    pub fn with_bundle_hash(mut self, bundle_hash: impl Into<String>) -> Self {
+        self.bundle_hash = Some(bundle_hash.into());
+        self
+    }
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }

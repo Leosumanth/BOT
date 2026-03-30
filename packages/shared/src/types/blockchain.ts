@@ -69,6 +69,11 @@ export interface PendingMintActivity {
   to: `0x${string}` | null;
   valueWei: bigint;
   selector: `0x${string}` | null;
+  nonce?: number;
+  gasLimit?: bigint;
+  gasPriceWei?: bigint | null;
+  maxFeePerGas?: bigint | null;
+  maxPriorityFeePerGas?: bigint | null;
   detectedAt: string;
   confidence: number;
 }

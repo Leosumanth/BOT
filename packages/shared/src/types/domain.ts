@@ -1,7 +1,8 @@
 import type { ChainKey } from "../constants/chains.js";
 import type { ContractAnalysisResult, GasFeeSnapshot, PendingMintActivity, RpcHealthSnapshot } from "./blockchain.js";
+import type { BlockTimingSnapshot, ChainOpportunityScore, CompetitionSnapshot, ExecutionLatencySample, GasPrediction } from "./strategy.js";
 
-export type BotJobStatus = "queued" | "running" | "simulated" | "submitted" | "confirmed" | "failed" | "stopped";
+export type BotJobStatus = "queued" | "running" | "simulated" | "submitted" | "confirmed" | "failed" | "stopped" | "skipped";
 
 export interface WalletRecord {
   id: string;
@@ -55,6 +56,11 @@ export interface MintExecutionAttempt {
   nonce?: number;
   rpcKey?: string;
   flashbotsBundleHash?: string;
+  gasMode?: "adaptive" | "aggressive" | "manual";
+  route?: "rpc" | "flashbots" | "rust";
+  retryCount?: number;
+  latencyMs?: number;
+  expectedProfitWei?: bigint;
   simulated: boolean;
   success: boolean;
   error?: string;
@@ -90,6 +96,10 @@ export interface WalletPerformanceMetric {
   failedMints: number;
   totalGasSpentWei: bigint;
   pnlWei: bigint;
+  recentSuccessRate?: number;
+  avgLatencyMs?: number;
+  lastUsedAt?: string;
+  stealthScore?: number;
   updatedAt: string;
 }
 
@@ -101,4 +111,9 @@ export interface DashboardSnapshot {
   rpcHealth: RpcHealthSnapshot[];
   walletMetrics: WalletPerformanceMetric[];
   trackedContracts: ContractAnalysisResult[];
+  gasPredictions?: GasPrediction[];
+  blockTiming?: BlockTimingSnapshot[];
+  competition?: CompetitionSnapshot[];
+  chainOpportunities?: ChainOpportunityScore[];
+  latencySamples?: ExecutionLatencySample[];
 }

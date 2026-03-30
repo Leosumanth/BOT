@@ -18,6 +18,7 @@ const envSchema = z.object({
   RUST_RESULT_CHANNEL: z.string().default("rust:mint:results"),
   RUST_EXECUTION_TIMEOUT_MS: z.coerce.number().default(45_000),
   RUST_SUCCESS_RESULT_TTL_MS: z.coerce.number().default(600_000),
+  BLOCK_MONITOR_INTERVAL_MS: z.coerce.number().default(1_000),
   ENABLE_INLINE_WORKER: z.coerce.boolean().default(true),
   ENABLE_MEMPOOL_TRACKER: z.coerce.boolean().default(true),
   PRIVATE_KEY_ENCRYPTION_SECRET: z.string().min(32),
@@ -83,6 +84,10 @@ export class AppConfigService {
 
   get rustSuccessResultTtlMs(): number {
     return this.env.RUST_SUCCESS_RESULT_TTL_MS;
+  }
+
+  get blockMonitorIntervalMs(): number {
+    return this.env.BLOCK_MONITOR_INTERVAL_MS;
   }
 
   get enableInlineWorker(): boolean {

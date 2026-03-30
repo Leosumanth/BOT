@@ -1,4 +1,13 @@
-import type { ChainKey, MintJobInput, MintJobResult, RustMintExecutionRequest, RustMintExecutionResult, WalletPerformanceMetric } from "@mintbot/shared";
+import type {
+  ChainKey,
+  ContractAnalysisResult,
+  MintJobInput,
+  MintJobResult,
+  MintStrategyDecision,
+  RustMintExecutionRequest,
+  RustMintExecutionResult,
+  WalletPerformanceMetric
+} from "@mintbot/shared";
 
 export interface UnlockedWallet {
   id: string;
@@ -15,9 +24,13 @@ export interface MintBotTelemetryEvent {
     | "queued"
     | "analyze"
     | "build"
+    | "decision"
     | "simulate"
     | "sign"
     | "submit"
+    | "retry"
+    | "latency"
+    | "timing"
     | "confirm"
     | "tracker"
     | "complete";
@@ -29,6 +42,9 @@ export interface MintBotTelemetryEvent {
 export interface MintBotExecutionContext {
   job: MintJobInput;
   wallets: UnlockedWallet[];
+  contractAnalysis?: ContractAnalysisResult | null;
+  walletMetrics?: WalletPerformanceMetric[];
+  queuedAtMs?: number;
 }
 
 export interface MintBotTelemetrySink {
@@ -46,4 +62,5 @@ export interface WalletPerformanceStore {
 export interface MintBotExecutionOutput {
   result: MintJobResult;
   metrics: WalletPerformanceMetric[];
+  decision?: MintStrategyDecision;
 }

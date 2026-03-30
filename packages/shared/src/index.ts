@@ -5,5 +5,6 @@ export * from "./types/api.js";
 export * from "./types/blockchain.js";
 export * from "./types/domain.js";
 export * from "./types/rust-executor.js";
+export * from "./types/strategy.js";
 export * from "./utils/env.js";
 export * from "./utils/format.js";

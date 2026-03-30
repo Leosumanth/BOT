@@ -20,11 +20,17 @@ export interface RustMintExecutionRequest {
   walletId?: string;
   mintJobId?: string;
   rpcKey?: string;
+  targetBlockNumber?: string;
+  notBeforeUnixMs?: number;
+  submissionMode?: "single" | "bundle";
 }
 
 export interface RustMintExecutionResult {
   jobId: string;
   status: "success" | "failed";
   txHash?: `0x${string}`;
+  bundleHash?: string;
+  route?: "rpc" | "flashbots";
+  submittedAtUnixMs?: number;
   error: string | null;
 }

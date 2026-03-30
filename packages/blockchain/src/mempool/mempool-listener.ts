@@ -35,6 +35,11 @@ export class MempoolListener {
               to: tx.to,
               valueWei: tx.value,
               selector: tx.input.slice(0, 10) as `0x${string}`,
+              nonce: tx.nonce,
+              gasLimit: tx.gas,
+              gasPriceWei: tx.gasPrice ?? null,
+              maxFeePerGas: tx.maxFeePerGas ?? null,
+              maxPriorityFeePerGas: tx.maxPriorityFeePerGas ?? null,
               detectedAt: nowIso(),
               confidence: decoded.candidate.score / 100
             });

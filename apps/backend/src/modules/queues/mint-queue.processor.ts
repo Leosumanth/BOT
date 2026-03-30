@@ -72,11 +72,31 @@ export class MintQueueProcessor implements OnModuleInit, OnModuleDestroy {
         }
 
         const wallets = await this.wallets.getUnlockedWallets(job.walletIds);
+        const walletMetrics = (await this.database.summarizeWalletPerformance()).map((row) => ({
+          walletId: row.walletId,
+          address: row.address,
+          successfulMints: row.successfulMints,
+          failedMints: row.failedMints,
+          totalGasSpentWei: BigInt(row.totalGasSpentWei ?? 0),
+          pnlWei: BigInt(row.pnlWei ?? 0),
+          recentSuccessRate:
+            row.successfulMints + row.failedMints > 0 ? row.successfulMints / (row.successfulMints + row.failedMints) : 0.5,
+          avgLatencyMs: 0,
+          lastUsedAt: row.updatedAt,
+          stealthScore: 0.7,
+          updatedAt: row.updatedAt
+        }));
         const engine = new MintBotEngine({
           rpcRouter: this.runtime.rpcRouter,
           nonceManager: this.runtime.nonceManager,
           transactionBuilder: this.runtime.transactionBuilder,
           gasStrategy: this.runtime.gasStrategy,
+          gasPredictor: this.runtime.gasPredictor,
+          blockTiming: this.runtime.blockTiming,
+          competitionAnalyzer: this.runtime.competitionAnalyzer,
+          walletStrategy: this.runtime.walletStrategy,
+          mintStrategy: this.runtime.mintStrategy,
+          feedbackLoop: this.runtime.feedbackLoop,
           presignedTransactions: this.runtime.presignedTransactions,
           flashbots: this.runtime.flashbots,
           executionAdapter: this.config.enableRustExecutor ? this.rustExecution : undefined,
@@ -96,7 +116,10 @@ export class MintQueueProcessor implements OnModuleInit, OnModuleDestroy {
 
         const output = await engine.execute({
           job,
-          wallets
+          wallets,
+          contractAnalysis: analysis,
+          walletMetrics,
+          queuedAtMs: new Date(job.createdAt).getTime()
         });
 
         await this.database.saveMintResult(job, output.result);
