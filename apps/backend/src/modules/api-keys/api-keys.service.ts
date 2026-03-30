@@ -215,6 +215,12 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
     }
 
     const existingProviderConfigs = (await this.database.listApiServiceConfigs()).filter((entry) => entry.provider === provider.provider);
+    const duplicate = this.findStoredConfigBySecret(existingProviderConfigs, value);
+
+    if (duplicate) {
+      return this.requireDashboardConfig(duplicate.id);
+    }
+
     const createdId = randomUUID();
     const isBackup = request.isBackup ?? existingProviderConfigs.some((entry) => !entry.isBackup);
     const priority = this.normalizePriority(request.priority ?? this.getDefaultProviderPriority(existingProviderConfigs));
@@ -260,12 +266,22 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
     const provider = this.getProviderDefinition(existing.provider);
     const label = request.label?.trim() ? request.label.trim() : existing.label;
     const endpointUrl = this.normalizeEndpointUrl(request.endpointUrl, existing.endpointUrl);
+    const nextValue = request.value?.trim();
+
+    if (nextValue) {
+      const siblingConfigs = (await this.database.listApiServiceConfigs()).filter((entry) => entry.provider === existing.provider && entry.id !== existing.id);
+      const duplicate = this.findStoredConfigBySecret(siblingConfigs, nextValue);
+
+      if (duplicate) {
+        throw new BadRequestException(`${provider.label} key is already saved in this provider pool.`);
+      }
+    }
 
     await this.database.upsertApiServiceConfig({
       id: existing.id,
       provider: existing.provider,
       label,
-      valueCiphertext: request.value?.trim() ? this.encrypt(request.value.trim()) : existing.valueCiphertext,
+      valueCiphertext: nextValue ? this.encrypt(nextValue) : existing.valueCiphertext,
       endpointUrl,
       enabled: request.enabled ?? existing.enabled,
       priority: this.normalizePriority(request.priority ?? existing.priority),
@@ -569,7 +585,7 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async buildRuntimeConfigs(): Promise<RuntimeConfig[]> {
-    const storedConfigs = await this.database.listApiServiceConfigs();
+    const storedConfigs = this.filterDuplicateStoredConfigs(await this.database.listApiServiceConfigs());
     const envValues = this.config.getManagedApiKeyValues();
     const configs: RuntimeConfig[] = storedConfigs.map((entry) => {
       const definition = this.getProviderDefinition(entry.provider);
@@ -1611,6 +1627,49 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
 
     const backupCount = existingConfigs.filter((entry) => entry.isBackup).length;
     return `${providerLabel} Backup ${backupCount + 1}`;
+  }
+
+  private filterDuplicateStoredConfigs<
+    T extends {
+      id: string;
+      provider: ApiProviderId;
+      valueCiphertext: string | null;
+    }
+  >(configs: T[]): T[] {
+    const seen = new Set<string>();
+    const unique: T[] = [];
+
+    for (const config of configs) {
+      const secret = config.valueCiphertext ? this.decrypt(config.valueCiphertext) : null;
+      const key = secret ? `${config.provider}:${secret}` : `${config.provider}:__empty__:${config.id}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      unique.push(config);
+    }
+
+    return unique;
+  }
+
+  private findStoredConfigBySecret<
+    T extends {
+      id: string;
+      provider: ApiProviderId;
+      valueCiphertext: string | null;
+    }
+  >(configs: T[], value: string): T | null {
+    return (
+      configs.find((config) => {
+        if (!config.valueCiphertext) {
+          return false;
+        }
+
+        return this.decrypt(config.valueCiphertext) === value;
+      }) ?? null
+    );
   }
 
   private normalizeLatency(value: number | undefined, fallback: number): number {

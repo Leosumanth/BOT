@@ -168,6 +168,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     const label = providerLabel(provider);
     const draftTest = draftTests[provider];
     const editTarget = editTargets[provider];
+    const existingStoredConfigs = getStoredConfigs(provider);
 
     if (!value) {
       setFeedback(`Paste the ${label} key first.`);
@@ -179,7 +180,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       return;
     }
 
-    const existingCount = getStoredConfigs(provider).length;
+    const existingCount = existingStoredConfigs.length;
 
     const saved = await runAction(`save-${provider}`, async () => {
       if (editTarget) {
@@ -190,18 +191,23 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           })
         });
       } else {
-        await backendFetch<ApiConfigRecord>("/api-keys/configs", {
+        const stored = await backendFetch<ApiConfigRecord>("/api-keys/configs", {
           method: "POST",
           body: JSON.stringify({
             provider,
             value
           } satisfies ApiConfigCreateRequest)
         });
+
+        const alreadySaved = existingStoredConfigs.some((entry) => entry.id === stored.id);
+
+        const next = await refreshDashboard(
+          alreadySaved ? `${label} key is already saved.` : existingCount > 0 ? `${label} backup key saved.` : `${label} key saved.`
+        );
+        return next;
       }
 
-      const next = await refreshDashboard(
-        editTarget ? `${label} key updated.` : existingCount > 0 ? `${label} backup key saved.` : `${label} key saved.`
-      );
+      const next = await refreshDashboard(`${label} key updated.`);
       return next;
     });
 
