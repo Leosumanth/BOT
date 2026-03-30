@@ -10,7 +10,24 @@ import { backendFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-type ProviderId = "alchemy" | "quicknode" | "flashbots";
+const PROVIDER_META = {
+  opensea: {
+    title: "OpenSea",
+    subtitle: "Marketplace intelligence for collections and drops."
+  },
+  etherscan: {
+    title: "Etherscan",
+    subtitle: "Explorer access for ABI lookups and contract metadata."
+  },
+  drpc: {
+    title: "dRPC",
+    subtitle: "Authenticated RPC-service credentials for infrastructure requests."
+  },
+  openai: {
+    title: "OpenAI",
+    subtitle: "AI-assisted analysis and automation features."
+  }
+} satisfies Record<ApiKeyRecord["provider"], { title: string; subtitle: string }>;
 
 export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }): JSX.Element {
   const [entries, setEntries] = useState<ApiKeyRecord[]>(dashboard.entries);
@@ -181,7 +198,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
               <SummaryChip label="Untested" tone="warning" value={summary.untested} />
             </div>
             <p className="text-sm text-muted-foreground">
-              {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Manage provider keys from one compact view.")}
+              {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Manage integration keys from one compact view.")}
             </p>
           </div>
 
@@ -231,11 +248,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                           <p className="text-sm font-semibold text-foreground">{entry.label}</p>
                           <StatusPill label={status.label} tone={status.tone} />
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {[entry.chain ? chainLabel(entry.chain) : null, entry.transport ? entry.transport.toUpperCase() : null, getSourceLabel(entry)]
-                            .filter(Boolean)
-                            .join(" • ")}
-                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">{[categoryLabel(entry.category), getSourceLabel(entry)].join(" | ")}</p>
                       </div>
                       <span className="truncate font-mono text-[11px] text-muted-foreground">{entry.key}</span>
                     </button>
@@ -253,7 +266,10 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <CardTitle className="text-lg text-foreground">{selectedEntry.label}</CardTitle>
-                    <p className="mt-1 text-xs text-muted-foreground">{providerLabel(selectedEntry.provider)}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {[providerLabel(selectedEntry.provider), categoryLabel(selectedEntry.category)].join(" | ")}
+                    </p>
+                    <p className="mt-3 text-sm text-muted-foreground">{selectedEntry.description}</p>
                   </div>
                   {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
                 </div>
@@ -272,7 +288,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                       autoComplete="new-password"
                       autoCorrect="off"
                       className="h-11 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
-                      placeholder={selectedEntry.kind === "url" ? "Paste provider URL" : "Paste secret key"}
+                      placeholder="Paste secret key"
                       spellCheck={false}
                       type="password"
                       value={draftValue}
@@ -281,7 +297,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                   </label>
 
                   <div className="rounded-[1.25rem] border border-blue-100 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
-                    {selectedTest?.message ?? "Saved values stay encrypted and are never shown back in the UI."}
+                    {selectedTest?.message ?? `${selectedEntry.valueHint}. Saved values stay encrypted and are never shown back in the UI.`}
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -388,32 +404,18 @@ function buildProviderGroups(
   entries: ApiKeyRecord[],
   testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
 ): Array<{
-  id: ProviderId;
+  id: ApiKeyRecord["provider"];
   title: string;
   subtitle: string;
   entries: ApiKeyRecord[];
   summary: { valid: number; invalid: number; untested: number };
 }> {
-  const groups = [
-    {
-      id: "alchemy" as const,
-      title: "Alchemy",
-      subtitle: "Ethereum and Base routes using Alchemy.",
-      entries: entries.filter((entry) => entry.provider === "alchemy")
-    },
-    {
-      id: "quicknode" as const,
-      title: "QuickNode",
-      subtitle: "Ethereum and Base routes using QuickNode.",
-      entries: entries.filter((entry) => entry.provider === "quicknode")
-    },
-    {
-      id: "flashbots" as const,
-      title: "Flashbots",
-      subtitle: "Relay and auth keys for private flow.",
-      entries: entries.filter((entry) => entry.provider === "flashbots")
-    }
-  ];
+  const groups = (Object.entries(PROVIDER_META) as Array<[ApiKeyRecord["provider"], { title: string; subtitle: string }]>).map(([provider, meta]) => ({
+    id: provider,
+    title: meta.title,
+    subtitle: meta.subtitle,
+    entries: entries.filter((entry) => entry.provider === provider)
+  }));
 
   return groups
     .filter((group) => group.entries.length > 0)
@@ -515,27 +517,32 @@ function StatusPill({
 
 function providerLabel(provider: ApiKeyRecord["provider"]): string {
   switch (provider) {
-    case "alchemy":
-      return "Alchemy";
-    case "quicknode":
-      return "QuickNode";
-    case "flashbots":
-      return "Flashbots";
+    case "opensea":
+      return "OpenSea";
+    case "etherscan":
+      return "Etherscan";
+    case "drpc":
+      return "dRPC";
+    case "openai":
+      return "OpenAI";
     default:
       return provider;
   }
 }
 
-function chainLabel(chain: ApiKeyRecord["chain"]): string {
-  if (chain === "ethereum") {
-    return "Ethereum";
+function categoryLabel(category: ApiKeyRecord["category"]): string {
+  switch (category) {
+    case "marketplace":
+      return "Marketplace";
+    case "explorer":
+      return "Explorer";
+    case "rpc-service":
+      return "RPC Service";
+    case "ai":
+      return "AI";
+    default:
+      return category;
   }
-
-  if (chain === "base") {
-    return "Base";
-  }
-
-  return chain ?? "Network";
 }
 
 function getSourceLabel(entry: ApiKeyRecord): string {
@@ -544,11 +551,9 @@ function getSourceLabel(entry: ApiKeyRecord): string {
       return "Saved override";
     case "env":
       return "Environment";
-    case "default":
-      return "Default";
     case "unset":
       return "Not configured";
     default:
-      return "Unknown";
+      return entry.source;
   }
 }

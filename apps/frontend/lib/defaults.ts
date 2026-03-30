@@ -38,9 +38,6 @@ export const emptyApiKeysDashboard: ApiKeysDashboardResponse = {
     configured: 0,
     databaseOverrides: 0,
     envBacked: 0,
-    disabled: 0,
-    rpcConfigured: 0,
-    flashbotsReady: false,
     lastRefreshedAt: new Date(0).toISOString()
   }
 };
