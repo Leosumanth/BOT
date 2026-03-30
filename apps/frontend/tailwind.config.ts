@@ -18,34 +18,34 @@ const config: Config = {
     },
     extend: {
       colors: {
-        background: "hsl(216 33% 97%)",
-        foreground: "hsl(222 47% 11%)",
-        border: "hsl(214 26% 88%)",
-        input: "hsl(214 26% 88%)",
-        ring: "hsl(217 91% 60%)",
+        background: "hsl(220 40% 98%)",
+        foreground: "hsl(220 57% 17%)",
+        border: "hsl(220 31% 90%)",
+        input: "hsl(220 31% 90%)",
+        ring: "hsl(232 52% 46%)",
         primary: {
-          DEFAULT: "hsl(222 47% 15%)",
-          foreground: "hsl(210 40% 98%)"
+          DEFAULT: "hsl(216 69% 23%)",
+          foreground: "hsl(0 0% 100%)"
         },
         secondary: {
-          DEFAULT: "hsl(214 35% 93%)",
-          foreground: "hsl(222 47% 20%)"
+          DEFAULT: "hsl(173 65% 92%)",
+          foreground: "hsl(185 78% 26%)"
         },
         muted: {
-          DEFAULT: "hsl(210 40% 96%)",
-          foreground: "hsl(215 16% 40%)"
+          DEFAULT: "hsl(220 42% 96%)",
+          foreground: "hsl(222 15% 45%)"
         },
         accent: {
-          DEFAULT: "hsl(213 94% 93%)",
-          foreground: "hsl(217 76% 32%)"
+          DEFAULT: "hsl(241 100% 97%)",
+          foreground: "hsl(232 52% 46%)"
         },
         destructive: {
-          DEFAULT: "hsl(0 72% 51%)",
+          DEFAULT: "hsl(348 72% 53%)",
           foreground: "hsl(0 0% 100%)"
         },
         card: {
           DEFAULT: "hsl(0 0% 100%)",
-          foreground: "hsl(222 47% 11%)"
+          foreground: "hsl(220 57% 17%)"
         }
       },
       borderRadius: {
@@ -54,7 +54,7 @@ const config: Config = {
         "3xl": "2rem"
       },
       boxShadow: {
-        panel: "0 24px 60px rgba(15, 23, 42, 0.08)"
+        panel: "0 20px 60px rgba(24, 43, 88, 0.08)"
       },
       fontFamily: {
         sans: ["var(--font-sans)"],

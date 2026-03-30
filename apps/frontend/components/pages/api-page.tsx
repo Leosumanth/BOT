@@ -158,45 +158,50 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
   return (
     <div className="space-y-5">
-      <Card className="overflow-hidden border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(239,246,255,0.96))] shadow-[0_18px_55px_rgba(15,23,42,0.08)]">
-        <CardHeader className="gap-5 border-b border-slate-200/80 pb-5 md:flex-row md:items-start md:justify-between">
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <SecurityChip label="Encrypted storage" />
-              <SecurityChip label="Hidden after save" />
+      <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
+        <CardContent className="p-6 md:p-8">
+          <div className="rounded-[2rem] border border-blue-100 bg-[radial-gradient(circle_at_18%_20%,rgba(89,95,255,0.12),transparent_22%),radial-gradient(circle_at_78%_28%,rgba(77,235,210,0.18),transparent_24%),linear-gradient(135deg,#ffffff_0%,#f7fbff_100%)] p-6 md:p-8">
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-xs font-semibold uppercase tracking-[0.26em] text-muted-foreground">API Key Command Center</p>
+                <CardTitle className="mt-3 text-3xl font-semibold tracking-tight text-foreground md:text-4xl">
+                  Manage keys safely, test them fast, and keep broken providers out.
+                </CardTitle>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                  Keys stay encrypted, hidden after save, and easy to review from one screen.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <SecurityChip label="Encrypted" />
+                <SecurityChip label="Hidden after save" />
+              </div>
             </div>
-            <div>
-              <CardTitle className="text-xl text-slate-950">Secure API Key Control</CardTitle>
+
+            <div className="mt-8 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+              <div className="grid flex-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryCard label="Managed" toneClass="bg-[#3648b9]" value={String(summary.managed)} />
+                <SummaryCard label="Valid" toneClass="bg-[#2cc7b5]" value={String(summary.valid)} />
+                <SummaryCard label="Not valid" toneClass="bg-[#ef476f]" value={String(summary.invalid)} />
+                <SummaryCard label="Untested" toneClass="bg-[#f4a62a]" value={String(summary.untested)} />
+              </div>
+              <Button className="min-w-[170px] rounded-full px-6" disabled={isBusy} type="button" onClick={handleTestAll}>
+                {isTestingAll ? "Testing..." : "Test all keys"}
+              </Button>
             </div>
+
+            {feedback || lastTestedAt ? (
+              <div className="mt-6 rounded-2xl border border-blue-100 bg-white/80 px-4 py-3 text-sm text-muted-foreground">
+                {feedback ?? `Last tested ${formatDateTime(lastTestedAt!)}`}
+              </div>
+            ) : null}
           </div>
-          <Button
-            className="min-w-[160px] rounded-2xl bg-slate-950 text-white hover:bg-slate-900"
-            disabled={isBusy}
-            type="button"
-            onClick={handleTestAll}
-          >
-            {isTestingAll ? "Testing..." : "Test all keys"}
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-4 pt-6">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard label="Managed" toneClass="bg-slate-900" value={String(summary.managed)} />
-            <SummaryCard label="Valid" toneClass="bg-emerald-500" value={String(summary.valid)} />
-            <SummaryCard label="Not valid" toneClass="bg-rose-500" value={String(summary.invalid)} />
-            <SummaryCard label="Untested" toneClass="bg-amber-500" value={String(summary.untested)} />
-          </div>
-          {feedback || lastTestedAt ? (
-            <div className="rounded-2xl border border-slate-200 bg-white/75 px-4 py-3 text-sm text-slate-600">
-              {feedback ?? `Last tested ${formatDateTime(lastTestedAt!)}`}
-            </div>
-          ) : null}
         </CardContent>
       </Card>
 
       <section className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-        <Card className="border-slate-200/80 bg-white/95 shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
+        <Card className="border-blue-100 bg-white/95 shadow-panel">
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg text-slate-950">All keys</CardTitle>
+            <CardTitle className="text-lg text-foreground">All keys</CardTitle>
           </CardHeader>
           <CardContent className="max-h-[760px] space-y-3 overflow-y-auto pr-1">
             {entries.map((entry) => {
@@ -209,8 +214,8 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                   className={cn(
                     "w-full rounded-[1.5rem] border px-4 py-4 text-left transition",
                     active
-                      ? "border-blue-500 bg-blue-50 shadow-[0_14px_30px_rgba(37,99,235,0.14)]"
-                      : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                      ? "border-blue-200 bg-[linear-gradient(135deg,#eef2ff,#fbfdff)] shadow-[0_18px_40px_rgba(54,72,185,0.10)]"
+                      : "border-border bg-white hover:border-blue-100 hover:bg-muted/40"
                   )}
                   type="button"
                   onClick={() => setSelectedKey(entry.key)}
@@ -218,11 +223,11 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-950">{entry.label}</p>
+                        <p className="text-sm font-semibold text-foreground">{entry.label}</p>
                         <StatusPill label={status.label} tone={status.tone} />
                       </div>
-                      <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{entry.key}</p>
-                      <p className="mt-2 text-xs text-slate-500">{getSourceLabel(entry)}</p>
+                      <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{entry.key}</p>
+                      <p className="mt-2 text-xs text-muted-foreground">{getSourceLabel(entry)}</p>
                     </div>
                   </div>
                 </button>
@@ -231,18 +236,18 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200/80 bg-white/95 shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
-          <CardHeader className="gap-4 border-b border-slate-200/80 pb-5">
+        <Card className="overflow-hidden border-blue-100 bg-white/95 shadow-panel">
+          <CardHeader className="gap-4 border-b border-blue-100 pb-5">
             {selectedEntry ? (
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <CardTitle className="text-xl text-slate-950">{selectedEntry.label}</CardTitle>
-                  <p className="mt-2 font-mono text-xs text-slate-500">{selectedEntry.key}</p>
+                  <CardTitle className="text-xl text-foreground">{selectedEntry.label}</CardTitle>
+                  <p className="mt-2 font-mono text-xs text-muted-foreground">{selectedEntry.key}</p>
                 </div>
                 {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
               </div>
             ) : (
-              <CardTitle className="text-xl text-slate-950">Select a key</CardTitle>
+              <CardTitle className="text-xl text-foreground">Select a key</CardTitle>
             )}
 
             {selectedEntry ? (
@@ -255,13 +260,13 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           <CardContent className="space-y-5 pt-6">
             {selectedEntry ? (
               <>
-                <label className="space-y-2 text-sm font-medium text-slate-900">
+                <label className="space-y-2 text-sm font-medium text-foreground">
                   <span>New value</span>
                   <Input
                     autoCapitalize="none"
                     autoComplete="new-password"
                     autoCorrect="off"
-                    className="h-12 rounded-2xl border-slate-200 bg-slate-50/80 text-slate-950 placeholder:text-slate-400 focus-visible:ring-blue-500"
+                    className="h-12 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
                     placeholder="Paste new value"
                     spellCheck={false}
                     type="password"
@@ -270,30 +275,19 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                   />
                 </label>
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <div className="rounded-2xl border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] px-4 py-3 text-sm text-muted-foreground">
                   {selectedTest?.message ?? "Saved values are never shown again after storage."}
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <Button
-                    className="h-12 rounded-2xl bg-slate-950 text-white hover:bg-slate-900"
-                    disabled={isBusy}
-                    type="button"
-                    onClick={handleSave}
-                  >
+                  <Button className="h-12 rounded-full" disabled={isBusy} type="button" onClick={handleSave}>
                     {isSaving ? "Saving..." : "Save"}
                   </Button>
-                  <Button
-                    className="h-12 rounded-2xl border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
-                    disabled={isBusy}
-                    type="button"
-                    variant="outline"
-                    onClick={handleTestOne}
-                  >
+                  <Button className="h-12 rounded-full" disabled={isBusy} type="button" variant="outline" onClick={handleTestOne}>
                     {isTestingOne ? "Testing..." : "Test"}
                   </Button>
                   <Button
-                    className="h-12 rounded-2xl"
+                    className="h-12 rounded-full"
                     disabled={isBusy || selectedEntry.source !== "database"}
                     type="button"
                     variant="destructive"
@@ -304,7 +298,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                 </div>
               </>
             ) : (
-              <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">
+              <div className="rounded-2xl border border-dashed border-border p-6 text-sm text-muted-foreground">
                 No key selected yet.
               </div>
             )}
@@ -383,19 +377,19 @@ function getDisplayStatus(
 function SummaryCard({
   label,
   toneClass,
-  value,
+  value
 }: {
   label: string;
   toneClass: string;
   value: string;
 }): JSX.Element {
   return (
-    <div className="rounded-[1.75rem] border border-slate-200 bg-white/90 p-5">
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-600">
+    <div className="rounded-[1.5rem] border border-white/80 bg-white/86 p-5 backdrop-blur">
+      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
         <span className={cn("h-2.5 w-2.5 rounded-full", toneClass)} />
         <span>{label}</span>
       </div>
-      <p className="mt-4 text-3xl font-semibold text-slate-950">{value}</p>
+      <p className="mt-4 text-3xl font-semibold text-foreground">{value}</p>
     </div>
   );
 }
@@ -411,8 +405,8 @@ function StatusPill({
     <span
       className={cn(
         "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
-        tone === "valid" && "bg-emerald-50 text-emerald-700",
-        tone === "warning" && "bg-amber-50 text-amber-700",
+        tone === "valid" && "bg-teal-50 text-teal-700",
+        tone === "warning" && "bg-blue-50 text-blue-700",
         tone === "invalid" && "bg-rose-50 text-rose-700"
       )}
     >
@@ -423,7 +417,7 @@ function StatusPill({
 
 function SecurityChip({ label }: { label: string }): JSX.Element {
   return (
-    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-medium text-slate-600">
+    <span className="inline-flex items-center rounded-full border border-blue-100 bg-white/90 px-3 py-1 text-xs font-medium text-primary">
       {label}
     </span>
   );

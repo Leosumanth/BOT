@@ -39,7 +39,7 @@ export function HomeOverviewPage({
     {
       href: "/api",
       title: "API console",
-      description: "Review platform status, analyze contracts, and manage the API surface.",
+      description: "Manage provider keys, test them quickly, and keep secrets protected.",
       icon: DatabaseZap
     }
   ] satisfies Array<{ href: Route; title: string; description: string; icon: typeof Bot }>;
@@ -47,22 +47,22 @@ export function HomeOverviewPage({
   return (
     <div className="space-y-6">
       <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <Card className="overflow-hidden border-none bg-[linear-gradient(135deg,rgba(39,69,65,0.96),rgba(58,39,24,0.92))] text-white shadow-panel">
+        <Card className="overflow-hidden border border-blue-100 bg-[radial-gradient(circle_at_20%_24%,rgba(88,94,255,0.12),transparent_22%),radial-gradient(circle_at_74%_28%,rgba(77,235,210,0.16),transparent_24%),linear-gradient(135deg,#ffffff_0%,#f7fbff_100%)] shadow-panel">
           <CardContent className="p-8 md:p-10">
-            <Badge className="rounded-full bg-white/12 px-4 py-1.5 text-white" variant="default">
+            <Badge className="rounded-full px-4 py-1.5" variant="default">
               Five-page operations suite
             </Badge>
-            <h1 className="mt-5 max-w-3xl font-sans text-4xl font-semibold tracking-tight md:text-6xl">
+            <h1 className="mt-5 max-w-3xl font-sans text-4xl font-semibold tracking-tight text-foreground md:text-6xl">
               One dashboard became a focused operating system.
             </h1>
-            <p className="mt-5 max-w-2xl text-base text-white/76 md:text-lg">
+            <p className="mt-5 max-w-2xl text-base text-muted-foreground md:text-lg">
               Home gives you signal. Tasks manage execution. RPC handles route quality. Wallets centralize imports. API keeps the platform legible.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Button asChild size="lg">
                 <Link href="/tasks">Open tasks</Link>
               </Button>
-              <Button asChild size="lg" variant="secondary">
+              <Button asChild size="lg" variant="outline">
                 <Link href="/api">Review API console</Link>
               </Button>
             </div>
