@@ -1,14 +1,10 @@
 import { NextResponse } from "next/server";
 
 export async function GET(): Promise<NextResponse> {
-<<<<<<< HEAD
-  return NextResponse.json({ ok: true, timestamp: new Date().toISOString() });
-=======
   return NextResponse.json({
     service: "mintbot-frontend",
     ok: true,
     timestamp: new Date().toISOString(),
     buildMarker: "dashboard-api-v2"
   });
->>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
 }

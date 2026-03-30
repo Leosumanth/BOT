@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
-<<<<<<< HEAD
-import { DASHBOARD_SESSION_COOKIE_NAME } from "@/lib/auth";
-=======
 import { DASHBOARD_SESSION_COOKIE_NAME } from "@/lib/auth-core";
 
 export const runtime = "nodejs";
->>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
 
 export async function POST(): Promise<NextResponse> {
   const response = NextResponse.json({ ok: true });

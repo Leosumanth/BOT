@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "name": "@mintbot/shared",
   "version": "1.0.0",
   "private": true,
@@ -9,5 +10,47 @@
   "scripts": {
     "build": "rimraf dist tsconfig.tsbuildinfo && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+=======
+  "name": "mintbot-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-grade NFT mint bot and tracker monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "npm run build -w @mintbot/shared && npm run build -w @mintbot/blockchain && npm run build -w @mintbot/bot && npm run build -w @mintbot/backend",
+    "build:frontend": "npm run build -w @mintbot/shared && npm run build -w @mintbot/frontend",
+    "local:dev": "npm run dev",
+    "local:prod": "npm run build && node scripts/local-prod.mjs",
+    "local:doctor": "node scripts/local-doctor.mjs",
+    "local:infra:up": "docker compose -f docker-compose.local.yml up -d",
+    "local:infra:down": "docker compose -f docker-compose.local.yml down",
+    "local:infra:logs": "docker compose -f docker-compose.local.yml logs -f",
+    "local:verify": "node scripts/local-verify.mjs",
+    "local:verify:prod": "node scripts/local-verify.mjs --mode=prod",
+    "test": "npm run test:smoke",
+    "test:smoke": "npm run build:backend && node test/smoke.test.mjs",
+    "typecheck": "npm run build -w @mintbot/shared && npm run typecheck -w @mintbot/shared && npm run build -w @mintbot/blockchain && npm run typecheck -w @mintbot/blockchain && npm run build -w @mintbot/bot && npm run typecheck -w @mintbot/bot && npm run typecheck -w @mintbot/backend && npm run typecheck -w @mintbot/frontend",
+    "dev": "concurrently \"npm run dev -w @mintbot/backend\" \"npm run dev -w @mintbot/frontend\"",
+    "dev:backend": "npm run dev -w @mintbot/backend",
+    "dev:frontend": "npm run dev -w @mintbot/frontend",
+    "dev:worker": "npm run dev:worker -w @mintbot/backend",
+    "start": "npm run start:backend",
+    "start:backend": "npm run start -w @mintbot/backend",
+    "start:frontend": "npm run start -w @mintbot/frontend"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "concurrently": "^9.1.2",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
   }
 }

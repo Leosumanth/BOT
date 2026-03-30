@@ -1,12 +1,8 @@
 import { NextResponse } from "next/server";
-<<<<<<< HEAD
-import { getServerAdminApiToken, getServerBackendApiBaseUrl, hasDashboardSession } from "@/lib/auth";
-=======
 import { getServerAdminApiToken, getServerBackendApiBaseUrl } from "@/lib/auth-core";
 import { hasDashboardSession } from "@/lib/dashboard-session";
 
 export const runtime = "nodejs";
->>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
 
 async function handleProxy(request: Request, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
   if (!(await hasDashboardSession())) {

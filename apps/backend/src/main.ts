@@ -212,4 +212,12 @@ async function bootstrap(): Promise<void> {
   logger.log(`MintBot backend listening on http://localhost:${config.port}/${config.apiPrefix}`);
 }
 
+<<<<<<< HEAD
 void bootstrap();
+=======
+void bootstrap().catch((error) => {
+  const logger = new Logger("Bootstrap");
+  logger.error("MintBot backend failed to start.", error instanceof Error ? error.stack : String(error));
+  process.exit(1);
+});
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0

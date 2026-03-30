@@ -1,5 +1,12 @@
 function getServerAdminApiToken(): string {
+<<<<<<< HEAD
   const token = process.env.ADMIN_API_TOKEN?.trim();
+=======
+  const token =
+    process.env.ADMIN_API_TOKEN?.trim() ||
+    process.env.PRIVATE_KEY_ENCRYPTION_SECRET?.trim() ||
+    process.env.ENCRYPTION_KEY?.trim();
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
   if (!token) {
     throw new Error("ADMIN_API_TOKEN is required for server-side backend access.");
   }
@@ -28,7 +35,11 @@ function getServerBackendApiBaseUrl(): string {
 
 function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
+<<<<<<< HEAD
     return "/api/backend";
+=======
+    return "/dashboard-api/backend";
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
   }
 
   return getServerBackendApiBaseUrl();

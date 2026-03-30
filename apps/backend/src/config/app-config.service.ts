@@ -31,6 +31,24 @@ function firstDefinedEnv(...keys: string[]): string | undefined {
   return undefined;
 }
 
+<<<<<<< HEAD
+=======
+function normalizeOriginCandidate(value: string | undefined): string | null {
+  const candidate = value?.trim();
+  if (!candidate) {
+    return null;
+  }
+
+  const withProtocol = /^[a-z]+:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+
+  try {
+    return new URL(withProtocol).origin;
+  } catch {
+    return null;
+  }
+}
+
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
 const sanitizedProcessEnv = Object.fromEntries(
   Object.entries(process.env).map(([key, value]) => [key, value?.trim() ? value : undefined])
 );
@@ -38,6 +56,10 @@ const sanitizedProcessEnv = Object.fromEntries(
 const normalizedEnv = {
   ...sanitizedProcessEnv,
   BACKEND_PORT: firstDefinedEnv("BACKEND_PORT", "PORT"),
+<<<<<<< HEAD
+=======
+  ADMIN_API_TOKEN: firstDefinedEnv("ADMIN_API_TOKEN", "PRIVATE_KEY_ENCRYPTION_SECRET", "ENCRYPTION_KEY"),
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
   PRIVATE_KEY_ENCRYPTION_SECRET: firstDefinedEnv("PRIVATE_KEY_ENCRYPTION_SECRET", "ENCRYPTION_KEY")
 };
 
@@ -215,9 +237,27 @@ export class AppConfigService {
       return true;
     }
 
+<<<<<<< HEAD
     try {
       const frontendOrigin = new URL(this.frontendUrl).origin;
       if (origin === frontendOrigin) {
+=======
+    const configuredOrigins = new Set(
+      [
+        normalizeOriginCandidate(this.frontendUrl),
+        normalizeOriginCandidate(process.env.RAILWAY_STATIC_URL),
+        normalizeOriginCandidate(process.env.RAILWAY_PUBLIC_DOMAIN)
+      ].filter((value): value is string => Boolean(value))
+    );
+
+    if (configuredOrigins.has(origin)) {
+      return true;
+    }
+
+    try {
+      const frontendOrigin = normalizeOriginCandidate(this.frontendUrl);
+      if (frontendOrigin && origin === frontendOrigin) {
+>>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
         return true;
       }
     } catch {

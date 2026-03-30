@@ -1,16 +1,4 @@
 import { NextResponse } from "next/server";
-<<<<<<< HEAD
-import { createRealtimeAuthToken, hasDashboardSession } from "@/lib/auth";
-
-export async function GET(): Promise<NextResponse> {
-  if (!(await hasDashboardSession())) {
-    return NextResponse.json({ message: "Authentication required." }, { status: 401 });
-  }
-
-  return NextResponse.json({
-    token: createRealtimeAuthToken()
-  });
-=======
 import { createRealtimeAuthToken } from "@/lib/auth-core";
 import { hasDashboardSession } from "@/lib/dashboard-session";
 
@@ -36,5 +24,4 @@ export async function GET(): Promise<NextResponse> {
       { status: 503 }
     );
   }
->>>>>>> 67a447c10fc3fe55a5f452e92a7ac53ae87beaf0
 }
