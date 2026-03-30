@@ -170,82 +170,46 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   }
 
   return (
-    <div className="space-y-6">
-      <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
-        <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
-          <CardContent className="p-0">
-            <div className="border-b border-blue-100 bg-[radial-gradient(circle_at_18%_18%,rgba(77,235,210,0.18),transparent_20%),radial-gradient(circle_at_82%_20%,rgba(70,82,220,0.18),transparent_22%),linear-gradient(135deg,#ffffff_0%,#f7fbff_100%)] px-6 py-8 md:px-8">
-              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-muted-foreground">API Keys</p>
-              <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
-                Secure provider keys without the clutter.
-              </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
-                Replace broken keys, test providers quickly, and keep saved values hidden from the screen.
-              </p>
-              <div className="mt-6 flex flex-wrap gap-2">
-                <HeroChip label="Encrypted storage" />
-                <HeroChip label="Hidden after save" />
-                <HeroChip label="Single-key testing" />
-              </div>
+    <div className="space-y-4">
+      <Card className="border-blue-100 bg-white shadow-panel">
+        <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              <SummaryChip label="Managed" value={summary.managed} />
+              <SummaryChip label="Valid" tone="valid" value={summary.valid} />
+              <SummaryChip label="Not valid" tone="invalid" value={summary.invalid} />
+              <SummaryChip label="Untested" tone="warning" value={summary.untested} />
             </div>
+            <p className="text-sm text-muted-foreground">
+              {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Manage provider keys from one compact view.")}
+            </p>
+          </div>
 
-            <div className="flex flex-col gap-4 px-6 py-5 md:px-8">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <SummaryTile label="Managed" toneClass="bg-[#3648b9]" value={String(summary.managed)} />
-                <SummaryTile label="Valid" toneClass="bg-[#2cc7b5]" value={String(summary.valid)} />
-                <SummaryTile label="Not valid" toneClass="bg-[#ef476f]" value={String(summary.invalid)} />
-                <SummaryTile label="Untested" toneClass="bg-[#f4a62a]" value={String(summary.untested)} />
-              </div>
+          <Button className="rounded-full px-6" disabled={isBusy} type="button" onClick={handleTestAll}>
+            {isTestingAll ? "Testing..." : "Test all keys"}
+          </Button>
+        </CardContent>
+      </Card>
 
-              <div className="rounded-[1.5rem] border border-blue-100 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-                {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Select any key below to manage it.")}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
-          <CardContent className="flex h-full flex-col justify-between gap-6 p-6 md:p-8">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Quick actions</p>
-              <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">Keep every provider ready.</h2>
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                Run a full health pass after saving changes and remove stored overrides you no longer trust.
-              </p>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <ActionTile label="Providers tracked" value={`${providerGroups.length}`} hint="Grouped boards" />
-              <ActionTile label="Saved overrides" value={`${entries.filter((entry) => entry.source === "database").length}`} hint="Database backed" />
-            </div>
-
-            <Button className="h-12 rounded-full px-6" disabled={isBusy} size="lg" type="button" onClick={handleTestAll}>
-              {isTestingAll ? "Testing..." : "Test all keys"}
-            </Button>
-          </CardContent>
-        </Card>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[1.12fr_0.88fr]">
-        <div className="space-y-5">
+      <section className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
+        <div className="space-y-4">
           {providerGroups.map((group) => (
-            <Card key={group.id} className="overflow-hidden border-blue-100 bg-white shadow-panel">
-              <CardHeader className={cn("border-b pb-5", group.headerClass)}>
-                <div className="flex items-start justify-between gap-4">
+            <Card key={group.id} className="border-blue-100 bg-white shadow-panel">
+              <CardHeader className="border-b border-blue-100/80 pb-4">
+                <div className="flex items-center justify-between gap-4">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">{group.kicker}</p>
-                    <CardTitle className="mt-2 text-2xl text-foreground">{group.title}</CardTitle>
+                    <CardTitle className="text-lg text-foreground">{group.title}</CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">{group.subtitle}</p>
                   </div>
-                  <div className={cn("rounded-[1.25rem] px-4 py-3 text-sm font-semibold", group.countClass)}>{group.entries.length} keys</div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <MiniStat label="Valid" value={String(group.summary.valid)} />
-                  <MiniStat label="Not valid" value={String(group.summary.invalid)} />
-                  <MiniStat label="Untested" value={String(group.summary.untested)} />
+                  <div className="flex gap-2">
+                    <MiniBadge label={`V ${group.summary.valid}`} tone="valid" />
+                    <MiniBadge label={`N ${group.summary.invalid}`} tone="invalid" />
+                    <MiniBadge label={`U ${group.summary.untested}`} tone="warning" />
+                  </div>
                 </div>
               </CardHeader>
 
-              <CardContent className="grid gap-3 p-4 md:grid-cols-2">
+              <CardContent className="space-y-2 p-3">
                 {group.entries.map((entry) => {
                   const active = selectedEntry?.key === entry.key;
                   const status = getDisplayStatus(entry, testResults[entry.key]);
@@ -254,29 +218,26 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                     <button
                       key={entry.key}
                       className={cn(
-                        "rounded-[1.5rem] border p-4 text-left transition",
+                        "flex w-full items-center justify-between gap-3 rounded-[1.25rem] border px-4 py-3 text-left transition",
                         active
-                          ? "border-blue-200 bg-[linear-gradient(135deg,#eef2ff,#fbfdff)] shadow-[0_18px_35px_rgba(54,72,185,0.10)]"
-                          : "border-border bg-white hover:border-blue-100 hover:bg-muted/35"
+                          ? "border-blue-200 bg-[linear-gradient(135deg,#eef2ff,#fbfdff)] shadow-[0_12px_26px_rgba(54,72,185,0.10)]"
+                          : "border-border bg-white hover:border-blue-100 hover:bg-muted/30"
                       )}
                       type="button"
                       onClick={() => setSelectedKey(entry.key)}
                     >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-semibold text-foreground">{entry.label}</p>
-                            <StatusPill label={status.label} tone={status.tone} />
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {entry.chain ? <MetaPill label={chainLabel(entry.chain)} /> : null}
-                            {entry.transport ? <MetaPill label={entry.transport.toUpperCase()} /> : null}
-                            <MetaPill label={getSourceLabel(entry)} />
-                          </div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                          <StatusPill label={status.label} tone={status.tone} />
                         </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {[entry.chain ? chainLabel(entry.chain) : null, entry.transport ? entry.transport.toUpperCase() : null, getSourceLabel(entry)]
+                            .filter(Boolean)
+                            .join(" • ")}
+                        </p>
                       </div>
-
-                      <p className="mt-4 truncate font-mono text-[11px] text-muted-foreground">{entry.key}</p>
+                      <span className="truncate font-mono text-[11px] text-muted-foreground">{entry.key}</span>
                     </button>
                   );
                 })}
@@ -285,82 +246,66 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           ))}
         </div>
 
-        <div className="space-y-5 xl:sticky xl:top-28 xl:self-start">
-          <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
-            <CardHeader className="border-b border-blue-100 bg-[linear-gradient(180deg,rgba(247,250,255,0.96),rgba(255,255,255,1))] pb-5">
+        <div className="xl:sticky xl:top-28 xl:self-start">
+          <Card className="border-blue-100 bg-white shadow-panel">
+            <CardHeader className="border-b border-blue-100/80 pb-4">
               {selectedEntry ? (
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Selected key</p>
-                      <CardTitle className="mt-2 text-2xl text-foreground">{selectedEntry.label}</CardTitle>
-                      <p className="mt-2 font-mono text-xs text-muted-foreground">{selectedEntry.key}</p>
-                    </div>
-                    {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-lg text-foreground">{selectedEntry.label}</CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">{providerLabel(selectedEntry.provider)}</p>
                   </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <HeroChip label={providerLabel(selectedEntry.provider)} />
-                    {selectedEntry.chain ? <HeroChip label={chainLabel(selectedEntry.chain)} /> : null}
-                    {selectedEntry.transport ? <HeroChip label={selectedEntry.transport.toUpperCase()} /> : null}
-                  </div>
+                  {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
                 </div>
               ) : (
-                <CardTitle className="text-2xl text-foreground">Select a key</CardTitle>
+                <CardTitle className="text-lg text-foreground">Select a key</CardTitle>
               )}
             </CardHeader>
 
-            <CardContent className="space-y-5 p-6">
+            <CardContent className="space-y-4 p-5">
               {selectedEntry ? (
                 <>
-                  <div className="rounded-[1.75rem] border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] p-5">
-                    <label className="space-y-2 text-sm font-medium text-foreground">
-                      <span>New value</span>
-                      <Input
-                        autoCapitalize="none"
-                        autoComplete="new-password"
-                        autoCorrect="off"
-                        className="h-12 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
-                        placeholder={selectedEntry.kind === "url" ? "Paste provider URL" : "Paste secret key"}
-                        spellCheck={false}
-                        type="password"
-                        value={draftValue}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftValue(event.target.value)}
-                      />
-                    </label>
-                    <p className="mt-3 text-xs leading-5 text-muted-foreground">Stored values remain encrypted and are never rendered back into the dashboard.</p>
+                  <label className="space-y-2 text-sm font-medium text-foreground">
+                    <span>New value</span>
+                    <Input
+                      autoCapitalize="none"
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      className="h-11 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
+                      placeholder={selectedEntry.kind === "url" ? "Paste provider URL" : "Paste secret key"}
+                      spellCheck={false}
+                      type="password"
+                      value={draftValue}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftValue(event.target.value)}
+                    />
+                  </label>
+
+                  <div className="rounded-[1.25rem] border border-blue-100 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                    {selectedTest?.message ?? "Saved values stay encrypted and are never shown back in the UI."}
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <Button className="h-12 rounded-full" disabled={isBusy} type="button" onClick={handleSave}>
+                    <Button className="h-11 rounded-full" disabled={isBusy} type="button" onClick={handleSave}>
                       {isSaving ? "Saving..." : "Save"}
                     </Button>
-                    <Button className="h-12 rounded-full" disabled={isBusy} type="button" variant="outline" onClick={handleTestOne}>
+                    <Button className="h-11 rounded-full" disabled={isBusy} type="button" variant="outline" onClick={handleTestOne}>
                       {isTestingOne ? "Testing..." : "Test"}
                     </Button>
                   </div>
 
                   <Button
-                    className="h-12 w-full rounded-full"
+                    className="h-11 w-full rounded-full"
                     disabled={isBusy || selectedEntry.source !== "database"}
                     type="button"
                     variant="destructive"
                     onClick={handleDelete}
                   >
-                    {isDeleting ? "Deleting..." : "Delete saved override"}
+                    {isDeleting ? "Deleting..." : "Delete saved"}
                   </Button>
-
-                  <div className="rounded-[1.5rem] border border-blue-100 bg-white px-4 py-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-foreground">Validation</p>
-                      {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-muted-foreground">{selectedTest?.message ?? "No recent test for this key yet."}</p>
-                  </div>
                 </>
               ) : (
-                <div className="rounded-[1.5rem] border border-dashed border-border p-6 text-sm text-muted-foreground">
-                  Choose a key card to edit, test, or remove its saved value.
+                <div className="rounded-[1.25rem] border border-dashed border-border p-5 text-sm text-muted-foreground">
+                  Pick a key from the left to edit it.
                 </div>
               )}
             </CardContent>
@@ -444,36 +389,28 @@ function buildProviderGroups(
   testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
 ): Array<{
   id: ProviderId;
-  kicker: string;
   title: string;
-  headerClass: string;
-  countClass: string;
+  subtitle: string;
   entries: ApiKeyRecord[];
   summary: { valid: number; invalid: number; untested: number };
 }> {
   const groups = [
     {
       id: "alchemy" as const,
-      kicker: "Provider",
       title: "Alchemy",
-      headerClass: "bg-[linear-gradient(135deg,#f7fbff,#eef2ff)]",
-      countClass: "bg-[#eef2ff] text-[#3648b9]",
+      subtitle: "Ethereum and Base routes using Alchemy.",
       entries: entries.filter((entry) => entry.provider === "alchemy")
     },
     {
       id: "quicknode" as const,
-      kicker: "Provider",
       title: "QuickNode",
-      headerClass: "bg-[linear-gradient(135deg,#f7fffe,#ecfdf9)]",
-      countClass: "bg-[#ecfdf9] text-[#0f766e]",
+      subtitle: "Ethereum and Base routes using QuickNode.",
       entries: entries.filter((entry) => entry.provider === "quicknode")
     },
     {
       id: "flashbots" as const,
-      kicker: "Private flow",
       title: "Flashbots",
-      headerClass: "bg-[linear-gradient(135deg,#fffaf5,#fff1e6)]",
-      countClass: "bg-[#fff1e6] text-[#c2410c]",
+      subtitle: "Relay and auth keys for private flow.",
       entries: entries.filter((entry) => entry.provider === "flashbots")
     }
   ];
@@ -509,42 +446,49 @@ function getDisplayStatus(
   return { label: "Untested", tone: "warning" };
 }
 
-function SummaryTile({
+function SummaryChip({
   label,
-  toneClass,
-  value
+  value,
+  tone = "default"
 }: {
   label: string;
-  toneClass: string;
-  value: string;
+  value: number;
+  tone?: "default" | "valid" | "warning" | "invalid";
 }): JSX.Element {
   return (
-    <div className="rounded-[1.5rem] border border-white/90 bg-white/88 p-5 backdrop-blur">
-      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <span className={cn("h-2.5 w-2.5 rounded-full", toneClass)} />
-        <span>{label}</span>
-      </div>
-      <p className="mt-4 text-3xl font-semibold text-foreground">{value}</p>
+    <div
+      className={cn(
+        "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium",
+        tone === "default" && "border-blue-100 bg-white text-foreground",
+        tone === "valid" && "border-teal-100 bg-teal-50 text-teal-700",
+        tone === "warning" && "border-blue-100 bg-blue-50 text-blue-700",
+        tone === "invalid" && "border-rose-100 bg-rose-50 text-rose-700"
+      )}
+    >
+      <span>{label}</span>
+      <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-semibold text-foreground">{value}</span>
     </div>
   );
 }
 
-function ActionTile({ label, value, hint }: { label: string; value: string; hint: string }): JSX.Element {
+function MiniBadge({
+  label,
+  tone
+}: {
+  label: string;
+  tone: "valid" | "warning" | "invalid";
+}): JSX.Element {
   return (
-    <div className="rounded-[1.5rem] border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] p-5">
-      <p className="text-sm font-medium text-muted-foreground">{label}</p>
-      <p className="mt-3 text-3xl font-semibold text-foreground">{value}</p>
-      <p className="mt-2 text-xs text-muted-foreground">{hint}</p>
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }): JSX.Element {
-  return (
-    <div className="rounded-[1.25rem] border border-white/80 bg-white/82 px-4 py-3">
-      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-lg font-semibold text-foreground">{value}</p>
-    </div>
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
+        tone === "valid" && "bg-teal-50 text-teal-700",
+        tone === "warning" && "bg-blue-50 text-blue-700",
+        tone === "invalid" && "bg-rose-50 text-rose-700"
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -567,14 +511,6 @@ function StatusPill({
       {label}
     </span>
   );
-}
-
-function MetaPill({ label }: { label: string }): JSX.Element {
-  return <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">{label}</span>;
-}
-
-function HeroChip({ label }: { label: string }): JSX.Element {
-  return <span className="rounded-full border border-blue-100 bg-white/92 px-3 py-1 text-xs font-medium text-primary">{label}</span>;
 }
 
 function providerLabel(provider: ApiKeyRecord["provider"]): string {
@@ -607,12 +543,12 @@ function getSourceLabel(entry: ApiKeyRecord): string {
     case "database":
       return "Saved override";
     case "env":
-      return "Environment value";
+      return "Environment";
     case "default":
-      return "Default value";
+      return "Default";
     case "unset":
       return "Not configured";
     default:
-      return "Unknown source";
+      return "Unknown";
   }
 }
