@@ -105,7 +105,8 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     try {
       return await action();
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to complete this API action.");
+      const message = error instanceof Error ? error.message : "Unable to complete this API action.";
+      setFeedback(message === "Internal server error" ? "Server could not complete that API request. Check backend logs or provider settings." : message);
       return null;
     } finally {
       setBusyKey(null);
@@ -253,8 +254,8 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     }));
     setFeedback(
       result.ok
-        ? `${label} key passed the connection test.`
-        : `${label} key failed: ${result.health.failureReason ?? statusLabel(result.status)}`
+        ? `${label} key is valid.`
+        : `${label} key is invalid: ${result.health.failureReason ?? statusLabel(result.status)}`
     );
   }
 
@@ -437,7 +438,7 @@ function ProviderKeyCard({
           <div className="rounded-[1.2rem] border border-[#d4b07a]/10 bg-[#f5ead8]/[0.04] px-4 py-3 text-sm text-stone-300">
             {draftTest ? (
               <p className={cn("font-medium", draftTest.ok ? "text-emerald-200" : "text-rose-200")}>
-                Draft test: {draftTest.ok ? "Passed" : "Failed"}
+                Key is {draftTest.ok ? "valid" : "invalid"}
                 {draftTest.health.latencyMs ? ` | ${draftTest.health.latencyMs}ms` : ""}
               </p>
             ) : null}
