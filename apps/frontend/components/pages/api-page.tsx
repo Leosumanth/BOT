@@ -10,6 +10,8 @@ import { backendFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+type SectionId = "ethereum" | "base" | "flashbots";
+
 export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }): JSX.Element {
   const [entries, setEntries] = useState<ApiKeyRecord[]>(dashboard.entries);
   const [selectedKey, setSelectedKey] = useState<ApiKeyRecord["key"] | null>(dashboard.entries[0]?.key ?? null);
@@ -43,13 +45,22 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
   const selectedEntry = entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null;
   const selectedTest = selectedEntry ? testResults[selectedEntry.key] : undefined;
+  const selectedStatus = selectedEntry ? getDisplayStatus(selectedEntry, selectedTest) : null;
   const isBusy = isSaving || isDeleting || isTestingOne || isTestingAll;
   const summary = summarize(entries, testResults);
-  const selectedStatus = selectedEntry ? getDisplayStatus(selectedEntry, selectedTest) : null;
+  const sections = buildSections(entries);
 
   async function refreshEntries(): Promise<void> {
     const next = await backendFetch<ApiKeysDashboardResponse>("/api-keys");
     setEntries(next.entries);
+  }
+
+  function clearTestResult(key: ApiKeyRecord["key"]): void {
+    setTestResults((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   async function handleSave(): Promise<void> {
@@ -73,6 +84,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       });
 
       await refreshEntries();
+      clearTestResult(selectedEntry.key);
       setDraftValue("");
       setFeedback(`${selectedEntry.label} saved.`);
     } catch (error) {
@@ -98,6 +110,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       });
 
       await refreshEntries();
+      clearTestResult(selectedEntry.key);
       setDraftValue("");
       setFeedback(`${selectedEntry.label} deleted.`);
     } catch (error) {
@@ -157,153 +170,185 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   }
 
   return (
-    <div className="space-y-5">
-      <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
-        <CardContent className="p-6 md:p-8">
-          <div className="rounded-[2rem] border border-blue-100 bg-[radial-gradient(circle_at_18%_20%,rgba(89,95,255,0.12),transparent_22%),radial-gradient(circle_at_78%_28%,rgba(77,235,210,0.18),transparent_24%),linear-gradient(135deg,#ffffff_0%,#f7fbff_100%)] p-6 md:p-8">
-            <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-              <div className="max-w-2xl">
-                <p className="text-xs font-semibold uppercase tracking-[0.26em] text-muted-foreground">API Key Command Center</p>
-                <CardTitle className="mt-3 text-3xl font-semibold tracking-tight text-foreground md:text-4xl">
-                  Manage keys safely, test them fast, and keep broken providers out.
-                </CardTitle>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                  Keys stay encrypted, hidden after save, and easy to review from one screen.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <SecurityChip label="Encrypted" />
-                <SecurityChip label="Hidden after save" />
-              </div>
+    <div className="space-y-6">
+      <section className="overflow-hidden rounded-[2rem] border border-blue-100 bg-white shadow-panel">
+        <div className="grid gap-6 border-b border-blue-100 bg-[radial-gradient(circle_at_16%_18%,rgba(77,235,210,0.18),transparent_20%),radial-gradient(circle_at_84%_22%,rgba(70,82,220,0.16),transparent_24%),linear-gradient(135deg,#ffffff_0%,#f8fbff_100%)] px-6 py-7 lg:grid-cols-[1.1fr_0.9fr] lg:px-8">
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <HeroChip label="Encrypted storage" />
+              <HeroChip label="Values hidden after save" />
             </div>
-
-            <div className="mt-8 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-              <div className="grid flex-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <SummaryCard label="Managed" toneClass="bg-[#3648b9]" value={String(summary.managed)} />
-                <SummaryCard label="Valid" toneClass="bg-[#2cc7b5]" value={String(summary.valid)} />
-                <SummaryCard label="Not valid" toneClass="bg-[#ef476f]" value={String(summary.invalid)} />
-                <SummaryCard label="Untested" toneClass="bg-[#f4a62a]" value={String(summary.untested)} />
-              </div>
-              <Button className="min-w-[170px] rounded-full px-6" disabled={isBusy} type="button" onClick={handleTestAll}>
-                {isTestingAll ? "Testing..." : "Test all keys"}
-              </Button>
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-muted-foreground">API Security Hub</p>
+              <h1 className="max-w-3xl text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
+                One place to keep provider keys clean, private, and working.
+              </h1>
+              <p className="max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
+                Review everything fast, replace broken keys, and keep saved secrets hidden from the UI.
+              </p>
             </div>
-
-            {feedback || lastTestedAt ? (
-              <div className="mt-6 rounded-2xl border border-blue-100 bg-white/80 px-4 py-3 text-sm text-muted-foreground">
-                {feedback ?? `Last tested ${formatDateTime(lastTestedAt!)}`}
-              </div>
-            ) : null}
           </div>
-        </CardContent>
-      </Card>
 
-      <section className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-        <Card className="border-blue-100 bg-white/95 shadow-panel">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-lg text-foreground">All keys</CardTitle>
-          </CardHeader>
-          <CardContent className="max-h-[760px] space-y-3 overflow-y-auto pr-1">
-            {entries.map((entry) => {
-              const active = selectedEntry?.key === entry.key;
-              const status = getDisplayStatus(entry, testResults[entry.key]);
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SummaryTile label="Managed" toneClass="bg-[#3648b9]" value={String(summary.managed)} />
+            <SummaryTile label="Valid" toneClass="bg-[#2cc7b5]" value={String(summary.valid)} />
+            <SummaryTile label="Not valid" toneClass="bg-[#ef476f]" value={String(summary.invalid)} />
+            <SummaryTile label="Untested" toneClass="bg-[#f4a62a]" value={String(summary.untested)} />
+          </div>
+        </div>
 
-              return (
-                <button
-                  key={entry.key}
-                  className={cn(
-                    "w-full rounded-[1.5rem] border px-4 py-4 text-left transition",
-                    active
-                      ? "border-blue-200 bg-[linear-gradient(135deg,#eef2ff,#fbfdff)] shadow-[0_18px_40px_rgba(54,72,185,0.10)]"
-                      : "border-border bg-white hover:border-blue-100 hover:bg-muted/40"
-                  )}
-                  type="button"
-                  onClick={() => setSelectedKey(entry.key)}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-semibold text-foreground">{entry.label}</p>
-                        <StatusPill label={status.label} tone={status.tone} />
-                      </div>
-                      <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{entry.key}</p>
-                      <p className="mt-2 text-xs text-muted-foreground">{getSourceLabel(entry)}</p>
-                    </div>
+        <div className="flex flex-col gap-4 px-6 py-5 lg:flex-row lg:items-center lg:justify-between lg:px-8">
+          <div className="rounded-2xl border border-blue-100 bg-muted/35 px-4 py-3 text-sm text-muted-foreground">
+            {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Select a key to save, test, or delete its stored override.")}
+          </div>
+          <Button className="rounded-full px-6" disabled={isBusy} size="lg" type="button" onClick={handleTestAll}>
+            {isTestingAll ? "Testing..." : "Test all keys"}
+          </Button>
+        </div>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1.12fr_0.88fr]">
+        <div className="space-y-5">
+          {sections.map((section) => (
+            <Card key={section.id} className="overflow-hidden border-blue-100 bg-white shadow-panel">
+              <CardHeader className="border-b border-blue-100/80 bg-[linear-gradient(180deg,rgba(248,251,255,0.9),rgba(255,255,255,1))] pb-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">{section.kicker}</p>
+                    <CardTitle className="mt-2 text-2xl text-foreground">{section.title}</CardTitle>
+                    <p className="mt-2 text-sm text-muted-foreground">{section.description}</p>
                   </div>
-                </button>
-              );
-            })}
-          </CardContent>
-        </Card>
-
-        <Card className="overflow-hidden border-blue-100 bg-white/95 shadow-panel">
-          <CardHeader className="gap-4 border-b border-blue-100 pb-5">
-            {selectedEntry ? (
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <CardTitle className="text-xl text-foreground">{selectedEntry.label}</CardTitle>
-                  <p className="mt-2 font-mono text-xs text-muted-foreground">{selectedEntry.key}</p>
+                  <div className={cn("rounded-[1.25rem] px-4 py-3 text-sm font-semibold", section.countClass)}>
+                    {section.entries.length} keys
+                  </div>
                 </div>
-                {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
-              </div>
-            ) : (
-              <CardTitle className="text-xl text-foreground">Select a key</CardTitle>
-            )}
+              </CardHeader>
+              <CardContent className="grid gap-3 p-4 md:grid-cols-2">
+                {section.entries.map((entry) => {
+                  const active = selectedEntry?.key === entry.key;
+                  const status = getDisplayStatus(entry, testResults[entry.key]);
 
-            {selectedEntry ? (
-              <div className="flex flex-wrap gap-2">
-                <SecurityChip label={getSourceLabel(selectedEntry)} />
-                {selectedEntry.source === "database" ? <SecurityChip label="Delete available" /> : null}
-              </div>
-            ) : null}
-          </CardHeader>
-          <CardContent className="space-y-5 pt-6">
-            {selectedEntry ? (
-              <>
-                <label className="space-y-2 text-sm font-medium text-foreground">
-                  <span>New value</span>
-                  <Input
-                    autoCapitalize="none"
-                    autoComplete="new-password"
-                    autoCorrect="off"
-                    className="h-12 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
-                    placeholder="Paste new value"
-                    spellCheck={false}
-                    type="password"
-                    value={draftValue}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftValue(event.target.value)}
-                  />
-                </label>
+                  return (
+                    <button
+                      key={entry.key}
+                      className={cn(
+                        "rounded-[1.5rem] border p-4 text-left transition",
+                        active
+                          ? "border-blue-200 bg-[linear-gradient(135deg,#eef2ff,#fbfdff)] shadow-[0_18px_35px_rgba(54,72,185,0.10)]"
+                          : "border-border bg-white hover:border-blue-100 hover:bg-muted/35"
+                      )}
+                      type="button"
+                      onClick={() => setSelectedKey(entry.key)}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                            <StatusPill label={status.label} tone={status.tone} />
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <MetaPill label={providerLabel(entry.provider)} />
+                            {entry.chain ? <MetaPill label={chainLabel(entry.chain)} /> : null}
+                            {entry.transport ? <MetaPill label={entry.transport.toUpperCase()} /> : null}
+                          </div>
+                        </div>
+                      </div>
 
-                <div className="rounded-2xl border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] px-4 py-3 text-sm text-muted-foreground">
-                  {selectedTest?.message ?? "Saved values are never shown again after storage."}
+                      <p className="mt-4 truncate font-mono text-[11px] text-muted-foreground">{entry.key}</p>
+                      <p className="mt-2 text-xs text-muted-foreground">{getSourceLabel(entry)}</p>
+                    </button>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <div className="space-y-5 xl:sticky xl:top-28 xl:self-start">
+          <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
+            <CardHeader className="border-b border-blue-100 bg-[linear-gradient(180deg,rgba(247,250,255,0.96),rgba(255,255,255,1))] pb-5">
+              {selectedEntry ? (
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Selected key</p>
+                      <CardTitle className="mt-2 text-2xl text-foreground">{selectedEntry.label}</CardTitle>
+                      <p className="mt-2 font-mono text-xs text-muted-foreground">{selectedEntry.key}</p>
+                    </div>
+                    {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <HeroChip label={providerLabel(selectedEntry.provider)} />
+                    <HeroChip label={getSourceLabel(selectedEntry)} />
+                    {selectedEntry.chain ? <HeroChip label={chainLabel(selectedEntry.chain)} /> : null}
+                    {selectedEntry.transport ? <HeroChip label={selectedEntry.transport.toUpperCase()} /> : null}
+                  </div>
                 </div>
+              ) : (
+                <CardTitle className="text-2xl text-foreground">Select a key</CardTitle>
+              )}
+            </CardHeader>
 
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Button className="h-12 rounded-full" disabled={isBusy} type="button" onClick={handleSave}>
-                    {isSaving ? "Saving..." : "Save"}
-                  </Button>
-                  <Button className="h-12 rounded-full" disabled={isBusy} type="button" variant="outline" onClick={handleTestOne}>
-                    {isTestingOne ? "Testing..." : "Test"}
-                  </Button>
+            <CardContent className="space-y-5 p-6">
+              {selectedEntry ? (
+                <>
+                  <div className="rounded-[1.75rem] border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] p-5">
+                    <label className="space-y-2 text-sm font-medium text-foreground">
+                      <span>Paste new value</span>
+                      <Input
+                        autoCapitalize="none"
+                        autoComplete="new-password"
+                        autoCorrect="off"
+                        className="h-12 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
+                        placeholder={selectedEntry.kind === "url" ? "Paste endpoint or provider URL" : "Paste secret key"}
+                        spellCheck={false}
+                        type="password"
+                        value={draftValue}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftValue(event.target.value)}
+                      />
+                    </label>
+
+                    <p className="mt-3 text-xs leading-5 text-muted-foreground">Saved values are encrypted and never rendered back into the UI.</p>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Button className="h-12 rounded-full" disabled={isBusy} type="button" onClick={handleSave}>
+                      {isSaving ? "Saving..." : "Save"}
+                    </Button>
+                    <Button className="h-12 rounded-full" disabled={isBusy} type="button" variant="outline" onClick={handleTestOne}>
+                      {isTestingOne ? "Testing..." : "Test"}
+                    </Button>
+                  </div>
+
                   <Button
-                    className="h-12 rounded-full"
+                    className="h-12 w-full rounded-full"
                     disabled={isBusy || selectedEntry.source !== "database"}
                     type="button"
                     variant="destructive"
                     onClick={handleDelete}
                   >
-                    {isDeleting ? "Deleting..." : "Delete saved"}
+                    {isDeleting ? "Deleting..." : "Delete saved override"}
                   </Button>
+
+                  <div className="rounded-[1.5rem] border border-blue-100 bg-white px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-foreground">Validation</p>
+                      {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                      {selectedTest?.message ?? "No recent test for this key yet."}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-[1.5rem] border border-dashed border-border p-6 text-sm text-muted-foreground">
+                  Choose a key card to edit it here.
                 </div>
-              </>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-border p-6 text-sm text-muted-foreground">
-                No key selected yet.
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </section>
     </div>
   );
@@ -351,6 +396,44 @@ function summarize(
   };
 }
 
+function buildSections(entries: ApiKeyRecord[]): Array<{
+  id: SectionId;
+  kicker: string;
+  title: string;
+  description: string;
+  countClass: string;
+  entries: ApiKeyRecord[];
+}> {
+  const sections = [
+    {
+      id: "ethereum" as const,
+      kicker: "Mainnet",
+      title: "Ethereum routes",
+      description: "Primary and backup providers for Ethereum reads and subscriptions.",
+      countClass: "bg-[#eef2ff] text-[#3648b9]",
+      entries: entries.filter((entry) => entry.chain === "ethereum")
+    },
+    {
+      id: "base" as const,
+      kicker: "Network",
+      title: "Base routes",
+      description: "Provider coverage for Base transactions, reads, and websocket flow.",
+      countClass: "bg-[#ecfdf9] text-[#0f766e]",
+      entries: entries.filter((entry) => entry.chain === "base")
+    },
+    {
+      id: "flashbots" as const,
+      kicker: "Private flow",
+      title: "Flashbots",
+      description: "Relay and auth keys used when private bundle submission is enabled.",
+      countClass: "bg-[#fff7ed] text-[#c2410c]",
+      entries: entries.filter((entry) => entry.category === "flashbots")
+    }
+  ];
+
+  return sections.filter((section) => section.entries.length > 0);
+}
+
 function getDisplayStatus(
   entry: ApiKeyRecord,
   test?: ApiKeyTestResult
@@ -374,7 +457,7 @@ function getDisplayStatus(
   return { label: "Untested", tone: "warning" };
 }
 
-function SummaryCard({
+function SummaryTile({
   label,
   toneClass,
   value
@@ -384,7 +467,7 @@ function SummaryCard({
   value: string;
 }): JSX.Element {
   return (
-    <div className="rounded-[1.5rem] border border-white/80 bg-white/86 p-5 backdrop-blur">
+    <div className="rounded-[1.5rem] border border-white/90 bg-white/88 p-5 backdrop-blur">
       <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
         <span className={cn("h-2.5 w-2.5 rounded-full", toneClass)} />
         <span>{label}</span>
@@ -415,12 +498,37 @@ function StatusPill({
   );
 }
 
-function SecurityChip({ label }: { label: string }): JSX.Element {
-  return (
-    <span className="inline-flex items-center rounded-full border border-blue-100 bg-white/90 px-3 py-1 text-xs font-medium text-primary">
-      {label}
-    </span>
-  );
+function MetaPill({ label }: { label: string }): JSX.Element {
+  return <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">{label}</span>;
+}
+
+function HeroChip({ label }: { label: string }): JSX.Element {
+  return <span className="rounded-full border border-blue-100 bg-white/90 px-3 py-1 text-xs font-medium text-primary">{label}</span>;
+}
+
+function providerLabel(provider: ApiKeyRecord["provider"]): string {
+  switch (provider) {
+    case "alchemy":
+      return "Alchemy";
+    case "quicknode":
+      return "QuickNode";
+    case "flashbots":
+      return "Flashbots";
+    default:
+      return provider;
+  }
+}
+
+function chainLabel(chain: ApiKeyRecord["chain"]): string {
+  if (chain === "ethereum") {
+    return "Ethereum";
+  }
+
+  if (chain === "base") {
+    return "Base";
+  }
+
+  return chain ?? "Network";
 }
 
 function getSourceLabel(entry: ApiKeyRecord): string {
