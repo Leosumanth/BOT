@@ -66,6 +66,8 @@ npm run build
 
 This repo is a shared npm-workspace monorepo. For Railway, keep each service rooted at the repository root so shared workspace packages stay available during builds.
 
+### Option 1: Separate backend and frontend services
+
 - Backend service config file: `/apps/backend/railway.json`
 - Frontend service config file: `/apps/frontend/railway.json`
 
@@ -83,6 +85,14 @@ Set cross-service variables so the deployed frontend talks to the deployed backe
 - Backend `FRONTEND_URL=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}`
 - Frontend `NEXT_PUBLIC_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}/api`
 - Frontend `NEXT_PUBLIC_SOCKET_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}`
+
+### Option 2: Single Railway service serving both frontend and backend
+
+Deploy the repository root and let Railway use `/railway.json`. That build runs the full monorepo build, starts the backend, and the backend will serve the built Next.js frontend for all non-API routes.
+
+- Root service config file: `/railway.json`
+- Keep `FRONTEND_URL` unset or on its localhost default so the backend does not redirect away from itself
+- Leave `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SOCKET_URL` unset in Railway so the frontend uses same-origin `/api` and Socket.IO
 
 ## API Surface
 

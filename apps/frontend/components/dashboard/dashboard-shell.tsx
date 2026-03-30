@@ -2,7 +2,7 @@
 
 import type { FormEvent, JSX } from "react";
 import { useEffect, useState, useTransition } from "react";
-import { io, type Socket } from "socket.io-client";
+import { io } from "socket.io-client";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { Activity, Bot, Fuel, Radar, ShieldCheck, Wallet } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -48,10 +48,14 @@ export function DashboardShell({ initialData }: DashboardShellProps): JSX.Elemen
   const { disconnect } = useDisconnect();
 
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:4000";
-    const socket = io(socketUrl, {
-      transports: ["websocket", "polling"]
-    });
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL?.trim();
+    const socket = socketUrl
+      ? io(socketUrl, {
+          transports: ["websocket", "polling"]
+        })
+      : io({
+          transports: ["websocket", "polling"]
+        });
 
     socket.on(SOCKET_EVENTS.dashboardSnapshot, (payload) => {
       startTransition(() => {
