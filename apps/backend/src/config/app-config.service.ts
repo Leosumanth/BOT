@@ -1,6 +1,45 @@
 import { Injectable } from "@nestjs/common";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadEnv } from "dotenv";
 import { z } from "zod";
 import type { ChainKey, RpcEndpointConfig } from "@mintbot/shared";
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const envFileCandidates = [
+  resolve(process.cwd(), ".env"),
+  resolve(process.cwd(), "..", "..", ".env"),
+  resolve(moduleDir, "../../../../.env")
+];
+
+for (const candidate of envFileCandidates) {
+  if (existsSync(candidate)) {
+    loadEnv({ path: candidate });
+    break;
+  }
+}
+
+function firstDefinedEnv(...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+const sanitizedProcessEnv = Object.fromEntries(
+  Object.entries(process.env).map(([key, value]) => [key, value?.trim() ? value : undefined])
+);
+
+const normalizedEnv = {
+  ...sanitizedProcessEnv,
+  BACKEND_PORT: firstDefinedEnv("BACKEND_PORT", "PORT"),
+  PRIVATE_KEY_ENCRYPTION_SECRET: firstDefinedEnv("PRIVATE_KEY_ENCRYPTION_SECRET", "ENCRYPTION_KEY")
+};
 
 const envSchema = z.object({
   NODE_ENV: z.string().default("development"),
@@ -36,7 +75,7 @@ const envSchema = z.object({
 
 @Injectable()
 export class AppConfigService {
-  readonly env = envSchema.parse(process.env);
+  readonly env = envSchema.parse(normalizedEnv);
 
   get port(): number {
     return this.env.BACKEND_PORT;

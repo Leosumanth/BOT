@@ -17,6 +17,7 @@ interface PendingRustExecution {
 export class RustExecutionBridgeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RustExecutionBridgeService.name);
   private readonly pending = new Map<string, PendingRustExecution>();
+  private ready = false;
   private subscriber?: Redis;
 
   constructor(
@@ -31,14 +32,25 @@ export class RustExecutionBridgeService implements OnModuleInit, OnModuleDestroy
     }
 
     this.subscriber = this.queues.redis.duplicate();
+    this.subscriber.on("error", (error) => {
+      this.logger.error(`Rust executor subscriber error: ${error.message}`);
+    });
     this.subscriber.on("message", (channel, message) => {
       if (channel === this.config.rustResultChannel) {
         void this.handleResultMessage(message);
       }
     });
-    await this.subscriber.subscribe(this.config.rustResultChannel);
 
-    this.logger.log(`Rust executor bridge subscribed to ${this.config.rustResultChannel}.`);
+    try {
+      await this.subscribeWithTimeout(this.config.rustResultChannel, 5_000);
+      this.ready = true;
+      this.logger.log(`Rust executor bridge subscribed to ${this.config.rustResultChannel}.`);
+    } catch (error) {
+      this.ready = false;
+      this.logger.error(
+        `Rust executor bridge unavailable: ${error instanceof Error ? error.message : "Subscription failed."}`
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -54,6 +66,10 @@ export class RustExecutionBridgeService implements OnModuleInit, OnModuleDestroy
   async execute(request: RustMintExecutionRequest): Promise<RustMintExecutionResult> {
     if (!this.config.enableRustExecutor) {
       throw new Error("Rust executor bridge is disabled.");
+    }
+
+    if (!this.ready) {
+      throw new Error("Rust executor bridge is unavailable. Check Redis connectivity and worker health.");
     }
 
     const cached = await this.getSuccessfulResult(request.jobId);
@@ -148,5 +164,28 @@ export class RustExecutionBridgeService implements OnModuleInit, OnModuleDestroy
 
   private resultKey(jobId: string): string {
     return `rust:mint:result:${jobId}`;
+  }
+
+  private async subscribeWithTimeout(channel: string, timeoutMs: number): Promise<void> {
+    if (!this.subscriber) {
+      throw new Error("Redis subscriber is not initialized.");
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      await Promise.race([
+        this.subscriber.subscribe(channel),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`Timed out subscribing to ${channel} after ${timeoutMs}ms.`));
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 }

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "rimraf dist tsconfig.tsbuildinfo && tsc -p tsconfig.json",
+    "build": "rimraf dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ./scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx watch src/main.ts",
     "dev:worker": "tsx watch src/workers/mint.worker.ts",

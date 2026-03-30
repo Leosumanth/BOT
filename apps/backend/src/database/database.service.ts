@@ -42,16 +42,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async insertWallet(wallet: WalletRecord): Promise<WalletRecord> {
     const [row] = await this.query<WalletRecord>(
       `
-      insert into wallets (id, label, address, encrypted_private_key, chain, enabled, tags, created_at, updated_at)
-      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+      insert into wallets (
+        id,
+        label,
+        address,
+        address_short,
+        secret_ciphertext,
+        encrypted_private_key,
+        wallet_group,
+        status,
+        source,
+        chain,
+        enabled,
+        tags,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $5, 'Imported', 'ready', 'stored', $6, $7, $8::jsonb, $9, $10)
       returning
         id,
         label,
         address,
-        encrypted_private_key as "encryptedPrivateKey",
-        chain,
-        enabled,
-        tags,
+        coalesce(encrypted_private_key, secret_ciphertext) as "encryptedPrivateKey",
+        coalesce(chain, 'ethereum') as chain,
+        coalesce(enabled, true) as enabled,
+        coalesce(tags, '[]'::jsonb) as tags,
         created_at as "createdAt",
         updated_at as "updatedAt"
       `,
@@ -59,6 +74,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         wallet.id,
         wallet.label,
         wallet.address,
+        `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`,
         wallet.encryptedPrivateKey,
         wallet.chain,
         wallet.enabled,
@@ -78,10 +94,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id,
         label,
         address,
-        encrypted_private_key as "encryptedPrivateKey",
-        chain,
-        enabled,
-        tags,
+        coalesce(encrypted_private_key, secret_ciphertext) as "encryptedPrivateKey",
+        coalesce(chain, 'ethereum') as chain,
+        coalesce(enabled, true) as enabled,
+        coalesce(tags, '[]'::jsonb) as tags,
         created_at as "createdAt",
         updated_at as "updatedAt"
       from wallets

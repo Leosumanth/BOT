@@ -1,0 +1,76 @@
+[31m[Nest] 13276  - [39m30/03/2026, 7:47:18 am [31m  ERROR[39m [38;5;3m[QueueService] [39m[31mRedis connection error: getaddrinfo ENOTFOUND redis.railway.internal[39m
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+[31m[Nest] 13276  - [39m30/03/2026, 7:47:20 am [31m  ERROR[39m [38;5;3m[RustExecutionBridgeService] [39m[31mRust executor subscriber error: getaddrinfo ENOTFOUND redis.railway.internal[39m
+[31m[Nest] 13276  - [39m30/03/2026, 7:47:21 am [31m  ERROR[39m [38;5;3m[RustExecutionBridgeService] [39m[31mRust executor subscriber error: getaddrinfo ENOTFOUND redis.railway.internal[39m
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+[31m[Nest] 13276  - [39m30/03/2026, 7:47:23 am [31m  ERROR[39m [38;5;3m[RustExecutionBridgeService] [39m[31mRust executor subscriber error: getaddrinfo ENOTFOUND redis.railway.internal[39m
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+[31m[Nest] 13276  - [39m30/03/2026, 7:47:25 am [31m  ERROR[39m [38;5;3m[RustExecutionBridgeService] [39m[31mRust executor bridge unavailable: Timed out subscribing to rust:mint:results after 5000ms.[39m
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+Error: getaddrinfo ENOTFOUND redis.railway.internal
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'redis.railway.internal'
+}
+[31m[Nest] 13276  - [39m30/03/2026, 7:47:26 am [31m  ERROR[39m [38;5;3m[RustExecutionBridgeService] [39m[31mRust executor subscriber error: getaddrinfo ENOTFOUND redis.railway.internal[39m

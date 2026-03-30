@@ -1,8 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { MempoolListener } from "@mintbot/blockchain";
-import type { PendingMintActivity } from "@mintbot/shared";
-import { CHAIN_LOOKUP } from "@mintbot/shared";
+import type { ChainKey, PendingMintActivity } from "@mintbot/shared";
+import { SUPPORTED_CHAINS } from "@mintbot/shared";
 import { DatabaseService } from "../../database/database.service.js";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { RealtimeGateway } from "../realtime/realtime.gateway.js";
@@ -12,8 +12,8 @@ import { RuntimeService } from "../runtime/runtime.service.js";
 export class TrackerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TrackerService.name);
   private readonly listeners: MempoolListener[] = [];
-  private readonly blockMonitors = new Map<string, ReturnType<typeof setInterval>>();
-  private readonly latestObservedBlock = new Map<string, bigint>();
+  private readonly blockMonitors = new Map<ChainKey, ReturnType<typeof setInterval>>();
+  private readonly latestObservedBlock = new Map<ChainKey, bigint>();
 
   constructor(
     private readonly config: AppConfigService,
@@ -23,7 +23,7 @@ export class TrackerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    for (const chain of Object.keys(CHAIN_LOOKUP) as Array<keyof typeof CHAIN_LOOKUP>) {
+    for (const { key: chain } of SUPPORTED_CHAINS) {
       if (this.runtime.rpcRouter.getConfigs(chain).length > 0) {
         this.startBlockMonitor(chain);
       }
@@ -76,7 +76,7 @@ export class TrackerService implements OnModuleInit, OnModuleDestroy {
     this.realtime.emitMintFeed(activity);
   }
 
-  private startBlockMonitor(chain: keyof typeof CHAIN_LOOKUP): void {
+  private startBlockMonitor(chain: ChainKey): void {
     if (this.blockMonitors.has(chain)) {
       return;
     }

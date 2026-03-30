@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { Worker } from "bullmq";
 import { MintBotEngine } from "@mintbot/bot";
+import type { MintBotTelemetryEvent } from "@mintbot/bot";
 import type { MintJobInput } from "@mintbot/shared";
 import { QueueService } from "./queue.service.js";
 import { WalletsService } from "../wallets/wallets.service.js";
@@ -101,7 +102,7 @@ export class MintQueueProcessor implements OnModuleInit, OnModuleDestroy {
           flashbots: this.runtime.flashbots,
           executionAdapter: this.config.enableRustExecutor ? this.rustExecution : undefined,
           telemetry: {
-            publish: async (event) => {
+            publish: async (event: MintBotTelemetryEvent) => {
               await this.database.insertLog({
                 jobId: event.jobId,
                 level: event.level,
