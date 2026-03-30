@@ -4,6 +4,7 @@ import type {
   ApiKeyRecord,
   ApiKeysDashboardResponse,
   ApiKeyTestResponse,
+  ApiKeyTestResult,
   ApiKeyUpsertRequest,
   ManagedApiKey
 } from "@mintbot/shared";
@@ -21,6 +22,11 @@ export class ApiKeysController {
   @Post("test")
   async testAll(): Promise<ApiEnvelope<ApiKeyTestResponse>> {
     return { data: await this.apiKeysService.testAll() };
+  }
+
+  @Post(":key/test")
+  async testOne(@Param("key") key: ManagedApiKey): Promise<ApiEnvelope<ApiKeyTestResult>> {
+    return { data: await this.apiKeysService.testOne(key) };
   }
 
   @Patch(":key")

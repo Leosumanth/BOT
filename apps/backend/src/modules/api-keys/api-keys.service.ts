@@ -192,38 +192,7 @@ export class ApiKeysService implements OnModuleInit {
     const testedAt = new Date().toISOString();
     const records = await this.buildRecords();
     const effectiveValues = await this.getEffectiveValueMap();
-    await this.runtime.applyManagedApiKeys(effectiveValues);
-    await this.runtime.rpcRouter.warm();
-    const rpcHealth = new Map(this.runtime.rpcRouter.getHealthSnapshot().map((entry) => [entry.endpointKey, entry]));
-
-    const results = await Promise.all(
-      records.map(async (record) => {
-        if (!record.enabled) {
-          return this.buildTestResult(record.key, "skipped", "Disabled in dashboard.", testedAt);
-        }
-
-        if (!record.hasValue) {
-          return this.buildTestResult(record.key, "invalid", "No value configured.", testedAt);
-        }
-
-        if (record.category === "rpc") {
-          const runtimeKey = buildRuntimeRpcKey(record);
-          const health = runtimeKey ? rpcHealth.get(runtimeKey) : undefined;
-
-          if (!health) {
-            return this.buildTestResult(record.key, "invalid", "Runtime endpoint is missing for this key.", testedAt);
-          }
-
-          if (health.live) {
-            return this.buildTestResult(record.key, "valid", `RPC check passed in ${health.latencyMs}ms.`, testedAt);
-          }
-
-          return this.buildTestResult(record.key, "invalid", health.lastError ?? "RPC check failed.", testedAt);
-        }
-
-        return this.testFlashbotsRecord(record.key, effectiveValues[record.key], effectiveValues, testedAt);
-      })
-    );
+    const results = await this.runTests(records, effectiveValues, testedAt);
 
     return {
       testedAt,
@@ -234,6 +203,19 @@ export class ApiKeysService implements OnModuleInit {
       },
       results
     };
+  }
+
+  async testOne(key: ManagedApiKey): Promise<ApiKeyTestResult> {
+    const testedAt = new Date().toISOString();
+    const records = await this.buildRecords();
+    const record = records.find((entry) => entry.key === key);
+
+    if (!record) {
+      throw new BadRequestException(`Unsupported API key ${key}.`);
+    }
+
+    const [result] = await this.runTests([record], await this.getEffectiveValueMap(), testedAt);
+    return result;
   }
 
   private async buildRecords(): Promise<ApiKeyRecord[]> {
@@ -330,6 +312,45 @@ export class ApiKeysService implements OnModuleInit {
 
   private buildTestResult(key: ManagedApiKey, status: ApiKeyTestResult["status"], message: string, testedAt: string): ApiKeyTestResult {
     return { key, status, message, testedAt };
+  }
+
+  private async runTests(
+    records: ApiKeyRecord[],
+    effectiveValues: ManagedApiKeyValues,
+    testedAt: string
+  ): Promise<ApiKeyTestResult[]> {
+    await this.runtime.applyManagedApiKeys(effectiveValues);
+    await this.runtime.rpcRouter.warm();
+    const rpcHealth = new Map(this.runtime.rpcRouter.getHealthSnapshot().map((entry) => [entry.endpointKey, entry]));
+
+    return Promise.all(
+      records.map(async (record) => {
+        if (!record.enabled) {
+          return this.buildTestResult(record.key, "skipped", "Disabled in dashboard.", testedAt);
+        }
+
+        if (!record.hasValue) {
+          return this.buildTestResult(record.key, "invalid", "No value configured.", testedAt);
+        }
+
+        if (record.category === "rpc") {
+          const runtimeKey = buildRuntimeRpcKey(record);
+          const health = runtimeKey ? rpcHealth.get(runtimeKey) : undefined;
+
+          if (!health) {
+            return this.buildTestResult(record.key, "invalid", "Runtime endpoint is missing for this key.", testedAt);
+          }
+
+          if (health.live) {
+            return this.buildTestResult(record.key, "valid", `RPC check passed in ${health.latencyMs}ms.`, testedAt);
+          }
+
+          return this.buildTestResult(record.key, "invalid", health.lastError ?? "RPC check failed.", testedAt);
+        }
+
+        return this.testFlashbotsRecord(record.key, effectiveValues[record.key], effectiveValues, testedAt);
+      })
+    );
   }
 
   private async testFlashbotsRecord(
