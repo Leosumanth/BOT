@@ -121,7 +121,13 @@ async function bootstrap(): Promise<void> {
     });
   });
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      // Next.js app-router responses include inline hydration scripts. The default
+      // Helmet CSP blocks them and can leave the embedded frontend on a blank page.
+      contentSecurityPolicy: embeddedFrontendHandler ? false : undefined
+    })
+  );
   app.setGlobalPrefix(config.apiPrefix);
   expressApp.set("json replacer", (_key: string, value: unknown) => (typeof value === "bigint" ? value.toString() : value));
   app.enableCors({
