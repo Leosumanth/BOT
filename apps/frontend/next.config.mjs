@@ -1,9 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ["@mintbot/shared"],
-  experimental: {
-    typedRoutes: true
-  }
+  typedRoutes: true
 };
 
 export default nextConfig;

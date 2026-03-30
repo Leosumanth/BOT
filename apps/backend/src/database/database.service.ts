@@ -1,5 +1,7 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
+import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { Pool } from "pg";
+import type { QueryResultRow } from "pg";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { ContractAnalysisResult, MintExecutionAttempt, MintJobInput, MintJobResult, WalletRecord } from "@mintbot/shared";
@@ -26,7 +28,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.pool.end();
   }
 
-  async query<T>(text: string, params: unknown[] = []): Promise<T[]> {
+  async query<T extends QueryResultRow>(text: string, params: unknown[] = []): Promise<T[]> {
     const result = await this.pool.query<T>(text, params);
     return result.rows;
   }

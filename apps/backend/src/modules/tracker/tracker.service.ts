@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
+import type { OnModuleInit } from "@nestjs/common";
 import { MempoolListener } from "@mintbot/blockchain";
 import type { PendingMintActivity } from "@mintbot/shared";
 import { CHAIN_LOOKUP } from "@mintbot/shared";

@@ -23,7 +23,7 @@ export function stringifyJson(value: unknown): string {
 }
 
 export function serializeMintJob(job: MintJobInput): Record<string, unknown> {
-  return toJsonSafe(job) as Record<string, unknown>;
+  return toJsonSafe(job) as unknown as Record<string, unknown>;
 }
 
 export function deserializeMintJob(payload: Record<string, any>): MintJobInput {

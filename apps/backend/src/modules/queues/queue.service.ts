@@ -1,6 +1,7 @@
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
+import type { OnModuleDestroy } from "@nestjs/common";
 import { Queue } from "bullmq";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import type { MintJobInput } from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { serializeMintJob } from "../../utils/json.js";

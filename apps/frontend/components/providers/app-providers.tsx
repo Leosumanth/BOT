@@ -4,7 +4,7 @@ import type { JSX, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, createConfig, WagmiProvider } from "wagmi";
 import { mainnet, base } from "wagmi/chains";
-import { injected } from "wagmi/connectors";
+import { injected } from "@wagmi/core";
 import { useState } from "react";
 
 export function AppProviders({ children }: { children: ReactNode }): JSX.Element {
