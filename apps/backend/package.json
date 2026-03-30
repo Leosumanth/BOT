@@ -1,0 +1,39 @@
+{
+  "name": "@mintbot/backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rimraf dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ./scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/main.ts",
+    "dev:worker": "tsx watch src/workers/mint.worker.ts",
+    "start": "node dist/main.js",
+    "start:worker": "node dist/workers/mint.worker.js"
+  },
+  "dependencies": {
+    "@mintbot/blockchain": "1.0.0",
+    "@mintbot/bot": "1.0.0",
+    "@mintbot/shared": "1.0.0",
+    "@nestjs/common": "^11.0.11",
+    "@nestjs/core": "^11.0.11",
+    "@nestjs/platform-express": "^11.0.11",
+    "@nestjs/platform-socket.io": "^11.0.11",
+    "@nestjs/websockets": "^11.0.11",
+    "bullmq": "^5.41.5",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "dotenv": "^16.4.7",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.4.1",
+    "pg": "^8.13.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.8.1",
+    "viem": "^2.23.8",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5"
+  }
+}

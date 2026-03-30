@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    background-image:
+      radial-gradient(circle at 18% 14%, rgba(70, 82, 220, 0.1), transparent 18%),
+      radial-gradient(circle at 52% 26%, rgba(81, 236, 210, 0.12), transparent 18%),
+      radial-gradient(circle at 82% 12%, rgba(210, 214, 255, 0.22), transparent 18%),
+      linear-gradient(180deg, #ffffff 0%, #f7faff 100%);
+    background-attachment: fixed;
+  }
+}

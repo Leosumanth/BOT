@@ -1,0 +1,1532 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MintBot Command Nexus</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Oxanium:wght@500;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="noise-layer" aria-hidden="true"></div>
+    <div class="scanline-layer" aria-hidden="true"></div>
+
+    <div id="auth-overlay" class="auth-overlay hidden">
+      <div class="auth-card hud-panel">
+        <p class="eyebrow">Secure Access</p>
+        <h2>Operator Login</h2>
+        <p id="login-status" class="view-subtitle">
+          Sign in with the configured operator account to unlock dashboard state, tasks, and encrypted wallet secrets.
+        </p>
+        <form id="login-form" class="stack-form auth-form">
+          <label>
+            <span>Username</span>
+            <input id="login-username-input" type="text" autocomplete="username" placeholder="Username" />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="login-password-input" type="password" autocomplete="current-password" placeholder="Password" />
+          </label>
+          <button class="primary-button fx-button" type="submit">Sign In</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="app-shell">
+      <main class="workspace">
+        <header class="topbar app-topbar">
+          <div class="topbar-compact-row">
+            <div class="topbar-brand-mini">
+              <span class="topbar-brand-badge" aria-hidden="true">MB</span>
+              <div>
+                <strong>MintBot</strong>
+                <span>Command Nexus</span>
+              </div>
+            </div>
+
+            <nav class="topbar-nav" aria-label="Primary">
+              <button class="nav-button active" data-view="dashboard" type="button">Home</button>
+              <button class="nav-button" data-view="tasks" type="button">Tasks</button>
+              <button class="nav-button" data-view="mint-radar" type="button">Mint Radar</button>
+              <button class="nav-button" data-view="wallets" type="button">Wallets</button>
+              <button class="nav-button" data-view="rpc" type="button">RPC Nodes</button>
+              <button class="nav-button" data-view="assistant" type="button">Operator AI</button>
+              <button class="nav-button" data-view="settings" type="button">Settings</button>
+            </nav>
+
+            <button id="logout-button" class="danger-button fx-button topbar-signout" type="button">Sign Out</button>
+          </div>
+
+          <div class="topbar-hidden-mount hidden" aria-hidden="true">
+            <div class="topbar-pill topbar-mode-pill">
+                <span id="sidebar-mode-dot" class="signal-dot"></span>
+                <span class="micro-label">Mode</span>
+                <strong id="sidebar-mode-label">Activated</strong>
+            </div>
+            <div class="topbar-pill topbar-time-pill">
+                <span class="micro-label">Time</span>
+                <strong id="live-clock">--:--:--</strong>
+            </div>
+            <button id="dashboard-refresh-button" class="ghost-button fx-button" type="button">Refresh</button>
+            <button id="dashboard-open-task-button" class="primary-button fx-button" type="button">Open Tasks</button>
+            <div class="account-card hud-panel" data-tilt>
+              <div class="account-avatar" aria-hidden="true">OP</div>
+              <div>
+                <strong id="account-label">Secure Operator</strong>
+                <p id="account-status">Sign in required</p>
+              </div>
+              <span class="status-dot" aria-hidden="true"></span>
+            </div>
+          </div>
+
+          <p id="hero-mode-copy" class="view-subtitle hidden"></p>
+        </header>
+
+        <section class="view active" data-view-panel="dashboard">
+          <section class="surface dashboard-home-surface" data-tilt>
+            <form id="dashboard-mint-form" class="dashboard-mint-form dashboard-home-form">
+              <label class="dashboard-mint-input-shell" for="dashboard-mint-url-input">
+                <span class="dashboard-mint-input-icon" aria-hidden="true">URL</span>
+                <input
+                  id="dashboard-mint-url-input"
+                  type="url"
+                  placeholder="Paste an OpenSea collection URL"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+              </label>
+              <button id="dashboard-mint-submit-button" class="primary-button fx-button dashboard-mint-submit" type="submit">Mint</button>
+            </form>
+
+            <p id="dashboard-mint-inline-status" class="dashboard-mint-inline-status hidden"></p>
+          </section>
+
+          <section class="dashboard-support-mount hidden" aria-hidden="true">
+            <div id="dashboard-run-history" class="stack-list"></div>
+            <span id="dashboard-health-pill" class="status-pill healthy">Healthy</span>
+            <div id="system-alerts" class="alert-stack"></div>
+            <button id="run-priority-button" class="ghost-button fx-button" type="button">Run Priority Task</button>
+            <button id="rpc-pulse-button" class="ghost-button fx-button" type="button">Pulse RPC Mesh</button>
+            <button id="snapshot-button" class="primary-button fx-button" type="button">Capture Snapshot</button>
+            <button id="clear-logs-button" class="ghost-button fx-button" type="button">Clear Logs</button>
+            <pre id="log-output" class="code-panel">Waiting for live logs...</pre>
+            <pre id="runtime-output" class="code-panel">Awaiting runtime snapshot...</pre>
+            <pre id="results-output" class="code-panel">No results yet.</pre>
+            <div class="dashboard-home-data">
+              <span id="dashboard-mint-default-wallet">No wallet loaded</span>
+              <span id="dashboard-mint-wallet-copy">Import a wallet to arm one-click mint.</span>
+              <span id="dashboard-mint-rpc-count">0 live lanes</span>
+              <span id="dashboard-mint-rpc-copy">Enable RPC nodes so MintBot can broadcast when the route is ready.</span>
+              <span id="dashboard-mint-task-count">0 sessions</span>
+              <span id="dashboard-mint-task-copy">Every one-click mint still lands in Tasks for review and control.</span>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view-panel="tasks">
+          <div class="view-header">
+            <div>
+              <h2>Tasks</h2>
+              <p class="view-subtitle">Run live mint sessions, inspect backend activity, and review completed or failed launches.</p>
+            </div>
+            <div class="header-actions">
+              <button id="new-task-button" class="primary-button fx-button" type="button">New Task</button>
+            </div>
+          </div>
+
+          <section class="surface tasks-command-surface" data-tilt>
+            <div class="tasks-session-shell">
+              <div class="tasks-session-stage">
+                <div id="tasks-session-metrics" class="tasks-session-metrics"></div>
+                <p id="tasks-summary-copy" class="helper-copy tasks-session-summary">
+                  Session grid standing by.
+                </p>
+              </div>
+              <div class="tasks-command-controls">
+                <div id="tasks-view-toggle" class="task-status-legend task-view-toggle"></div>
+                <div id="task-status-legend" class="task-status-legend"></div>
+                <div id="tasks-history-filter-bar" class="task-status-legend task-history-filter-bar hidden"></div>
+              </div>
+            </div>
+          </section>
+
+          <div id="task-grid" class="task-grid advanced-task-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="mint-radar">
+          <div class="view-header">
+            <div>
+              <h2>Mint Radar</h2>
+              <p class="view-subtitle">
+                Track the live and upcoming drops OpenSea is surfacing right now, then push any collection straight into the public mint task builder.
+              </p>
+            </div>
+            <div class="header-actions">
+              <input
+                id="mint-radar-search-input"
+                class="header-input"
+                type="search"
+                placeholder="Search collection, creator, slug"
+              />
+              <select id="mint-radar-chain-input" class="header-select">
+                <option value="all">All Chains</option>
+              </select>
+              <select id="mint-radar-filter-input" class="header-select">
+                <option value="all">All Drops</option>
+                <option value="live">Live</option>
+                <option value="upcoming">Upcoming</option>
+              </select>
+              <button id="mint-radar-refresh-button" class="primary-button fx-button" type="button">Refresh Feed</button>
+            </div>
+          </div>
+
+          <section class="surface" data-tilt>
+            <div class="surface-header compact">
+              <div>
+                <h3>OpenSea Drops Feed</h3>
+                <p id="mint-radar-status" class="helper-copy">
+                  Load the current OpenSea live and upcoming drop feed, filter it by chain, and route any collection into a public mint task.
+                </p>
+              </div>
+              <div class="surface-actions mint-radar-top-meta">
+                <span id="mint-radar-count" class="muted-copy">No feed loaded yet.</span>
+                <span id="mint-radar-updated" class="muted-copy">Not refreshed</span>
+              </div>
+            </div>
+            <p id="mint-radar-limitation" class="helper-copy">
+              This radar follows the drops OpenSea currently surfaces. It is not a universal calendar for every NFT mint on every website.
+            </p>
+          </section>
+
+          <div id="mint-radar-warning-list" class="stack-list mint-radar-warning-list"></div>
+          <div id="mint-radar-list" class="mint-radar-grid">
+            <div class="empty-state">
+              <h3>No radar data yet</h3>
+              <p>Refresh the OpenSea feed to load live and upcoming drops.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="wallets">
+          <div class="view-header">
+            <div>
+              <h2>Wallets</h2>
+              <p class="view-subtitle">Import and group local wallets for task selection.</p>
+            </div>
+          </div>
+
+          <div class="stack-list wallets-shell">
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Import Wallet</h3>
+                  <p class="helper-copy">Add a wallet name and paste a private key to save it locally.</p>
+                </div>
+              </div>
+              <form id="wallet-import-form" class="stack-form">
+                <label>
+                  <span>Wallet Name</span>
+                  <input id="wallet-group-input" type="text" placeholder="Main Wallet" />
+                </label>
+                <label>
+                  <span>Private Key</span>
+                  <textarea id="wallet-keys-input" rows="8" placeholder="Paste private key"></textarea>
+                </label>
+                <button id="wallet-import-submit-button" class="primary-button fx-button" type="submit">Import Wallet</button>
+                <div id="wallet-import-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                  <div class="operation-progress-meta">
+                    <span id="wallet-import-progress-label" class="helper-copy">Preparing wallet import...</span>
+                    <strong id="wallet-import-progress-value">0%</strong>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <div class="content-grid wallets-detail-grid">
+              <section class="surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3>Saved Wallets</h3>
+                    <p class="helper-copy">Saved wallet names, addresses, and cached balance snapshots.</p>
+                  </div>
+                  <div class="surface-actions wallet-balance-actions">
+                    <p id="wallet-balance-sync-status" class="helper-copy">Waiting for the first wallet sync.</p>
+                    <span id="wallet-count" class="muted-copy"></span>
+                    <button id="wallet-balances-refresh-all-button" class="ghost-button fx-button" type="button">
+                      Refresh All Wallets
+                    </button>
+                  </div>
+                </div>
+                <div id="wallet-list" class="stack-list"></div>
+              </section>
+
+              <section class="surface wallet-assets-surface" data-tilt>
+                <div class="surface-header">
+                  <div>
+                    <h3 id="wallet-assets-title">Assets & Coins</h3>
+                    <p id="wallet-assets-subtitle" class="helper-copy">
+                      Click a wallet to view native balances across available EVM chains.
+                    </p>
+                  </div>
+                  <button id="wallet-assets-refresh-button" class="ghost-button fx-button" type="button">Refresh Assets</button>
+                </div>
+                <p id="wallet-assets-status" class="helper-copy hidden"></p>
+                <div id="wallet-assets-list" class="stack-list">
+                  <div class="empty-state">
+                    <h3>Select a wallet</h3>
+                    <p>Click any saved wallet to load its native coin balances.</p>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="rpc">
+          <div class="view-header">
+            <div>
+              <h2>RPC Nodes</h2>
+              <p class="view-subtitle">
+                Operate a mint-focused broadcast mesh with chain scoring, websocket coverage, relay posture, and recovery depth.
+              </p>
+            </div>
+          </div>
+
+          <div class="stack-list rpc-ops-shell">
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Mint Broadcast Command</h3>
+                  <p class="helper-copy">
+                    Score the current mesh for public swarm broadcasts, websocket arming, relay fallback, and recovery depth.
+                  </p>
+                  <p id="rpc-health-sync-status" class="helper-copy"></p>
+                </div>
+                <div class="queue-actions">
+                  <button id="rpc-page-pulse-button" class="ghost-button fx-button" type="button">Refresh</button>
+                </div>
+              </div>
+              <div id="rpc-ops-overview" class="rpc-summary-grid"></div>
+              <div id="rpc-broadcast-advisor" class="rpc-advisory-grid"></div>
+            </section>
+
+            <div class="content-grid rpc-advanced-grid">
+              <section class="surface" data-tilt>
+                <div class="surface-header rpc-builder-header">
+                  <div>
+                    <h3 id="rpc-form-title">Discovery Lab</h3>
+                    <p id="rpc-form-subtitle" class="helper-copy">
+                      Scan fast Chainlist endpoints, stack healthy fallbacks, and stage a deeper minting mesh.
+                    </p>
+                  </div>
+                  <span id="rpc-form-badge" class="queue-chip hidden">Editing</span>
+                </div>
+                <form id="rpc-form" class="stack-form">
+                  <label id="rpc-chain-search-field">
+                    <span>Chain Name</span>
+                    <input
+                      id="rpc-chain-search-input"
+                      type="text"
+                      placeholder="Type ethereum, eth, base, sepolia..."
+                      autocomplete="off"
+                    />
+                  </label>
+                  <div id="rpc-transport-tabs" class="group-tabs rpc-transport-tabs">
+                    <button class="group-tab active" data-rpc-transport-filter="http" type="button">Normal RPC</button>
+                    <button class="group-tab" data-rpc-transport-filter="ws" type="button">WebSockets</button>
+                  </div>
+                  <div id="rpc-search-match" class="chip-row rpc-search-match hidden"></div>
+                  <div id="rpc-manual-fields" class="stack-form hidden">
+                    <label>
+                      <span>Name</span>
+                      <input id="rpc-name-input" type="text" placeholder="Base Sepolia Primary" />
+                    </label>
+                    <label>
+                      <span>Chain</span>
+                      <select id="rpc-chain-input"></select>
+                    </label>
+                    <label>
+                      <span>URL</span>
+                      <input id="rpc-url-input" type="text" placeholder="https://..." />
+                    </label>
+                  </div>
+                  <p id="rpc-detect-status" class="helper-copy">
+                    Type an EVM chain name, choose Normal RPC or WebSockets, then import from Chainlist, Alchemy, or dRPC.
+                  </p>
+                  <div id="rpc-inline-summary" class="rpc-chainlist-summary hidden"></div>
+                  <p id="rpc-inline-selection-status" class="helper-copy rpc-inline-selection-status hidden"></p>
+                  <div id="rpc-inline-candidate-list" class="rpc-chainlist-candidate-list">
+                    <div class="empty-state">
+                      <h3>Search a chain</h3>
+                      <p>Type Ethereum, Base, Sepolia, Arbitrum, Blast, Shape, or Plasma to scan healthy RPCs.</p>
+                    </div>
+                  </div>
+                  <div class="form-action-row">
+                    <button
+                      id="rpc-import-chainlist-button"
+                      class="ghost-button fx-button"
+                      type="button"
+                    >
+                      Import From Chainlist
+                    </button>
+                    <button
+                      id="rpc-import-alchemy-button"
+                      class="ghost-button fx-button"
+                      type="button"
+                    >
+                      Import From Alchemy
+                    </button>
+                    <button
+                      id="rpc-import-drpc-button"
+                      class="ghost-button fx-button"
+                      type="button"
+                    >
+                      Import From dRPC
+                    </button>
+                    <button id="rpc-cancel-button" class="ghost-button fx-button hidden" type="button">Cancel Edit</button>
+                    <button id="rpc-submit-button" class="primary-button fx-button" type="submit">Add Selected RPCs</button>
+                  </div>
+                  <div id="rpc-operation-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="rpc-operation-progress-label" class="helper-copy">Preparing RPC import...</span>
+                      <strong id="rpc-operation-progress-value">0%</strong>
+                    </div>
+                  </div>
+                </form>
+              </section>
+
+              <section class="surface rpc-alerts-surface" data-tilt>
+                <div class="surface-header compact">
+                  <div>
+                    <h3>RPC Alerts</h3>
+                    <p class="helper-copy">
+                      Failing or slow endpoints show up here so you can repair them without leaving the mesh view.
+                    </p>
+                  </div>
+                </div>
+                <div id="rpc-alert-list" class="rpc-alert-list"></div>
+              </section>
+            </div>
+
+            <section class="surface" data-tilt>
+              <div class="surface-header">
+                <div>
+                  <h3>Configured Mesh</h3>
+                  <p class="helper-copy">
+                    Grouped by chain and ranked by minting role, transport, live latency, and failover depth.
+                  </p>
+                </div>
+              </div>
+              <div id="rpc-list" class="stack-list rpc-node-groups"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="settings">
+          <div class="view-header">
+            <div>
+              <h2>Integrations</h2>
+              <p class="view-subtitle">Connect the API providers that power ABI recovery, marketplace discovery, premium RPC routing, and operator intelligence.</p>
+            </div>
+          </div>
+
+          <section class="surface settings-shell" data-tilt>
+            <div class="settings-layout">
+              <form id="settings-form" class="settings-panel">
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="explorer">
+                  <div class="surface-header compact settings-card-header">
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <rect x="7" y="9" width="34" height="30" rx="10" fill="currentColor" opacity="0.14"></rect>
+                          <path d="M18 16h12v5h-7v5h6v5h-6v5h-5V16Z" fill="currentColor"></path>
+                          <path d="M31 16h5v20h-5z" fill="currentColor" opacity="0.68"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">ABI Recovery</p>
+                      <h4>Etherscan API</h4>
+                      <p class="helper-copy">Save an Etherscan V2 API key to pull verified ABI JSON from the task builder.</p>
+                      </div>
+                    </div>
+                    <span id="explorer-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="explorer-api-key-input" type="password" placeholder="Etherscan V2 API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw Etherscan V2 API key string only. Do not paste a link or URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Verified ABI</span>
+                    <span class="settings-integration-tag">Contract Recovery</span>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="delete-explorer-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-explorer-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="explorer-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="explorer-key-progress-label" class="helper-copy">Checking Explorer API key...</span>
+                      <strong id="explorer-key-progress-value">0%</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="openai">
+                  <div class="surface-header compact settings-card-header">
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <path d="M24 8c2.65 0 5.08 1.18 6.71 3.1A7.96 7.96 0 0 1 39 19.07c0 1.43-.37 2.83-1.06 4.06A7.96 7.96 0 0 1 39 28.93a7.96 7.96 0 0 1-8.29 7.97A8 8 0 0 1 24 40a8 8 0 0 1-6.71-3.1A7.96 7.96 0 0 1 9 28.93c0-1.43.37-2.83 1.06-4.06A7.96 7.96 0 0 1 9 19.07a7.96 7.96 0 0 1 8.29-7.97A8 8 0 0 1 24 8Zm-3.28 6.04-3.14 1.82v3.64l3.14 1.82 3.15-1.82v-3.64l-3.15-1.82Zm8.56 4.94-3.14 1.82v3.64l3.14 1.82 3.15-1.82V20.8l-3.15-1.82Zm-8.56 9.98-3.14 1.82v3.64l3.14 1.82 3.15-1.82v-3.64l-3.15-1.82Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Operator Intelligence</p>
+                      <h4>OpenAI API</h4>
+                      <p class="helper-copy">Save an OpenAI API key to enable the operator assistant and other AI-assisted features.</p>
+                      </div>
+                    </div>
+                    <span id="openai-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="openai-api-key-input" type="password" placeholder="OpenAI API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw OpenAI API key only. Do not paste a link, curl command, or URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">AI Copilot</span>
+                    <span class="settings-integration-tag">Control Actions</span>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="delete-openai-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-openai-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="openai-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="openai-key-progress-label" class="helper-copy">Checking OpenAI API key...</span>
+                      <strong id="openai-key-progress-value">0%</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="alchemy">
+                  <div class="surface-header compact settings-card-header">
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <path d="M24 8 38 16v16L24 40 10 32V16L24 8Zm0 6.2-8 4.57v9.46l8 4.57 8-4.57v-9.46l-8-4.57Zm0 4.15 4.4 2.53v5.06L24 28.47l-4.4-2.53v-5.06L24 18.35Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Primary RPC Provider</p>
+                      <h4>Alchemy API</h4>
+                      <p class="helper-copy">Save an Alchemy API key for premium RPC endpoints, WebSocket setup, and future NFT ownership indexing.</p>
+                      </div>
+                    </div>
+                    <span id="alchemy-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="alchemy-api-key-input" type="password" placeholder="Alchemy API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw Alchemy API key only. Do not paste a link, curl command, or full RPC URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Premium RPC</span>
+                    <span class="settings-integration-tag">WebSockets</span>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="delete-alchemy-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-alchemy-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="alchemy-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="alchemy-key-progress-label" class="helper-copy">Checking Alchemy API key...</span>
+                      <strong id="alchemy-key-progress-value">0%</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="drpc">
+                  <div class="surface-header compact settings-card-header">
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <rect x="8" y="10" width="32" height="28" rx="12" fill="currentColor" opacity="0.12"></rect>
+                          <path d="M17 16h7.5c5.25 0 8.5 2.95 8.5 8s-3.25 8-8.5 8H17V16Zm6.9 11.2c2.73 0 4.4-1.15 4.4-3.2s-1.67-3.2-4.4-3.2h-2.2v6.4h2.2Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Backup RPC Mesh</p>
+                      <h4>dRPC API</h4>
+                      <p class="helper-copy">Save a dRPC API key for premium backup RPC endpoints, multichain coverage, and WebSocket subscriptions.</p>
+                      </div>
+                    </div>
+                    <span id="drpc-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="drpc-api-key-input" type="password" placeholder="dRPC API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw dRPC API key only. Do not paste a link, command, or full RPC URL.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Failover Mesh</span>
+                    <span class="settings-integration-tag">Multichain</span>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="delete-drpc-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-drpc-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="drpc-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="drpc-key-progress-label" class="helper-copy">Checking dRPC API key...</span>
+                      <strong id="drpc-key-progress-value">0%</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="surface inset-surface settings-card settings-integration-card" data-provider="opensea">
+                  <div class="surface-header compact settings-card-header">
+                    <div class="settings-brand-line">
+                      <div class="settings-provider-logo" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" focusable="false">
+                          <circle cx="24" cy="24" r="18" fill="currentColor" opacity="0.12"></circle>
+                          <path d="M27.7 12.5c-1.7 0-3.1 1.37-3.1 3.06v12.08l-7.15 4.12c-.5.29-.8.82-.8 1.39 0 .9.73 1.63 1.63 1.63h15.48c2.35 0 4.25-1.9 4.25-4.25 0-1.73-1.03-3.22-2.52-3.89l-4.73-2.14v-8.94a3.06 3.06 0 0 0-3.05-3.06Zm-.45 6.05 4.32 7.1-4.32-1.96v-5.14ZM14 33.1c1.77-2.1 4.24-3.16 7.42-3.16h5.74c2.58 0 4.51.7 5.79 2.09H14Z" fill="currentColor"></path>
+                        </svg>
+                      </div>
+                      <div class="settings-card-header-copy">
+                        <p class="settings-provider-kicker">Marketplace Discovery</p>
+                      <h4>OpenSea API</h4>
+                      <p class="helper-copy">Save an OpenSea API key for public collection metadata and source discovery on OpenSea tasks.</p>
+                      </div>
+                    </div>
+                    <span id="opensea-config-status" class="settings-status-badge" data-status="empty">Not configured</span>
+                  </div>
+                  <label class="settings-field">
+                    <input id="opensea-api-key-input" type="password" placeholder="OpenSea API key" />
+                  </label>
+                  <p class="helper-copy settings-field-note">Paste the raw OpenSea API key only. Do not paste a link, curl command, or header.</p>
+                  <div class="settings-integration-tags">
+                    <span class="settings-integration-tag">Collection Data</span>
+                    <span class="settings-integration-tag">Source Routing</span>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="delete-opensea-key-button" class="danger-button fx-button" type="button">Delete Saved Key</button>
+                    <button id="test-opensea-key-button" class="ghost-button fx-button" type="button">Test API Key</button>
+                  </div>
+                  <div id="opensea-key-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+                    <div class="operation-progress-meta">
+                      <span id="opensea-key-progress-label" class="helper-copy">Checking OpenSea API key...</span>
+                      <strong id="opensea-key-progress-value">0%</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <div class="settings-footer">
+                  <div class="settings-actions settings-footer-actions">
+                    <button id="test-all-api-keys-button" class="ghost-button fx-button" type="button">Test All Keys</button>
+                    <button id="save-settings-button" class="primary-button fx-button settings-save-button" type="submit">Save Settings</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view-panel="assistant">
+          <div class="view-header">
+            <div>
+              <h2>Operator AI</h2>
+              <p class="view-subtitle">Ask naturally and control the live app from one place.</p>
+            </div>
+          </div>
+
+          <div class="assistant-view-shell">
+            <section id="assistant-panel" class="assistant-panel assistant-panel-view" aria-label="Operator AI assistant">
+              <div class="assistant-panel-header">
+                <div class="assistant-panel-titlebar">
+                  <div class="assistant-panel-heading">
+                    <p class="eyebrow">Live Assistant</p>
+                    <h3>Operator AI</h3>
+                  </div>
+                </div>
+                <div class="assistant-panel-actions">
+                  <button id="assistant-reset-button" class="assistant-header-button assistant-header-button-reset fx-button" type="button">Reset Chat</button>
+                </div>
+              </div>
+
+              <div id="assistant-messages" class="assistant-messages"></div>
+
+              <form id="assistant-form" class="assistant-composer">
+                <label class="assistant-composer-field">
+                  <span>Message</span>
+                  <textarea
+                    id="assistant-input"
+                    rows="4"
+                    placeholder="Tell Operator AI what you want to change"
+                  ></textarea>
+                </label>
+                <div class="assistant-composer-actions">
+                  <button id="assistant-send-button" class="primary-button fx-button assistant-send-toggle" type="button">Send</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <div id="task-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="modal-title">New Task</h3>
+            <p class="muted-copy">Set the NFT details for a public mint and choose how MintBot should detect the launch. Advanced settings are now focused on timing, gas, and routing only.</p>
+          </div>
+          <button id="close-modal-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <form id="task-form" class="modal-form">
+          <input id="task-id-input" type="hidden" />
+
+          <div class="form-grid single">
+            <label>
+              <span>NFT / Task Name</span>
+              <input id="task-name-input" type="text" placeholder="e.g. Project ABC Public Mint" />
+            </label>
+          </div>
+
+          <div hidden>
+            <label>
+              <span>Priority</span>
+              <select id="task-priority-input">
+                <option value="standard">Standard</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label>
+              <span>Tags</span>
+              <input id="task-tags-input" type="text" placeholder="allowlist, base, fast" />
+            </label>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Collection Link</h4>
+                <p class="helper-copy">Paste the OpenSea collection link or slug and MintBot will try to discover the chain, contract, ABI, public mint function, and price for you.</p>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label hidden>
+                <span>Source Type</span>
+                <select id="task-source-type-input"></select>
+              </label>
+              <label>
+                <span>OpenSea Collection Link / Slug</span>
+                <input id="task-source-target-input" type="text" placeholder="https://opensea.io/collection/example-drop" />
+              </label>
+            </div>
+            <p id="task-source-hint" class="helper-copy">Paste a collection link and MintBot will auto-discover the public mint route. Manual contract and ABI recovery tools live in Advanced Settings.</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Mint Summary</h4>
+                <p class="helper-copy">This shows the collection, the actual mint route, and the wallet that will receive the NFT.</p>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Collection</span>
+                <input id="task-discovery-collection-input" type="text" placeholder="Waiting for OpenSea discovery" readonly />
+              </label>
+              <label>
+                <span>Destination Wallet</span>
+                <input id="task-destination-wallet-input" type="text" placeholder="Select the wallet that should receive the NFT" readonly />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>NFT Collection Contract</span>
+                <input id="task-discovery-nft-contract-input" type="text" placeholder="Waiting for collection contract discovery" readonly />
+              </label>
+              <label>
+                <span>Mint Route Contract</span>
+                <input id="task-discovery-route-contract-input" type="text" placeholder="Waiting for mint route discovery" readonly />
+              </label>
+            </div>
+            <p id="task-mint-route-hint" class="helper-copy">Paste a collection link and MintBot will discover the mint path for you. Minted NFTs go directly to the selected wallet.</p>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Mint Route Contract</span>
+              <input id="task-contract-input" type="text" placeholder="0x... or leave blank for auto-fill from the collection link" />
+            </label>
+            <label>
+              <span>Chain</span>
+              <select id="task-chain-input"></select>
+            </label>
+          </div>
+
+          <div class="form-grid two">
+            <label>
+              <span>Quantity / Wallet</span>
+              <input id="task-quantity-input" type="number" min="1" value="1" />
+            </label>
+            <label>
+              <span>Price (ETH)</span>
+              <input id="task-price-input" type="text" placeholder="Auto or 0 for free mint" />
+            </label>
+          </div>
+
+          <div class="surface inset-surface task-builder-guidance">
+            <div class="surface-header compact">
+              <div>
+                <h4>Public Mint Fast Path</h4>
+                <p class="helper-copy">This task builder is narrowed to public mints only. Pick how the public sale goes live and MintBot will auto-arm the ultra-low-latency launch stack for you.</p>
+              </div>
+              <button id="task-advanced-toggle-button" class="ghost-button fx-button" type="button" aria-expanded="false">Show Advanced Settings</button>
+            </div>
+            <p class="helper-copy">Advanced settings are now mostly recovery tools for manual ABI loading, route inspection, relay routing, and custom sale-open checks.</p>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
+            <div class="surface-header compact">
+              <div>
+                <h4>Discovery Details</h4>
+                <p class="helper-copy">These source details stay synced behind the scenes for link-first public mint tasks.</p>
+              </div>
+            </div>
+            <div class="form-grid three" hidden>
+              <label hidden>
+                <span>Source Stage</span>
+                <select id="task-source-stage-input">
+                  <option value="public">Public</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid single" hidden>
+              <label>
+                <span>Source Config JSON</span>
+                <textarea
+                  id="task-source-config-input"
+                  rows="4"
+                  placeholder='{"target":"https://opensea.io/collection/example-drop","stage":"public"}'
+                ></textarea>
+              </label>
+            </div>
+            <p class="helper-copy">OpenSea public mints work best with a collection link plus saved OpenSea and Explorer API keys.</p>
+          </div>
+
+          <div class="form-grid single task-advanced-section hidden">
+            <label>
+              <span>Contract ABI</span>
+              <input id="task-abi-file-input" type="file" accept=".json,application/json" />
+            </label>
+          </div>
+
+          <div hidden>
+            <label>
+              <span>Platform</span>
+              <select id="task-platform-input">
+                <option>Generic EVM (auto-detect)</option>
+                <option>ERC721 Public Mint</option>
+                <option>ERC1155 Mint</option>
+                <option>Allowlist Mint</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
+            <div class="surface-header compact">
+              <h4>ABI JSON</h4>
+              <div class="surface-actions">
+                <button id="fetch-abi-button" class="ghost-button fx-button" type="button">Fetch from Explorer</button>
+                <span id="abi-status" class="muted-copy">Paste JSON, load a file, or use OpenSea auto-discovery.</span>
+              </div>
+            </div>
+            <div id="abi-dropzone" class="dropzone">Drop ABI JSON here, use the file picker, or let the collection link auto-load it.</div>
+            <textarea id="task-abi-input" rows="7" placeholder='[{"inputs":[],"name":"mint","type":"function"}]'></textarea>
+          </div>
+
+          <div class="form-grid two task-advanced-section hidden">
+            <label>
+              <span>Mint Function</span>
+              <input id="task-function-input" type="text" value="mint" />
+            </label>
+            <label>
+              <span>Mint Args JSON</span>
+              <input id="task-args-input" type="text" value="[1]" />
+            </label>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden" hidden>
+            <div class="surface-header compact">
+              <div>
+                <h4>Claims and Adapter</h4>
+                <p class="helper-copy">Feed per-wallet proofs, vouchers, GTD payloads, cookies, tokens, and custom args into the mint flow.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label class="toggle-stack">
+                <span>Claims Adapter</span>
+                <label class="switch-row">
+                  <input id="task-claim-integration-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+              <label>
+                <span>Project Key</span>
+                <input id="task-claim-project-key-input" type="text" placeholder="azuki-gtd" />
+              </label>
+              <label class="toggle-stack">
+                <span>Fetch Claim API</span>
+                <label class="switch-row">
+                  <input id="task-claim-fetch-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Claim API URL</span>
+                <input id="task-claim-fetch-url-input" type="text" placeholder="https://mint.project.xyz/api/claim/{{wallet}}" />
+              </label>
+              <label>
+                <span>Claim API Method</span>
+                <select id="task-claim-fetch-method-input">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                  <option value="DELETE">DELETE</option>
+                </select>
+              </label>
+              <label>
+                <span>Response Root</span>
+                <input id="task-claim-response-root-input" type="text" placeholder="data.claim" />
+              </label>
+            </div>
+            <div class="form-grid single">
+              <label>
+                <span>Wallet Claims JSON</span>
+                <textarea id="task-wallet-claims-input" rows="4" placeholder='{"0xabc...":{"proof":["0x..."],"signature":"0x...","mintArgs":[1,["0x..."],"0x..."]}}'></textarea>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Claim Headers JSON</span>
+                <textarea id="task-claim-fetch-headers-input" rows="3" placeholder='{"Authorization":"Bearer {{claim.authToken}}"}'></textarea>
+              </label>
+              <label>
+                <span>Claim Cookies JSON</span>
+                <textarea id="task-claim-fetch-cookies-input" rows="3" placeholder='{"session":"{{claim.sessionCookie}}"}'></textarea>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Claim Body JSON</span>
+                <textarea id="task-claim-fetch-body-input" rows="4" placeholder='{"wallet":"{{wallet}}","contract":"{{contract}}"}'></textarea>
+              </label>
+              <label>
+                <span>Response Mapping JSON</span>
+                <textarea id="task-claim-response-mapping-input" rows="4" placeholder='{"proof":"proof","signature":"signature","mintArgs":"mintArgs","priceEth":"price"}'></textarea>
+              </label>
+            </div>
+            <p class="helper-copy">Use `{{wallet}}`, `{{index}}`, `{{contract}}`, `{{quantity}}`, and `{{claim.someKey}}` placeholders in the API request block.</p>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden" hidden>
+            <div class="surface-header compact">
+              <div>
+                <h4>Phase Planner</h4>
+                <p class="helper-copy">Best-effort GTD, allowlist, and public task generation from the same ABI and wallets.</p>
+              </div>
+            </div>
+            <label class="toggle-stack">
+              <span>Auto-Create Phase Tasks</span>
+              <label class="switch-row">
+                <input id="task-auto-phase-toggle" type="checkbox" checked />
+                <span>Enable</span>
+              </label>
+            </label>
+            <p class="helper-copy">New tasks can split into GTD, allowlist, and public schedules automatically. Proof-based phases may still need review.</p>
+            <div id="task-phase-preview" class="stack-list"></div>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Mint Wallets</h4>
+                <p class="helper-copy">Minted NFTs go directly to the selected wallet. Transfer-after-mint is only needed for advanced setups.</p>
+              </div>
+              <button id="select-all-wallets-button" class="ghost-button fx-button" type="button">Select All</button>
+            </div>
+            <div id="wallet-group-tabs" class="group-tabs"></div>
+            <div id="wallet-selector" class="wallet-selector"></div>
+            <p id="wallet-selection-count" class="selection-copy">0 wallets selected</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <h4>RPC Nodes</h4>
+              <button id="select-all-rpc-button" class="ghost-button fx-button" type="button">Select All</button>
+            </div>
+            <div id="rpc-selector" class="wallet-selector"></div>
+            <p id="rpc-selection-count" class="selection-copy">Using all enabled RPC nodes on this chain</p>
+            <p class="helper-copy">Leave RPC selection empty to use every enabled node for the selected chain. Pick specific nodes only if you want to limit routing.</p>
+          </div>
+
+          <div class="surface inset-surface">
+            <div class="surface-header compact">
+              <div>
+                <h4>Launch Strategy</h4>
+                <p class="helper-copy">Tell the app how the public mint goes live. The trigger stack and latency profile are filled in for you.</p>
+              </div>
+            </div>
+            <select id="task-quick-drop-type-input" hidden>
+              <option value="public">Public / Open Mint</option>
+            </select>
+            <div class="form-grid single">
+              <label>
+                <span>Mint Type</span>
+                <input type="text" value="Public / Open Mint" readonly />
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Public Launch Signal</span>
+                <select id="task-simple-launch-mode-input">
+                  <option value="onchain">Wait for On-Chain Open</option>
+                  <option value="utc">Schedule by UTC Time</option>
+                  <option value="live">Already Live / Run ASAP</option>
+                  <option value="mempool">Admin Tx in Mempool</option>
+                  <option value="block">Exact Block</option>
+                </select>
+              </label>
+              <label id="task-simple-start-time-field" class="hidden">
+                <span>UTC Start Time</span>
+                <input id="task-simple-start-time-input" type="datetime-local" />
+              </label>
+              <label id="task-simple-target-block-field" class="hidden">
+                <span>Exact Block</span>
+                <input id="task-simple-target-block-input" type="number" min="1" placeholder="23456789" />
+              </label>
+            </div>
+            <div class="form-grid single">
+              <label id="task-simple-mempool-field" class="hidden">
+                <span>Admin Function / Selector</span>
+                <input id="task-simple-mempool-input" type="text" placeholder="setSaleState(bool) or 0x12345678" />
+              </label>
+            </div>
+            <div id="task-quick-stack-summary" class="task-strategy-summary"></div>
+            <p id="task-simple-launch-hint" class="helper-copy">Load the ABI, then let MintBot wait for the on-chain sale-open signal by default.</p>
+            <p id="task-quick-proof-hint" class="helper-copy hidden" hidden></p>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
+            <div class="surface-header compact">
+              <div>
+                <h4>Advanced Launch Timing</h4>
+                <p class="helper-copy">Manual timestamps are optional. Auto-arm can wait on detected start times and mint-open signals for you.</p>
+              </div>
+            </div>
+            <div class="form-grid five">
+              <label>
+                <span>Execution Profile</span>
+                <select id="task-latency-profile-input">
+                  <option value="low_latency">Low Latency</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="ultra_low_latency">Ultra Low Latency</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label class="toggle-stack">
+                <span>Timestamp to Start</span>
+                <label class="switch-row">
+                  <input id="task-schedule-toggle" type="checkbox" />
+                  <span>Enable</span>
+                </label>
+              </label>
+              <label class="toggle-stack">
+                <span>Auto Arm After Save</span>
+                <label class="switch-row">
+                  <input id="task-auto-arm-toggle" type="checkbox" checked />
+                  <span>Enable</span>
+                </label>
+              </label>
+              <label>
+                <span>UTC Start Date and Time</span>
+                <input id="task-start-time-input" type="datetime-local" />
+              </label>
+              <label>
+                <span>Wallet Mode</span>
+                <select id="task-wallet-mode-input">
+                  <option value="parallel">Parallel</option>
+                  <option value="sequential">Sequential</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-grid five task-advanced-section hidden">
+            <label>
+              <span>Retries</span>
+              <input id="task-retries-input" type="number" value="1" />
+            </label>
+            <label>
+              <span>Retry Delay ms</span>
+              <input id="task-retry-delay-input" type="number" value="1000" />
+            </label>
+            <label>
+              <span>Retry Window min</span>
+              <input id="task-retry-window-input" type="number" min="0" value="30" />
+            </label>
+            <label>
+              <span>Start Jitter ms</span>
+              <input id="task-jitter-input" type="number" value="0" />
+            </label>
+            <label>
+              <span>Min Balance ETH</span>
+              <input id="task-min-balance-input" type="text" />
+            </label>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
+            <div class="surface-header compact">
+              <div>
+                <h4>Gas and Validation</h4>
+                <p class="helper-copy">Aggressive gas, multi-RPC, and replacement logic are the main latency controls for live mints.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Dynamic Gas Strategy</span>
+                <select id="task-gas-strategy-input">
+                  <option value="normal">Normal</option>
+                  <option value="aggressive">Aggressive</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label>
+                <span>Manual Gas Limit</span>
+                <input id="task-gas-limit-input" type="text" placeholder="200000" />
+              </label>
+              <label>
+                <span>Poll Interval ms</span>
+                <input id="task-poll-interval-input" type="number" value="1000" />
+              </label>
+            </div>
+            <div class="form-grid four">
+              <label>
+                <span>Max Fee Gwei (Custom)</span>
+                <input id="task-max-fee-input" type="text" />
+              </label>
+              <label>
+                <span>Priority Fee Gwei (Custom)</span>
+                <input id="task-priority-fee-input" type="text" />
+              </label>
+              <label>
+                <span>Extra Max Fee %</span>
+                <input id="task-gas-boost-input" type="number" value="0" />
+              </label>
+              <label>
+                <span>Extra Priority %</span>
+                <input id="task-priority-boost-input" type="number" value="0" />
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Receipt Timeout ms</span>
+                <input id="task-tx-timeout-input" type="number" placeholder="45000" />
+              </label>
+              <label>
+                <span>Replacement Bump %</span>
+                <input id="task-replace-bump-input" type="number" value="12" />
+              </label>
+              <label>
+                <span>Replacement Attempts</span>
+                <input id="task-replace-attempts-input" type="number" value="2" />
+              </label>
+            </div>
+          </div>
+
+          <div class="surface inset-surface task-advanced-section hidden">
+            <div class="surface-header compact">
+              <div>
+                <h4>Ready Check and Routing</h4>
+                <p class="helper-copy">Use Block Driven plus Target Block for exact block-level launch timing.</p>
+              </div>
+            </div>
+            <div class="form-grid four">
+              <label>
+                <span>Execution Trigger</span>
+                <select id="task-trigger-mode-input">
+                  <option value="standard">Standard</option>
+                  <option value="event">Event Driven</option>
+                  <option value="mempool">Mempool Driven</option>
+                  <option value="block">Block Driven</option>
+                </select>
+              </label>
+              <label>
+                <span>Target Block</span>
+                <input id="task-trigger-block-input" type="number" min="1" placeholder="23456789" />
+              </label>
+              <label>
+                <span>Trigger Contract</span>
+                <input id="task-trigger-contract-input" type="text" placeholder="Defaults to mint contract" />
+              </label>
+              <label>
+                <span>Trigger Timeout ms</span>
+                <input id="task-trigger-timeout-input" type="number" placeholder="30000" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Event Signature</span>
+                <input id="task-trigger-event-signature-input" type="text" placeholder="SaleStateChanged(bool)" />
+              </label>
+              <label>
+                <span>Event Condition JSON</span>
+                <input id="task-trigger-event-condition-input" type="text" placeholder='{"0":true}' />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Mempool Function or Selector</span>
+                <input id="task-trigger-mempool-signature-input" type="text" placeholder="setSaleState(bool) or 0x12345678" />
+              </label>
+              <label>
+                <span>Private Relay URL</span>
+                <input id="task-private-relay-url-input" type="text" placeholder="https://relay.example/rpc" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>
+                <span>Private Relay Method</span>
+                <select id="task-private-relay-method-input">
+                  <option value="eth_sendRawTransaction">eth_sendRawTransaction</option>
+                  <option value="eth_sendPrivateTransaction">eth_sendPrivateTransaction</option>
+                </select>
+              </label>
+              <label>
+                <span>Private Relay Headers JSON</span>
+                <input id="task-private-relay-headers-input" type="text" placeholder='{"Authorization":"Bearer ..."}' />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="toggle-card">
+                <input id="task-private-relay-toggle" type="checkbox" />
+                <span>Private Relay</span>
+              </label>
+              <label class="toggle-card">
+                <input id="task-private-relay-only-toggle" type="checkbox" />
+                <span>Relay Only</span>
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Ready Check Function</span>
+                <input id="task-ready-function-input" type="text" placeholder="isPublicSaleOpen" />
+              </label>
+              <label>
+                <span>Ready Check Args</span>
+                <input id="task-ready-args-input" type="text" value="[]" />
+              </label>
+              <label>
+                <span>Ready Check Mode</span>
+                <select id="task-ready-mode-input">
+                  <option value="truthy">Truthy</option>
+                  <option value="falsey">Falsey</option>
+                  <option value="equals">Equals</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid three">
+              <label>
+                <span>Ready Expected</span>
+                <input id="task-ready-expected-input" type="text" />
+              </label>
+              <label>
+                <span>Ready Check Interval ms</span>
+                <input id="task-ready-interval-input" type="number" value="1000" />
+              </label>
+              <label>
+                <span>Transfer Address</span>
+                <input id="task-transfer-address-input" type="text" placeholder="0x..." />
+              </label>
+            </div>
+          </div>
+
+          <div class="form-grid two task-option-grid task-advanced-section hidden">
+            <label class="toggle-card task-option-card">
+              <input id="task-simulate-toggle" type="checkbox" checked />
+              <span class="toggle-card-content">
+                <span class="toggle-card-indicator" aria-hidden="true"></span>
+                <span class="toggle-card-label">Simulate</span>
+              </span>
+            </label>
+            <label class="toggle-card task-option-card">
+              <input id="task-dry-run-toggle" type="checkbox" />
+              <span class="toggle-card-content">
+                <span class="toggle-card-indicator" aria-hidden="true"></span>
+                <span class="toggle-card-label">Dry Run</span>
+              </span>
+            </label>
+            <label class="toggle-card task-option-card">
+              <input id="task-warmup-toggle" type="checkbox" checked />
+              <span class="toggle-card-content">
+                <span class="toggle-card-indicator" aria-hidden="true"></span>
+                <span class="toggle-card-label">Warmup RPC</span>
+              </span>
+            </label>
+            <label class="toggle-card task-option-card">
+              <input id="task-multi-rpc-broadcast-toggle" type="checkbox" />
+              <span class="toggle-card-content">
+                <span class="toggle-card-indicator" aria-hidden="true"></span>
+                <span class="toggle-card-label">Multi-RPC Broadcast</span>
+              </span>
+            </label>
+            <label class="toggle-card task-option-card">
+              <input id="task-smart-replace-toggle" type="checkbox" />
+              <span class="toggle-card-content">
+                <span class="toggle-card-indicator" aria-hidden="true"></span>
+                <span class="toggle-card-label">Smart Gas Replace</span>
+              </span>
+            </label>
+            <label class="toggle-card task-option-card">
+              <input id="task-transfer-toggle" type="checkbox" />
+              <span class="toggle-card-content">
+                <span class="toggle-card-indicator" aria-hidden="true"></span>
+                <span class="toggle-card-label">Transfer After Minted</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="surface inset-surface" hidden>
+            <div class="surface-header compact">
+              <h4>Notes</h4>
+            </div>
+            <textarea id="task-notes-input" rows="4" placeholder="Optional internal notes, reminders, or playbook steps."></textarea>
+          </div>
+
+          <div class="modal-actions">
+            <button id="cancel-task-button" class="ghost-button fx-button" type="button">Cancel</button>
+            <button class="primary-button fx-button" type="submit">Create Task</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="task-delete-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-task-delete-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete Task</h3>
+            <p class="muted-copy">
+              Remove this task session only after you confirm.
+            </p>
+          </div>
+          <button id="task-delete-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Task Name</span>
+            <strong id="task-delete-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Chain</span>
+            <strong id="task-delete-chain">-</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>Contract</span>
+            <strong id="task-delete-contract">-</strong>
+          </div>
+        </div>
+
+        <p class="helper-copy">
+          This helps prevent accidental task removal. If the task is running, stop it before deleting it.
+        </p>
+
+        <div class="modal-actions">
+          <button id="task-delete-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="task-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="rpc-chainlist-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-rpc-chainlist-modal="true"></div>
+      <div class="modal-card rpc-chainlist-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="rpc-chainlist-modal-title">Chainlist RPC Scan</h3>
+            <p id="rpc-chainlist-modal-subtitle" class="muted-copy">
+              Probe published endpoints, rank them by live latency, and choose which RPC to stage.
+            </p>
+          </div>
+          <button id="rpc-chainlist-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="modal-form">
+          <div class="rpc-chainlist-toolbar">
+            <p id="rpc-chainlist-status" class="helper-copy">
+              Choose a chain, then scan Chainlist to compare healthy RPC endpoints.
+            </p>
+            <button id="rpc-chainlist-refresh-button" class="ghost-button fx-button" type="button">Refresh Scan</button>
+          </div>
+          <div id="rpc-chainlist-summary" class="chip-row rpc-chainlist-summary hidden"></div>
+          <div id="rpc-chainlist-candidate-list" class="rpc-chainlist-candidate-list"></div>
+          <div class="modal-actions">
+            <button id="rpc-chainlist-cancel-button" class="ghost-button fx-button" type="button">Close</button>
+            <button id="rpc-chainlist-apply-button" class="primary-button fx-button" type="button" disabled>
+              Use Selected RPC
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="rpc-confirm-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-rpc-confirm-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="rpc-confirm-title">Confirm RPC Save</h3>
+            <p id="rpc-confirm-subtitle" class="muted-copy">
+              Review the selected endpoint before it is added to the failover mesh.
+            </p>
+          </div>
+          <button id="rpc-confirm-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Name</span>
+            <strong id="rpc-confirm-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Chain</span>
+            <strong id="rpc-confirm-chain">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Source</span>
+            <strong id="rpc-confirm-source">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Observed Latency</span>
+            <strong id="rpc-confirm-latency">Fresh check on save</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>URL</span>
+            <strong id="rpc-confirm-url">-</strong>
+          </div>
+        </div>
+
+        <p id="rpc-confirm-note" class="helper-copy">
+          A fresh endpoint inspection will run when you confirm this save.
+        </p>
+
+        <div id="rpc-confirm-progress" class="operation-progress hidden" data-state="idle" aria-live="polite">
+          <div class="operation-progress-meta">
+            <span id="rpc-confirm-progress-label" class="helper-copy">Validating RPC endpoint...</span>
+            <strong id="rpc-confirm-progress-value">0%</strong>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button id="rpc-confirm-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="rpc-confirm-submit-button" class="primary-button fx-button" type="button">Confirm and Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="rpc-delete-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-rpc-delete-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete RPC Node</h3>
+            <p class="muted-copy">
+              Remove this RPC endpoint from the local mesh only after you confirm.
+            </p>
+          </div>
+          <button id="rpc-delete-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Name</span>
+            <strong id="rpc-delete-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row">
+            <span>Chain</span>
+            <strong id="rpc-delete-chain">-</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>URL</span>
+            <strong id="rpc-delete-url">-</strong>
+          </div>
+        </div>
+
+        <p class="helper-copy">
+          This helps prevent accidental RPC removal. Tasks using this chain may lose failover coverage until another endpoint is added.
+        </p>
+
+        <div class="modal-actions">
+          <button id="rpc-delete-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="rpc-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="wallet-delete-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close-wallet-delete-modal="true"></div>
+      <div class="modal-card rpc-confirm-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Delete Wallet</h3>
+            <p class="muted-copy">
+              Remove this wallet from local storage only after you confirm.
+            </p>
+          </div>
+          <button id="wallet-delete-close-button" class="icon-button fx-button" type="button">+</button>
+        </div>
+
+        <div class="rpc-confirm-grid">
+          <div class="rpc-confirm-row">
+            <span>Wallet Name</span>
+            <strong id="wallet-delete-name">-</strong>
+          </div>
+          <div class="rpc-confirm-row full">
+            <span>Address</span>
+            <strong id="wallet-delete-address">-</strong>
+          </div>
+        </div>
+
+        <p class="helper-copy">
+          This helps prevent accidental wallet removal. Tasks using this wallet will also lose that wallet assignment.
+        </p>
+
+        <div class="modal-actions">
+          <button id="wallet-delete-cancel-button" class="ghost-button fx-button" type="button">Cancel</button>
+          <button id="wallet-delete-submit-button" class="danger-button fx-button" type="button">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+      </main>
+    </div>
+
+    <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

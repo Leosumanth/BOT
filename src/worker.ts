@@ -1,0 +1,679 @@
+require("dotenv").config();
+
+const crypto = require("crypto");
+const { ethers } = require("ethers");
+const { AbortRunError, formatError, runMintBot } = require("./bot");
+const { defaultInputValues, normalizeConfig } = require("./config");
+const { createDatabase, normalizePersistentState } = require("./database");
+const { createRedisCoordinator, resolveQueueConfig } = require("./queue");
+const { decryptSecret } = require("./security");
+
+const chainCatalog = [
+  { key: "ethereum", label: "Ethereum", chainId: 1 },
+  { key: "bsc", label: "BNB Smart Chain", chainId: 56 },
+  { key: "sepolia", label: "Sepolia", chainId: 11155111 },
+  { key: "base", label: "Base", chainId: 8453 },
+  { key: "base_sepolia", label: "Base Sepolia", chainId: 84532 },
+  { key: "arbitrum", label: "Arbitrum One", chainId: 42161 },
+  { key: "blast", label: "Blast", chainId: 81457 },
+  { key: "shape", label: "Shape", chainId: 360 },
+  { key: "plasma", label: "Plasma", chainId: 9745 }
+];
+
+function normalizeChainEntry(entry = {}) {
+  const key = String(entry.key || "").trim();
+  const label = String(entry.label || "").trim();
+  const chainId = Number(entry.chainId);
+
+  if (!key || !label || !Number.isFinite(chainId)) {
+    return null;
+  }
+
+  return {
+    key,
+    label,
+    chainId
+  };
+}
+
+function buildAvailableChains(extraEntries = []) {
+  const chainMap = new Map();
+
+  chainCatalog.forEach((entry) => {
+    const normalized = normalizeChainEntry(entry);
+    if (normalized) {
+      chainMap.set(normalized.key, normalized);
+    }
+  });
+
+  extraEntries.forEach((entry) => {
+    const normalized = normalizeChainEntry(entry);
+    if (!normalized || chainMap.has(normalized.key)) {
+      return;
+    }
+
+    chainMap.set(normalized.key, normalized);
+  });
+
+  return [...chainMap.values()];
+}
+
+function resolveStateChainEntry(state, chainKey) {
+  const normalized = String(chainKey || "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const rpcChains = (state?.rpcNodes || []).map((node) => ({
+    key: node.chainKey,
+    label: node.chainLabel || "",
+    chainId: node.chainId
+  }));
+
+  return buildAvailableChains(rpcChains).find((entry) => entry.key === normalized) || null;
+}
+
+function rankRpcNodesByLatency(rpcNodes = []) {
+  const latencyFor = (node) =>
+    Number.isFinite(Number(node?.lastHealth?.latencyMs)) ? Number(node.lastHealth.latencyMs) : Infinity;
+  const statusRankFor = (node) => {
+    if (node?.lastHealth?.status === "healthy") {
+      return 0;
+    }
+
+    if (!node?.lastHealth) {
+      return 1;
+    }
+
+    if (node.lastHealth.status === "unknown" || node.lastHealth.status === "untested") {
+      return 2;
+    }
+
+    return 3;
+  };
+  const checkedAtFor = (node) => new Date(node?.lastHealth?.checkedAt || 0).getTime();
+
+  return [...rpcNodes].sort((left, right) => {
+    const statusDelta = statusRankFor(left) - statusRankFor(right);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    const latencyDelta = latencyFor(left) - latencyFor(right);
+    if (latencyDelta !== 0) {
+      return latencyDelta;
+    }
+
+    const freshnessDelta = checkedAtFor(right) - checkedAtFor(left);
+    if (freshnessDelta !== 0) {
+      return freshnessDelta;
+    }
+
+    return String(left?.name || left?.url || "").localeCompare(String(right?.name || right?.url || ""));
+  });
+}
+
+function createId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function hashForId(value) {
+  return crypto.createHash("sha1").update(String(value)).digest("hex").slice(0, 12);
+}
+
+function parseList(value) {
+  if (!value) {
+    return [];
+  }
+
+  return String(value)
+    .split(/[\r\n,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function truncateMiddle(value, start = 8, end = 6) {
+  if (!value || value.length <= start + end + 3) {
+    return value || "";
+  }
+
+  return `${value.slice(0, start)}...${value.slice(-end)}`;
+}
+
+function normalizePrivateKeyValue(value) {
+  const trimmed = String(value || "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return `0x${trimmed}`;
+  }
+
+  return trimmed;
+}
+
+function deriveAddress(privateKey) {
+  return new ethers.Wallet(normalizePrivateKeyValue(privateKey)).address;
+}
+
+function validateResolvedPrivateKey(privateKey, wallet = null) {
+  const normalized = normalizePrivateKeyValue(privateKey);
+  const walletLabel = wallet?.label || wallet?.addressShort || wallet?.address || "Selected wallet";
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`${walletLabel} has an invalid private key format. Re-import that wallet secret.`);
+  }
+
+  let derivedAddress;
+  try {
+    derivedAddress = deriveAddress(normalized);
+  } catch {
+    throw new Error(`${walletLabel} has an unreadable private key. Re-import that wallet secret.`);
+  }
+
+  if (wallet?.address && derivedAddress.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error(
+      `${walletLabel} private key does not match the saved wallet address ${wallet.address}. Re-import that wallet.`
+    );
+  }
+
+  return normalized;
+}
+
+function buildEnvWalletEntries() {
+  const keys = parseList(process.env.PRIVATE_KEYS || process.env.PRIVATE_KEY);
+  const records = [];
+  const keyMap = new Map();
+  const knownAddresses = new Set();
+  const createdAt = new Date().toISOString();
+
+  keys.forEach((privateKey, index) => {
+    try {
+      const normalizedPrivateKey = validateResolvedPrivateKey(privateKey);
+      const address = deriveAddress(normalizedPrivateKey);
+      const addressLower = address.toLowerCase();
+      if (knownAddresses.has(addressLower)) {
+        return;
+      }
+
+      const id = `wallet_env_${addressLower}`;
+      records.push({
+        id,
+        label: `Env Wallet ${index + 1}`,
+        address,
+        addressShort: truncateMiddle(address),
+        group: "Env",
+        status: "ready",
+        source: "env",
+        hasSecret: true,
+        createdAt,
+        updatedAt: createdAt
+      });
+      keyMap.set(id, normalizedPrivateKey);
+      knownAddresses.add(addressLower);
+    } catch {
+      // Ignore invalid env keys.
+    }
+  });
+
+  return {
+    records,
+    keyMap
+  };
+}
+
+function buildEnvRpcNodes() {
+  const urls = parseList(process.env.RPC_URLS || process.env.RPC_URL);
+  const chainKey = String(process.env.DEFAULT_RPC_CHAIN_KEY || "base_sepolia").trim() || "base_sepolia";
+  const knownUrls = new Set();
+
+  return urls.reduce((nodes, url, index) => {
+    if (knownUrls.has(url)) {
+      return nodes;
+    }
+
+    nodes.push({
+      id: `rpc_env_${hashForId(url)}`,
+      name: `Env RPC ${index + 1}`,
+      url,
+      chainKey,
+      enabled: true,
+      group: "Env",
+      source: "env",
+      lastHealth: null
+    });
+    knownUrls.add(url);
+    return nodes;
+  }, []);
+}
+
+function mergeWalletInventories(storedWallets, envWallets) {
+  const merged = [...storedWallets];
+  const knownAddresses = new Set(storedWallets.map((wallet) => wallet.address.toLowerCase()));
+
+  envWallets.forEach((wallet) => {
+    if (knownAddresses.has(wallet.address.toLowerCase())) {
+      return;
+    }
+
+    merged.push(wallet);
+    knownAddresses.add(wallet.address.toLowerCase());
+  });
+
+  return merged;
+}
+
+function mergeRpcInventories(storedRpcNodes, envRpcNodes) {
+  const merged = [...storedRpcNodes];
+  const knownUrls = new Set(storedRpcNodes.map((node) => node.url));
+
+  envRpcNodes.forEach((node) => {
+    if (knownUrls.has(node.url)) {
+      return;
+    }
+
+    merged.push(node);
+    knownUrls.add(node.url);
+  });
+
+  return merged;
+}
+
+function createEmptySummary(total = 0) {
+  return {
+    total,
+    success: 0,
+    failed: 0,
+    stopped: 0,
+    hashes: []
+  };
+}
+
+function summarizeResults(results) {
+  return results.reduce(
+    (summary, result) => {
+      summary.total += 1;
+      if (["success", "submitted", "retried"].includes(result.status)) {
+        summary.success += 1;
+      } else if (result.status === "stopped") {
+        summary.stopped += 1;
+      } else if (result.status === "failed") {
+        summary.failed += 1;
+      }
+
+      if (result.txHash) {
+        summary.hashes.push(result.txHash);
+      }
+
+      return summary;
+    },
+    createEmptySummary(0)
+  );
+}
+
+async function loadExecutionState(database) {
+  const persistentState = normalizePersistentState(await database.loadState());
+  const storedWallets = await database.listWallets();
+  const { records: envWallets } = buildEnvWalletEntries();
+  const envRpcNodes = buildEnvRpcNodes();
+
+  return {
+    ...persistentState,
+    wallets: mergeWalletInventories(storedWallets, envWallets),
+    rpcNodes: mergeRpcInventories(persistentState.rpcNodes, envRpcNodes)
+  };
+}
+
+async function resolveWalletPrivateKeys(database, walletIds, walletMap = new Map()) {
+  const { keyMap } = buildEnvWalletEntries();
+  const privateKeys = [];
+
+  for (const walletId of walletIds) {
+    const wallet = walletMap.get(walletId) || null;
+    if (keyMap.has(walletId)) {
+      privateKeys.push(validateResolvedPrivateKey(keyMap.get(walletId), wallet));
+      continue;
+    }
+
+    const storedSecret = await database.getStoredWalletSecret(walletId);
+    if (!storedSecret?.secret_ciphertext) {
+      throw new Error(`Wallet secret not found for wallet ${walletId}`);
+    }
+
+    privateKeys.push(validateResolvedPrivateKey(decryptSecret(storedSecret.secret_ciphertext), wallet));
+  }
+
+  return privateKeys;
+}
+
+async function buildConfigForTask(database, state, task) {
+  const walletIds = Array.isArray(task.walletIds) ? task.walletIds : [];
+  const rpcNodeIds = Array.isArray(task.rpcNodeIds) ? task.rpcNodeIds : [];
+  const wallets = state.wallets.filter((wallet) => walletIds.includes(wallet.id));
+  if (wallets.length === 0) {
+    throw new Error("Select at least one wallet before running a task");
+  }
+
+  const walletMap = new Map(wallets.map((wallet) => [wallet.id, wallet]));
+  const privateKeys = await resolveWalletPrivateKeys(database, walletIds, walletMap);
+  if (privateKeys.length !== walletIds.length) {
+    throw new Error("One or more selected wallets could not be resolved");
+  }
+
+  const configuredRpcNodes = state.rpcNodes.filter(
+    (node) =>
+      node.enabled &&
+      node.chainKey === task.chainKey &&
+      (rpcNodeIds.length === 0 || rpcNodeIds.includes(node.id))
+  );
+  const rankedRpcNodes = rankRpcNodesByLatency(configuredRpcNodes);
+
+  if (rankedRpcNodes.length === 0) {
+    throw new Error(`No enabled RPC nodes configured for ${task.chainKey}`);
+  }
+
+  const chain = resolveStateChainEntry(state, task.chainKey);
+
+  return normalizeConfig({
+    ...defaultInputValues,
+    RPC_URLS: rankedRpcNodes.map((node) => node.url).join("\n"),
+    PRIVATE_KEYS: privateKeys.join("\n"),
+    SOURCE_TYPE: task.sourceType,
+    SOURCE_TARGET: task.sourceTarget,
+    SOURCE_STAGE: task.sourceStage,
+    SOURCE_CONFIG_JSON: task.sourceConfigJson,
+    CONTRACT_ADDRESS: task.contractAddress,
+    ABI_JSON: task.abiJson,
+    MINT_FUNCTION: task.mintFunction,
+    MINT_ARGS: task.mintArgs,
+    QUANTITY_PER_WALLET: task.quantityPerWallet,
+    MINT_VALUE_ETH: task.priceEth,
+    CHAIN_KEY: task.chainKey,
+    CLAIM_INTEGRATION_ENABLED: task.claimIntegrationEnabled,
+    CLAIM_PROJECT_KEY: task.claimProjectKey,
+    WALLET_CLAIMS_JSON: task.walletClaimsJson,
+    CLAIM_FETCH_ENABLED: task.claimFetchEnabled,
+    CLAIM_FETCH_URL: task.claimFetchUrl,
+    CLAIM_FETCH_METHOD: task.claimFetchMethod,
+    CLAIM_FETCH_HEADERS_JSON: task.claimFetchHeadersJson,
+    CLAIM_FETCH_COOKIES_JSON: task.claimFetchCookiesJson,
+    CLAIM_FETCH_BODY_JSON: task.claimFetchBodyJson,
+    CLAIM_RESPONSE_MAPPING_JSON: task.claimResponseMappingJson,
+    CLAIM_RESPONSE_ROOT: task.claimResponseRoot,
+    GAS_STRATEGY: task.gasStrategy,
+    GAS_LIMIT: task.gasLimit,
+    MAX_FEE_GWEI: task.maxFeeGwei,
+    MAX_PRIORITY_FEE_GWEI: task.maxPriorityFeeGwei,
+    GAS_BOOST_PERCENT: task.gasBoostPercent,
+    PRIORITY_BOOST_PERCENT: task.priorityBoostPercent,
+    WAIT_FOR_RECEIPT: task.waitForReceipt,
+    SIMULATE_TRANSACTION: task.simulateTransaction,
+    DRY_RUN: task.dryRun,
+    WARMUP_RPC: task.warmupRpc,
+    CONTINUE_ON_ERROR: task.continueOnError,
+    WALLET_MODE: task.walletMode,
+    WAIT_UNTIL_ISO: task.useSchedule ? task.waitUntilIso : "",
+    PRE_SIGN_TRANSACTIONS: true,
+    MULTI_RPC_BROADCAST: task.multiRpcBroadcast,
+    MINT_START_DETECTION_ENABLED: task.mintStartDetectionEnabled,
+    MINT_START_DETECTION_JSON: JSON.stringify(task.mintStartDetectionConfig || {}),
+    READY_CHECK_FUNCTION: task.readyCheckFunction,
+    READY_CHECK_ARGS: task.readyCheckArgs,
+    READY_CHECK_MODE: task.readyCheckMode,
+    READY_CHECK_EXPECTED: task.readyCheckExpected,
+    READY_CHECK_INTERVAL_MS: task.readyCheckIntervalMs,
+    POLL_INTERVAL_MS: task.pollIntervalMs,
+    TX_TIMEOUT_MS: task.txTimeoutMs,
+    MAX_RETRIES: task.maxRetries,
+    RETRY_DELAY_MS: task.retryDelayMs,
+    RETRY_WINDOW_MS: task.retryWindowMs,
+    START_JITTER_MS: task.startJitterMs,
+    MIN_BALANCE_ETH: task.minBalanceEth,
+    NONCE_OFFSET: task.nonceOffset,
+    SMART_GAS_REPLACEMENT: task.smartGasReplacement,
+    REPLACEMENT_BUMP_PERCENT: task.replacementBumpPercent,
+    REPLACEMENT_MAX_ATTEMPTS: task.replacementMaxAttempts,
+    PRIVATE_RELAY_ENABLED: task.privateRelayEnabled,
+    PRIVATE_RELAY_URL: task.privateRelayUrl,
+    PRIVATE_RELAY_METHOD: task.privateRelayMethod,
+    PRIVATE_RELAY_HEADERS_JSON: task.privateRelayHeadersJson,
+    PRIVATE_RELAY_ONLY: task.privateRelayOnly,
+    EXECUTION_TRIGGER_MODE: task.executionTriggerMode,
+    TRIGGER_CONTRACT_ADDRESS: task.triggerContractAddress,
+    TRIGGER_EVENT_SIGNATURE: task.triggerEventSignature,
+    TRIGGER_EVENT_CONDITION: task.triggerEventCondition,
+    TRIGGER_MEMPOOL_SIGNATURE: task.triggerMempoolSignature,
+    TRIGGER_BLOCK_NUMBER: task.triggerBlockNumber,
+    TRIGGER_TIMEOUT_MS: task.triggerTimeoutMs,
+    TRANSFER_AFTER_MINTED: task.transferAfterMinted,
+    TRANSFER_ADDRESS: task.transferAddress,
+    CHAIN_ID: chain ? String(chain.chainId) : "",
+    RESULTS_PATH: state.settings.resultsPath || "./dist/mint-results.json"
+  });
+}
+
+async function updateTaskRuntime(database, taskId, patch) {
+  const current = await database.getTaskRuntime(taskId);
+
+  return database.upsertTaskRuntime({
+    taskId,
+    status: patch.status || current?.status || "draft",
+    progress: patch.progress || current?.progress || { phase: "Ready", percent: 0 },
+    summary: patch.summary || current?.summary || createEmptySummary(0),
+    active: patch.active ?? current?.active ?? false,
+    queued: patch.queued ?? current?.queued ?? false,
+    error: patch.error === undefined ? current?.error || null : patch.error,
+    workerId: patch.workerId === undefined ? current?.workerId || null : patch.workerId,
+    startedAt: patch.startedAt === undefined ? current?.startedAt || null : patch.startedAt,
+    lastRunAt: patch.lastRunAt === undefined ? current?.lastRunAt || null : patch.lastRunAt
+  });
+}
+
+async function executeQueuedJob({
+  job,
+  queue,
+  database,
+  workerId,
+  abortController
+}) {
+  let state = null;
+  let task = null;
+
+  try {
+    state = await loadExecutionState(database);
+    task = state.tasks.find((entry) => entry.id === job.taskId) || null;
+    if (!task) {
+      throw new Error(`Task ${job.taskId} no longer exists`);
+    }
+
+    const startedAt = new Date().toISOString();
+    const walletCount = Array.isArray(task.walletIds) ? task.walletIds.length : 0;
+
+    await updateTaskRuntime(database, job.taskId, {
+      status: "running",
+      progress: {
+        phase: "Preparing",
+        percent: 8
+      },
+      summary: createEmptySummary(walletCount),
+      active: true,
+      queued: false,
+      error: null,
+      workerId,
+      startedAt
+    });
+    await queue.publishEvent("task-sync", { taskId: job.taskId });
+
+    const config = await buildConfigForTask(database, state, task);
+    const result = await runMintBot(config, {
+      signal: abortController.signal,
+      onLog(entry) {
+        void queue.publishEvent("log", {
+          taskId: job.taskId,
+          entry: {
+            ...entry,
+            taskId: job.taskId,
+            message: `[task ${task.name}] ${entry.message}`
+          }
+        }).catch((error) => {
+          console.error("Unable to publish worker log event:");
+          console.error(error);
+        });
+      }
+    });
+
+    const summary = summarizeResults(result.results);
+    const completedAt = new Date().toISOString();
+    await updateTaskRuntime(database, job.taskId, {
+      status: "completed",
+      progress: {
+        phase: "Completed",
+        percent: 100
+      },
+      summary,
+      active: false,
+      queued: false,
+      error: null,
+      workerId,
+      startedAt: null,
+      lastRunAt: completedAt
+    });
+    await database.insertTaskHistory({
+      id: createId("history"),
+      taskId: job.taskId,
+      ranAt: completedAt,
+      summary
+    });
+    await database.pruneTaskHistory(job.taskId, 8);
+    await queue.publishEvent("task-sync", { taskId: job.taskId });
+  } catch (error) {
+    const stopped = error instanceof AbortRunError || Boolean(abortController.signal.aborted);
+    const failedAt = new Date().toISOString();
+    const walletCount = Array.isArray(task?.walletIds) ? task.walletIds.length : 0;
+    await updateTaskRuntime(database, job.taskId, {
+      status: stopped ? "stopped" : "failed",
+      progress: {
+        phase: stopped ? "Stopped" : "Failed",
+        percent: stopped ? 0 : 100
+      },
+      summary: createEmptySummary(walletCount),
+      active: false,
+      queued: false,
+      error: formatError(error),
+      workerId,
+      startedAt: null,
+      lastRunAt: failedAt
+    });
+    await queue.publishEvent("log", {
+      taskId: job.taskId,
+      entry: {
+        level: "error",
+        taskId: job.taskId,
+        message: `[task ${task?.name || job.taskId}] ${formatError(error)}`,
+        timestamp: failedAt
+      }
+    });
+    await queue.publishEvent("task-sync", { taskId: job.taskId });
+  }
+}
+
+async function startWorker() {
+  const queueConfig = resolveQueueConfig(process.env);
+  if (!queueConfig.enabled) {
+    throw new Error("Set QUEUE_MODE=redis and REDIS_URL before starting the worker.");
+  }
+
+  const workerId = queueConfig.workerId || `worker_${process.pid}`;
+  const parsedWorkerConcurrency = Number(process.env.WORKER_CONCURRENCY || 4);
+  const workerConcurrency =
+    Number.isFinite(parsedWorkerConcurrency) && parsedWorkerConcurrency > 0
+      ? Math.floor(parsedWorkerConcurrency)
+      : 4;
+  const database = createDatabase();
+  await database.ensureSchema();
+  await database.ensureBaseState();
+
+  const queue = await createRedisCoordinator(
+    {
+      ...queueConfig,
+      workerId
+    },
+    {
+      blocking: true,
+      subscribe: true
+    }
+  );
+
+  const activeJobs = new Map();
+
+  await queue.subscribeToControl((message) => {
+    if (message?.type !== "stop-task") {
+      return;
+    }
+
+    if (message.payload?.taskId) {
+      activeJobs.get(message.payload.taskId)?.abortController.abort();
+      return;
+    }
+
+    activeJobs.forEach((entry) => entry.abortController.abort());
+  });
+
+  console.log(
+    `Redis worker ${workerId} listening on ${queueConfig.redisUrl} with concurrency ${workerConcurrency}`
+  );
+
+  while (true) {
+    if (activeJobs.size >= workerConcurrency) {
+      await Promise.race([...activeJobs.values()].map((entry) => entry.promise));
+      continue;
+    }
+
+    const job = await queue.dequeueTask(activeJobs.size > 0 ? 1 : queueConfig.blockTimeoutSeconds);
+    if (!job?.taskId) {
+      if (activeJobs.size > 0) {
+        await Promise.race([...activeJobs.values()].map((entry) => entry.promise));
+      }
+      continue;
+    }
+
+    if (activeJobs.has(job.taskId)) {
+      continue;
+    }
+
+    const abortController = new AbortController();
+    const promise = executeQueuedJob({
+      job,
+      queue,
+      database,
+      workerId,
+      abortController
+    })
+      .catch((error) => {
+        console.error(`Worker job ${job.taskId} crashed unexpectedly:`);
+        console.error(error);
+      })
+      .finally(() => {
+        activeJobs.delete(job.taskId);
+      });
+
+    activeJobs.set(job.taskId, {
+      abortController,
+      promise
+    });
+  }
+}
+
+async function main() {
+  await startWorker();
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error("Worker startup failed:");
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  main,
+  startWorker
+};

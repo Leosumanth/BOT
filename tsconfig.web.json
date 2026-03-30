@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "None",
+    "moduleDetection": "auto",
+    "lib": ["ES2022", "DOM"],
+    "strict": false,
+    "noImplicitAny": false,
+    "noCheck": true,
+    "useUnknownInCatchVariables": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "ignoreDeprecations": "6.0",
+    "rootDir": "web",
+    "outDir": "build/web"
+  },
+  "include": ["web/**/*.ts"],
+  "exclude": ["build", "dist", "node_modules"]
+}

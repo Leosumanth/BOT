@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "strict": true,
+    "ignoreDeprecations": "5.0",
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@mintbot/shared": ["packages/shared/src/index.ts"],
+      "@mintbot/shared/*": ["packages/shared/src/*"],
+      "@mintbot/blockchain": ["packages/blockchain/src/index.ts"],
+      "@mintbot/blockchain/*": ["packages/blockchain/src/*"],
+      "@mintbot/bot": ["packages/bot/src/index.ts"],
+      "@mintbot/bot/*": ["packages/bot/src/*"]
+    }
+  }
+}
