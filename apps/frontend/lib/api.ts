@@ -1,5 +1,8 @@
 function getServerAdminApiToken(): string {
-  const token = process.env.ADMIN_API_TOKEN?.trim();
+  const token =
+    process.env.ADMIN_API_TOKEN?.trim() ||
+    process.env.PRIVATE_KEY_ENCRYPTION_SECRET?.trim() ||
+    process.env.ENCRYPTION_KEY?.trim();
   if (!token) {
     throw new Error("ADMIN_API_TOKEN is required for server-side backend access.");
   }

@@ -38,6 +38,7 @@ const sanitizedProcessEnv = Object.fromEntries(
 const normalizedEnv = {
   ...sanitizedProcessEnv,
   BACKEND_PORT: firstDefinedEnv("BACKEND_PORT", "PORT"),
+  ADMIN_API_TOKEN: firstDefinedEnv("ADMIN_API_TOKEN", "PRIVATE_KEY_ENCRYPTION_SECRET", "ENCRYPTION_KEY"),
   PRIVATE_KEY_ENCRYPTION_SECRET: firstDefinedEnv("PRIVATE_KEY_ENCRYPTION_SECRET", "ENCRYPTION_KEY")
 };
 

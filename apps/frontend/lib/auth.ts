@@ -87,7 +87,10 @@ function resolveRealtimeSecret(): string {
 }
 
 export function getServerAdminApiToken(): string {
-  return resolveRequiredEnv("ADMIN_API_TOKEN");
+  return resolveRequiredEnv(
+    "ADMIN_API_TOKEN",
+    process.env.PRIVATE_KEY_ENCRYPTION_SECRET || process.env.ENCRYPTION_KEY
+  );
 }
 
 export function getServerBackendApiBaseUrl(): string {
