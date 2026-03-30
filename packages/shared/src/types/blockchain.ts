@@ -18,6 +18,7 @@ export interface RpcHealthSnapshot {
   failureCount: number;
   lastCheckedAt: string;
   live: boolean;
+  lastError?: string | null;
 }
 
 export interface GasFeeSnapshot {

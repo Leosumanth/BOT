@@ -1,5 +1,12 @@
-import { Controller, Delete, Get, Param, Patch, Body } from "@nestjs/common";
-import type { ApiEnvelope, ApiKeyRecord, ApiKeysDashboardResponse, ApiKeyUpsertRequest, ManagedApiKey } from "@mintbot/shared";
+import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import type {
+  ApiEnvelope,
+  ApiKeyRecord,
+  ApiKeysDashboardResponse,
+  ApiKeyTestResponse,
+  ApiKeyUpsertRequest,
+  ManagedApiKey
+} from "@mintbot/shared";
 import { ApiKeysService } from "./api-keys.service.js";
 
 @Controller("api-keys")
@@ -9,6 +16,11 @@ export class ApiKeysController {
   @Get()
   async list(): Promise<ApiEnvelope<ApiKeysDashboardResponse>> {
     return { data: await this.apiKeysService.list() };
+  }
+
+  @Post("test")
+  async testAll(): Promise<ApiEnvelope<ApiKeyTestResponse>> {
+    return { data: await this.apiKeysService.testAll() };
   }
 
   @Patch(":key")

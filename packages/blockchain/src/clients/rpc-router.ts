@@ -33,19 +33,20 @@ export class RpcRouter {
     const chain = resolveViemChain(config.chain);
     const existing = this.endpoints.get(config.key);
 
-    this.endpoints.set(config.key, {
-      config,
-      publicClient: createPublicClient({ chain, transport }),
-      walletClient: createWalletClient({ chain, transport }),
-      health: existing?.health ?? {
+      this.endpoints.set(config.key, {
+        config,
+        publicClient: createPublicClient({ chain, transport }),
+        walletClient: createWalletClient({ chain, transport }),
+        health: existing?.health ?? {
         endpointKey: config.key,
         latencyMs: Number.POSITIVE_INFINITY,
-        successRate: 1,
-        failureCount: 0,
-        lastCheckedAt: nowIso(),
-        live: true
-      }
-    });
+          successRate: 1,
+          failureCount: 0,
+          lastCheckedAt: nowIso(),
+          live: true,
+          lastError: null
+        }
+      });
   }
 
   removeConfig(key: string): void {
@@ -81,10 +82,12 @@ export class RpcRouter {
           runtime.health.latencyMs = Math.round(performance.now() - startedAt);
           runtime.health.successRate = Math.min(1, runtime.health.successRate + 0.02);
           runtime.health.live = true;
-        } catch {
+          runtime.health.lastError = null;
+        } catch (error) {
           runtime.health.failureCount += 1;
           runtime.health.successRate = Math.max(0, runtime.health.successRate - 0.15);
           runtime.health.live = false;
+          runtime.health.lastError = error instanceof Error ? error.message : "RPC health check failed.";
         } finally {
           runtime.health.lastCheckedAt = nowIso();
         }
@@ -125,12 +128,14 @@ export class RpcRouter {
         runtime.health.latencyMs = Math.round(performance.now() - startedAt);
         runtime.health.successRate = Math.min(1, runtime.health.successRate + 0.04);
         runtime.health.live = true;
+        runtime.health.lastError = null;
         runtime.health.lastCheckedAt = nowIso();
         return result;
       } catch (error) {
         runtime.health.failureCount += 1;
         runtime.health.successRate = Math.max(0, runtime.health.successRate - 0.2);
         runtime.health.live = false;
+        runtime.health.lastError = error instanceof Error ? error.message : "RPC request failed.";
         runtime.health.lastCheckedAt = nowIso();
         errors.push(`${runtime.config.label}: ${error instanceof Error ? error.message : "Unknown RPC failure"}`);
       }

@@ -1,7 +1,16 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import type { OnModuleInit } from "@nestjs/common";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import type { ApiKeyDescriptor, ApiKeyRecord, ApiKeysDashboardResponse, ApiKeyUpsertRequest, ManagedApiKey } from "@mintbot/shared";
+import { FlashbotsBundleClient } from "@mintbot/blockchain";
+import type {
+  ApiKeyDescriptor,
+  ApiKeyRecord,
+  ApiKeysDashboardResponse,
+  ApiKeyTestResponse,
+  ApiKeyTestResult,
+  ApiKeyUpsertRequest,
+  ManagedApiKey
+} from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { DatabaseService } from "../../database/database.service.js";
 import { RuntimeService } from "../runtime/runtime.service.js";
@@ -179,6 +188,54 @@ export class ApiKeysService implements OnModuleInit {
     return { removed };
   }
 
+  async testAll(): Promise<ApiKeyTestResponse> {
+    const testedAt = new Date().toISOString();
+    const records = await this.buildRecords();
+    const effectiveValues = await this.getEffectiveValueMap();
+    await this.runtime.applyManagedApiKeys(effectiveValues);
+    await this.runtime.rpcRouter.warm();
+    const rpcHealth = new Map(this.runtime.rpcRouter.getHealthSnapshot().map((entry) => [entry.endpointKey, entry]));
+
+    const results = await Promise.all(
+      records.map(async (record) => {
+        if (!record.enabled) {
+          return this.buildTestResult(record.key, "skipped", "Disabled in dashboard.", testedAt);
+        }
+
+        if (!record.hasValue) {
+          return this.buildTestResult(record.key, "invalid", "No value configured.", testedAt);
+        }
+
+        if (record.category === "rpc") {
+          const runtimeKey = buildRuntimeRpcKey(record);
+          const health = runtimeKey ? rpcHealth.get(runtimeKey) : undefined;
+
+          if (!health) {
+            return this.buildTestResult(record.key, "invalid", "Runtime endpoint is missing for this key.", testedAt);
+          }
+
+          if (health.live) {
+            return this.buildTestResult(record.key, "valid", `RPC check passed in ${health.latencyMs}ms.`, testedAt);
+          }
+
+          return this.buildTestResult(record.key, "invalid", health.lastError ?? "RPC check failed.", testedAt);
+        }
+
+        return this.testFlashbotsRecord(record.key, effectiveValues[record.key], effectiveValues, testedAt);
+      })
+    );
+
+    return {
+      testedAt,
+      summary: {
+        valid: results.filter((entry) => entry.status === "valid").length,
+        invalid: results.filter((entry) => entry.status === "invalid").length,
+        skipped: results.filter((entry) => entry.status === "skipped").length
+      },
+      results
+    };
+  }
+
   private async buildRecords(): Promise<ApiKeyRecord[]> {
     const stored = new Map((await this.database.listApiCredentials()).map((entry) => [entry.key, entry]));
     const envValues = this.config.getManagedApiKeyValues();
@@ -270,6 +327,58 @@ export class ApiKeysService implements OnModuleInit {
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
   }
+
+  private buildTestResult(key: ManagedApiKey, status: ApiKeyTestResult["status"], message: string, testedAt: string): ApiKeyTestResult {
+    return { key, status, message, testedAt };
+  }
+
+  private async testFlashbotsRecord(
+    key: ManagedApiKey,
+    value: string | undefined,
+    values: ManagedApiKeyValues,
+    testedAt: string
+  ): Promise<ApiKeyTestResult> {
+    if (!value) {
+      return this.buildTestResult(key, "invalid", "No value configured.", testedAt);
+    }
+
+    if (key === "FLASHBOTS_AUTH_PRIVATE_KEY") {
+      try {
+        new FlashbotsBundleClient(values.FLASHBOTS_RELAY_URL ?? "https://relay.flashbots.net", value);
+        return this.buildTestResult(
+          key,
+          "valid",
+          values.FLASHBOTS_RELAY_URL ? "Private key format looks valid." : "Private key format looks valid, but relay URL is missing.",
+          testedAt
+        );
+      } catch (error) {
+        return this.buildTestResult(key, "invalid", error instanceof Error ? error.message : "Invalid Flashbots auth key.", testedAt);
+      }
+    }
+
+    try {
+      new URL(value);
+    } catch {
+      return this.buildTestResult(key, "invalid", "Relay URL is not a valid URL.", testedAt);
+    }
+
+    try {
+      const response = await fetch(value, {
+        method: "GET",
+        signal: AbortSignal.timeout(6_000),
+        cache: "no-store"
+      });
+
+      return this.buildTestResult(
+        key,
+        response.status < 500 ? "valid" : "invalid",
+        response.status < 500 ? `Relay reachable (${response.status}).` : `Relay returned ${response.status}.`,
+        testedAt
+      );
+    } catch (error) {
+      return this.buildTestResult(key, "invalid", error instanceof Error ? error.message : "Relay check failed.", testedAt);
+    }
+  }
 }
 
 function maskValue(kind: ApiKeyDescriptor["kind"], value: string): string {
@@ -288,4 +397,12 @@ function maskValue(kind: ApiKeyDescriptor["kind"], value: string): string {
   }
 
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function buildRuntimeRpcKey(record: Pick<ApiKeyRecord, "category" | "chain" | "provider" | "transport">): string | null {
+  if (record.category !== "rpc" || !record.chain || !record.transport) {
+    return null;
+  }
+
+  return `${record.chain}-${record.provider}-${record.transport === "ws" ? "ws" : "http"}`;
 }

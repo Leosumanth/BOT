@@ -147,6 +147,25 @@ export interface ApiKeysDashboardResponse {
   };
 }
 
+export type ApiKeyTestStatus = "valid" | "invalid" | "skipped";
+
+export interface ApiKeyTestResult {
+  key: ManagedApiKey;
+  status: ApiKeyTestStatus;
+  message: string;
+  testedAt: string;
+}
+
+export interface ApiKeyTestResponse {
+  testedAt: string;
+  summary: {
+    valid: number;
+    invalid: number;
+    skipped: number;
+  };
+  results: ApiKeyTestResult[];
+}
+
 export interface SystemOverview {
   service: string;
   ok: boolean;
