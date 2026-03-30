@@ -218,7 +218,7 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
     const duplicate = this.findStoredConfigBySecret(existingProviderConfigs, value);
 
     if (duplicate) {
-      return this.requireDashboardConfig(duplicate.id);
+      throw new BadRequestException(`${provider.label} key already exists. Use Edit on the saved key if you want to replace it.`);
     }
 
     const createdId = randomUUID();
@@ -273,7 +273,7 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       const duplicate = this.findStoredConfigBySecret(siblingConfigs, nextValue);
 
       if (duplicate) {
-        throw new BadRequestException(`${provider.label} key is already saved in this provider pool.`);
+        throw new BadRequestException(`${provider.label} key already exists. Use Edit on the saved key if you want to replace it.`);
       }
     }
 

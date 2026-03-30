@@ -106,14 +106,14 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       return await action();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to complete this API action.";
-      setFeedback(message === "Internal server error" ? "Server could not complete that API request. Check backend logs or provider settings." : message);
+      setFeedback(message === "Internal server error" ? "Request failed unexpectedly. Please try again. If it keeps happening, check backend logs." : message);
       return null;
     } finally {
       setBusyKey(null);
     }
   }
 
-  function updateDraft(provider: ApiProviderId, value: string): void {
+  function updateDraft(provider: ApiProviderId, value: string, clearFeedback = true): void {
     setDrafts((current) => ({
       ...current,
       [provider]: value
@@ -122,6 +122,9 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       ...current,
       [provider]: null
     }));
+    if (clearFeedback) {
+      setFeedback(null);
+    }
   }
 
   function startAdd(provider: ApiProviderId): void {
@@ -153,7 +156,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       ...current,
       [provider]: null
     }));
-    setFeedback(`Paste a replacement ${providerLabel(provider)} key, test it, then save.`);
+    setFeedback(`Paste a replacement ${providerLabel(provider)} key, verify it, then save.`);
   }
 
   function getProviderConfigs(provider: ApiProviderId): ApiConfigRecord[] {
@@ -177,7 +180,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     }
 
     if (!draftTest?.ok) {
-      setFeedback(`Test the ${label} key successfully before saving it.`);
+      setFeedback(`Verify the ${label} key successfully before saving it.`);
       return;
     }
 
@@ -192,19 +195,14 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           })
         });
       } else {
-        const stored = await backendFetch<ApiConfigRecord>("/api-keys/configs", {
+        await backendFetch<ApiConfigRecord>("/api-keys/configs", {
           method: "POST",
           body: JSON.stringify({
             provider,
             value
           } satisfies ApiConfigCreateRequest)
         });
-
-        const alreadySaved = existingStoredConfigs.some((entry) => entry.id === stored.id);
-
-        const next = await refreshDashboard(
-          alreadySaved ? `${label} key is already saved.` : existingCount > 0 ? `${label} backup key saved.` : `${label} key saved.`
-        );
+        const next = await refreshDashboard(existingCount > 0 ? `${label} backup key saved.` : `${label} key saved.`);
         return next;
       }
 
@@ -213,7 +211,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     });
 
     if (saved) {
-      updateDraft(provider, "");
+      updateDraft(provider, "", false);
       setDraftTests((current) => ({
         ...current,
         [provider]: null
@@ -306,7 +304,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     });
 
     if (removed) {
-      updateDraft(config.provider, "");
+      updateDraft(config.provider, "", false);
       setDraftTests((current) => ({
         ...current,
         [config.provider]: null
@@ -326,12 +324,12 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           <p className="text-xs font-semibold uppercase tracking-[0.32em] text-[#dcc39b]/80">API Keys</p>
           <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-[#fffaf2] md:text-3xl">Store keys and stay ahead of provider limits.</h1>
           <p className="max-w-3xl text-sm leading-6 text-stone-300">
-            Paste a key, test it first, then save it. Saving another tested key for the same provider adds it as a backup while the backend handles health checks,
+            Paste a key, verify it first, then save it. Saving another verified key for the same provider adds it as a backup while the backend handles health checks,
             failover, recovery, and automation behavior.
           </p>
           <div className="rounded-[1.2rem] border border-[#d4b07a]/10 bg-[#f3e3c5]/[0.05] px-4 py-3 text-sm text-stone-300">
             {feedback ??
-              "Tip: providers with strict quotas should have a spare key ready. Test the draft first, save only passing keys, and add another passing key later if you want a backup."}
+              "Tip: providers with strict quotas should have a spare key ready. Verify the draft first, save only passing keys, and add another passing key later if you want a backup."}
           </div>
         </div>
       </section>
@@ -431,7 +429,7 @@ function ProviderKeyCard({
       <CardContent className="space-y-3 px-5 pb-5">
         {editTargetId ? (
           <div className="rounded-[1rem] border border-[#d4b07a]/12 bg-[#231d19] px-3 py-2 text-xs uppercase tracking-[0.18em] text-[#e4cfad]">
-            Edit mode active. Test the replacement key, then click Save.
+            Edit mode active. Verify the replacement key, then click Save.
           </div>
         ) : null}
         {showMetaPanel ? (
@@ -514,7 +512,7 @@ function ProviderKeyCard({
             variant="ghost"
             onClick={() => void onTest(definition.provider)}
           >
-            {testBusy ? "Testing..." : "Test"}
+            {testBusy ? "Verifying..." : "Verify"}
           </Button>
           <Button
             className="h-10 bg-[#d7b07b] px-5 text-[#221812] hover:bg-[#e5c190]"
