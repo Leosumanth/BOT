@@ -10,7 +10,7 @@ import { backendFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-type SectionId = "ethereum" | "base" | "flashbots";
+type ProviderId = "alchemy" | "quicknode" | "flashbots";
 
 export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }): JSX.Element {
   const [entries, setEntries] = useState<ApiKeyRecord[]>(dashboard.entries);
@@ -46,9 +46,9 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   const selectedEntry = entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null;
   const selectedTest = selectedEntry ? testResults[selectedEntry.key] : undefined;
   const selectedStatus = selectedEntry ? getDisplayStatus(selectedEntry, selectedTest) : null;
-  const isBusy = isSaving || isDeleting || isTestingOne || isTestingAll;
   const summary = summarize(entries, testResults);
-  const sections = buildSections(entries);
+  const providerGroups = buildProviderGroups(entries, testResults);
+  const isBusy = isSaving || isDeleting || isTestingOne || isTestingAll;
 
   async function refreshEntries(): Promise<void> {
     const next = await backendFetch<ApiKeysDashboardResponse>("/api-keys");
@@ -171,60 +171,82 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-[2rem] border border-blue-100 bg-white shadow-panel">
-        <div className="grid gap-6 border-b border-blue-100 bg-[radial-gradient(circle_at_16%_18%,rgba(77,235,210,0.18),transparent_20%),radial-gradient(circle_at_84%_22%,rgba(70,82,220,0.16),transparent_24%),linear-gradient(135deg,#ffffff_0%,#f8fbff_100%)] px-6 py-7 lg:grid-cols-[1.1fr_0.9fr] lg:px-8">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <HeroChip label="Encrypted storage" />
-              <HeroChip label="Values hidden after save" />
-            </div>
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-muted-foreground">API Security Hub</p>
-              <h1 className="max-w-3xl text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
-                One place to keep provider keys clean, private, and working.
+      <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+        <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
+          <CardContent className="p-0">
+            <div className="border-b border-blue-100 bg-[radial-gradient(circle_at_18%_18%,rgba(77,235,210,0.18),transparent_20%),radial-gradient(circle_at_82%_20%,rgba(70,82,220,0.18),transparent_22%),linear-gradient(135deg,#ffffff_0%,#f7fbff_100%)] px-6 py-8 md:px-8">
+              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-muted-foreground">API Keys</p>
+              <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
+                Secure provider keys without the clutter.
               </h1>
-              <p className="max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
-                Review everything fast, replace broken keys, and keep saved secrets hidden from the UI.
+              <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
+                Replace broken keys, test providers quickly, and keep saved values hidden from the screen.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-2">
+                <HeroChip label="Encrypted storage" />
+                <HeroChip label="Hidden after save" />
+                <HeroChip label="Single-key testing" />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-4 px-6 py-5 md:px-8">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <SummaryTile label="Managed" toneClass="bg-[#3648b9]" value={String(summary.managed)} />
+                <SummaryTile label="Valid" toneClass="bg-[#2cc7b5]" value={String(summary.valid)} />
+                <SummaryTile label="Not valid" toneClass="bg-[#ef476f]" value={String(summary.invalid)} />
+                <SummaryTile label="Untested" toneClass="bg-[#f4a62a]" value={String(summary.untested)} />
+              </div>
+
+              <div className="rounded-[1.5rem] border border-blue-100 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+                {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Select any key below to manage it.")}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="overflow-hidden border-blue-100 bg-white shadow-panel">
+          <CardContent className="flex h-full flex-col justify-between gap-6 p-6 md:p-8">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Quick actions</p>
+              <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">Keep every provider ready.</h2>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                Run a full health pass after saving changes and remove stored overrides you no longer trust.
               </p>
             </div>
-          </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <SummaryTile label="Managed" toneClass="bg-[#3648b9]" value={String(summary.managed)} />
-            <SummaryTile label="Valid" toneClass="bg-[#2cc7b5]" value={String(summary.valid)} />
-            <SummaryTile label="Not valid" toneClass="bg-[#ef476f]" value={String(summary.invalid)} />
-            <SummaryTile label="Untested" toneClass="bg-[#f4a62a]" value={String(summary.untested)} />
-          </div>
-        </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <ActionTile label="Providers tracked" value={`${providerGroups.length}`} hint="Grouped boards" />
+              <ActionTile label="Saved overrides" value={`${entries.filter((entry) => entry.source === "database").length}`} hint="Database backed" />
+            </div>
 
-        <div className="flex flex-col gap-4 px-6 py-5 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-          <div className="rounded-2xl border border-blue-100 bg-muted/35 px-4 py-3 text-sm text-muted-foreground">
-            {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Select a key to save, test, or delete its stored override.")}
-          </div>
-          <Button className="rounded-full px-6" disabled={isBusy} size="lg" type="button" onClick={handleTestAll}>
-            {isTestingAll ? "Testing..." : "Test all keys"}
-          </Button>
-        </div>
+            <Button className="h-12 rounded-full px-6" disabled={isBusy} size="lg" type="button" onClick={handleTestAll}>
+              {isTestingAll ? "Testing..." : "Test all keys"}
+            </Button>
+          </CardContent>
+        </Card>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[1.12fr_0.88fr]">
         <div className="space-y-5">
-          {sections.map((section) => (
-            <Card key={section.id} className="overflow-hidden border-blue-100 bg-white shadow-panel">
-              <CardHeader className="border-b border-blue-100/80 bg-[linear-gradient(180deg,rgba(248,251,255,0.9),rgba(255,255,255,1))] pb-5">
+          {providerGroups.map((group) => (
+            <Card key={group.id} className="overflow-hidden border-blue-100 bg-white shadow-panel">
+              <CardHeader className={cn("border-b pb-5", group.headerClass)}>
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">{section.kicker}</p>
-                    <CardTitle className="mt-2 text-2xl text-foreground">{section.title}</CardTitle>
-                    <p className="mt-2 text-sm text-muted-foreground">{section.description}</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">{group.kicker}</p>
+                    <CardTitle className="mt-2 text-2xl text-foreground">{group.title}</CardTitle>
                   </div>
-                  <div className={cn("rounded-[1.25rem] px-4 py-3 text-sm font-semibold", section.countClass)}>
-                    {section.entries.length} keys
-                  </div>
+                  <div className={cn("rounded-[1.25rem] px-4 py-3 text-sm font-semibold", group.countClass)}>{group.entries.length} keys</div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <MiniStat label="Valid" value={String(group.summary.valid)} />
+                  <MiniStat label="Not valid" value={String(group.summary.invalid)} />
+                  <MiniStat label="Untested" value={String(group.summary.untested)} />
                 </div>
               </CardHeader>
+
               <CardContent className="grid gap-3 p-4 md:grid-cols-2">
-                {section.entries.map((entry) => {
+                {group.entries.map((entry) => {
                   const active = selectedEntry?.key === entry.key;
                   const status = getDisplayStatus(entry, testResults[entry.key]);
 
@@ -247,15 +269,14 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                             <StatusPill label={status.label} tone={status.tone} />
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2">
-                            <MetaPill label={providerLabel(entry.provider)} />
                             {entry.chain ? <MetaPill label={chainLabel(entry.chain)} /> : null}
                             {entry.transport ? <MetaPill label={entry.transport.toUpperCase()} /> : null}
+                            <MetaPill label={getSourceLabel(entry)} />
                           </div>
                         </div>
                       </div>
 
                       <p className="mt-4 truncate font-mono text-[11px] text-muted-foreground">{entry.key}</p>
-                      <p className="mt-2 text-xs text-muted-foreground">{getSourceLabel(entry)}</p>
                     </button>
                   );
                 })}
@@ -280,7 +301,6 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
                   <div className="flex flex-wrap gap-2">
                     <HeroChip label={providerLabel(selectedEntry.provider)} />
-                    <HeroChip label={getSourceLabel(selectedEntry)} />
                     {selectedEntry.chain ? <HeroChip label={chainLabel(selectedEntry.chain)} /> : null}
                     {selectedEntry.transport ? <HeroChip label={selectedEntry.transport.toUpperCase()} /> : null}
                   </div>
@@ -295,21 +315,20 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                 <>
                   <div className="rounded-[1.75rem] border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] p-5">
                     <label className="space-y-2 text-sm font-medium text-foreground">
-                      <span>Paste new value</span>
+                      <span>New value</span>
                       <Input
                         autoCapitalize="none"
                         autoComplete="new-password"
                         autoCorrect="off"
                         className="h-12 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
-                        placeholder={selectedEntry.kind === "url" ? "Paste endpoint or provider URL" : "Paste secret key"}
+                        placeholder={selectedEntry.kind === "url" ? "Paste provider URL" : "Paste secret key"}
                         spellCheck={false}
                         type="password"
                         value={draftValue}
                         onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftValue(event.target.value)}
                       />
                     </label>
-
-                    <p className="mt-3 text-xs leading-5 text-muted-foreground">Saved values are encrypted and never rendered back into the UI.</p>
+                    <p className="mt-3 text-xs leading-5 text-muted-foreground">Stored values remain encrypted and are never rendered back into the dashboard.</p>
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -336,14 +355,12 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                       <p className="text-sm font-semibold text-foreground">Validation</p>
                       {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
                     </div>
-                    <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                      {selectedTest?.message ?? "No recent test for this key yet."}
-                    </p>
+                    <p className="mt-3 text-sm leading-6 text-muted-foreground">{selectedTest?.message ?? "No recent test for this key yet."}</p>
                   </div>
                 </>
               ) : (
                 <div className="rounded-[1.5rem] border border-dashed border-border p-6 text-sm text-muted-foreground">
-                  Choose a key card to edit it here.
+                  Choose a key card to edit, test, or remove its saved value.
                 </div>
               )}
             </CardContent>
@@ -396,42 +413,77 @@ function summarize(
   };
 }
 
-function buildSections(entries: ApiKeyRecord[]): Array<{
-  id: SectionId;
+function summarizeGroup(
+  entries: ApiKeyRecord[],
+  testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
+): {
+  valid: number;
+  invalid: number;
+  untested: number;
+} {
+  return entries.reduce(
+    (accumulator, entry) => {
+      const status = getDisplayStatus(entry, testResults[entry.key]);
+
+      if (status.tone === "valid") {
+        accumulator.valid += 1;
+      } else if (status.tone === "invalid") {
+        accumulator.invalid += 1;
+      } else {
+        accumulator.untested += 1;
+      }
+
+      return accumulator;
+    },
+    { valid: 0, invalid: 0, untested: 0 }
+  );
+}
+
+function buildProviderGroups(
+  entries: ApiKeyRecord[],
+  testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
+): Array<{
+  id: ProviderId;
   kicker: string;
   title: string;
-  description: string;
+  headerClass: string;
   countClass: string;
   entries: ApiKeyRecord[];
+  summary: { valid: number; invalid: number; untested: number };
 }> {
-  const sections = [
+  const groups = [
     {
-      id: "ethereum" as const,
-      kicker: "Mainnet",
-      title: "Ethereum routes",
-      description: "Primary and backup providers for Ethereum reads and subscriptions.",
+      id: "alchemy" as const,
+      kicker: "Provider",
+      title: "Alchemy",
+      headerClass: "bg-[linear-gradient(135deg,#f7fbff,#eef2ff)]",
       countClass: "bg-[#eef2ff] text-[#3648b9]",
-      entries: entries.filter((entry) => entry.chain === "ethereum")
+      entries: entries.filter((entry) => entry.provider === "alchemy")
     },
     {
-      id: "base" as const,
-      kicker: "Network",
-      title: "Base routes",
-      description: "Provider coverage for Base transactions, reads, and websocket flow.",
+      id: "quicknode" as const,
+      kicker: "Provider",
+      title: "QuickNode",
+      headerClass: "bg-[linear-gradient(135deg,#f7fffe,#ecfdf9)]",
       countClass: "bg-[#ecfdf9] text-[#0f766e]",
-      entries: entries.filter((entry) => entry.chain === "base")
+      entries: entries.filter((entry) => entry.provider === "quicknode")
     },
     {
       id: "flashbots" as const,
       kicker: "Private flow",
       title: "Flashbots",
-      description: "Relay and auth keys used when private bundle submission is enabled.",
-      countClass: "bg-[#fff7ed] text-[#c2410c]",
-      entries: entries.filter((entry) => entry.category === "flashbots")
+      headerClass: "bg-[linear-gradient(135deg,#fffaf5,#fff1e6)]",
+      countClass: "bg-[#fff1e6] text-[#c2410c]",
+      entries: entries.filter((entry) => entry.provider === "flashbots")
     }
   ];
 
-  return sections.filter((section) => section.entries.length > 0);
+  return groups
+    .filter((group) => group.entries.length > 0)
+    .map((group) => ({
+      ...group,
+      summary: summarizeGroup(group.entries, testResults)
+    }));
 }
 
 function getDisplayStatus(
@@ -477,6 +529,25 @@ function SummaryTile({
   );
 }
 
+function ActionTile({ label, value, hint }: { label: string; value: string; hint: string }): JSX.Element {
+  return (
+    <div className="rounded-[1.5rem] border border-blue-100 bg-[linear-gradient(135deg,#ffffff,#f7fbff)] p-5">
+      <p className="text-sm font-medium text-muted-foreground">{label}</p>
+      <p className="mt-3 text-3xl font-semibold text-foreground">{value}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="rounded-[1.25rem] border border-white/80 bg-white/82 px-4 py-3">
+      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-lg font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
 function StatusPill({
   label,
   tone
@@ -503,7 +574,7 @@ function MetaPill({ label }: { label: string }): JSX.Element {
 }
 
 function HeroChip({ label }: { label: string }): JSX.Element {
-  return <span className="rounded-full border border-blue-100 bg-white/90 px-3 py-1 text-xs font-medium text-primary">{label}</span>;
+  return <span className="rounded-full border border-blue-100 bg-white/92 px-3 py-1 text-xs font-medium text-primary">{label}</span>;
 }
 
 function providerLabel(provider: ApiKeyRecord["provider"]): string {
@@ -534,11 +605,11 @@ function chainLabel(chain: ApiKeyRecord["chain"]): string {
 function getSourceLabel(entry: ApiKeyRecord): string {
   switch (entry.source) {
     case "database":
-      return "Saved in dashboard";
+      return "Saved override";
     case "env":
-      return "Using environment value";
+      return "Environment value";
     case "default":
-      return "Using default value";
+      return "Default value";
     case "unset":
       return "Not configured";
     default:
