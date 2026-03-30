@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createRealtimeAuthToken, hasDashboardSession } from "@/lib/auth";
+import { createRealtimeAuthToken } from "@/lib/auth-core";
+import { hasDashboardSession } from "@/lib/dashboard-session";
 
 export async function GET(): Promise<NextResponse> {
   try {

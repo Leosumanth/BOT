@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getServerAdminApiToken, getServerBackendApiBaseUrl, hasDashboardSession } from "@/lib/auth";
+import { getServerAdminApiToken, getServerBackendApiBaseUrl } from "@/lib/auth-core";
+import { hasDashboardSession } from "@/lib/dashboard-session";
 
 async function handleProxy(request: Request, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
   if (!(await hasDashboardSession())) {

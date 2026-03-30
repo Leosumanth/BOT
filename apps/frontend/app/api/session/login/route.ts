@@ -4,7 +4,7 @@ import {
   createDashboardSessionToken,
   getDashboardSessionCookieOptions,
   isDashboardPasswordValid
-} from "@/lib/auth";
+} from "@/lib/auth-core";
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {

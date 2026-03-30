@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { DASHBOARD_SESSION_COOKIE_NAME } from "@/lib/auth";
+import { DASHBOARD_SESSION_COOKIE_NAME } from "@/lib/auth-core";
 
 export async function POST(): Promise<NextResponse> {
   const response = NextResponse.json({ ok: true });
