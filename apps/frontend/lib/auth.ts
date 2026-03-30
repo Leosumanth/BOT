@@ -74,23 +74,31 @@ function resolveRequiredEnv(name: string, fallback?: string): string {
   return value;
 }
 
+function resolveLegacySharedSecret(): string | undefined {
+  return (
+    process.env.ADMIN_API_TOKEN?.trim() ||
+    process.env.PRIVATE_KEY_ENCRYPTION_SECRET?.trim() ||
+    process.env.ENCRYPTION_KEY?.trim()
+  );
+}
+
 function resolveDashboardPassword(): string {
-  return resolveRequiredEnv("DASHBOARD_ACCESS_PASSWORD", process.env.ADMIN_API_TOKEN);
+  return resolveRequiredEnv("DASHBOARD_ACCESS_PASSWORD", resolveLegacySharedSecret());
 }
 
 function resolveDashboardSessionSecret(): string {
-  return resolveRequiredEnv("DASHBOARD_SESSION_SECRET", process.env.PRIVATE_KEY_ENCRYPTION_SECRET);
+  return resolveRequiredEnv(
+    "DASHBOARD_SESSION_SECRET",
+    process.env.PRIVATE_KEY_ENCRYPTION_SECRET?.trim() || resolveLegacySharedSecret()
+  );
 }
 
 function resolveRealtimeSecret(): string {
-  return resolveRequiredEnv("REALTIME_AUTH_SECRET", process.env.ADMIN_API_TOKEN);
+  return resolveRequiredEnv("REALTIME_AUTH_SECRET", resolveLegacySharedSecret());
 }
 
 export function getServerAdminApiToken(): string {
-  return resolveRequiredEnv(
-    "ADMIN_API_TOKEN",
-    process.env.PRIVATE_KEY_ENCRYPTION_SECRET || process.env.ENCRYPTION_KEY
-  );
+  return resolveRequiredEnv("ADMIN_API_TOKEN", resolveLegacySharedSecret());
 }
 
 export function getServerBackendApiBaseUrl(): string {
