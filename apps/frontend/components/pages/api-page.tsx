@@ -239,16 +239,16 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
   return (
     <div className="space-y-5">
-      <section className="relative overflow-hidden rounded-[1.75rem] border border-cyan-400/20 bg-[#07111d] text-white shadow-[0_24px_60px_rgba(3,9,24,0.48)]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_30%),linear-gradient(180deg,rgba(8,15,28,0.96),rgba(4,8,18,0.98))]" />
+      <section className="relative overflow-hidden rounded-[1.75rem] border border-[#d4b07a]/18 bg-[#14110f] text-[#f7f2e9] shadow-[0_24px_60px_rgba(16,11,7,0.42)]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(214,176,122,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(181,119,83,0.14),transparent_32%),linear-gradient(180deg,rgba(22,18,15,0.98),rgba(11,9,8,0.98))]" />
         <div className="relative space-y-3 p-5 md:p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.32em] text-cyan-200/75">API Keys</p>
-          <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-white md:text-3xl">Store keys and stay ahead of provider limits.</h1>
-          <p className="max-w-3xl text-sm leading-6 text-slate-300">
+          <p className="text-xs font-semibold uppercase tracking-[0.32em] text-[#dcc39b]/80">API Keys</p>
+          <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-[#fffaf2] md:text-3xl">Store keys and stay ahead of provider limits.</h1>
+          <p className="max-w-3xl text-sm leading-6 text-stone-300">
             Paste a key, test it first, then save it. Saving another tested key for the same provider adds it as a backup while the backend handles health checks,
             failover, recovery, and automation behavior.
           </p>
-          <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-slate-300">
+          <div className="rounded-[1.2rem] border border-[#d4b07a]/10 bg-[#f3e3c5]/[0.05] px-4 py-3 text-sm text-stone-300">
             {feedback ??
               "Tip: providers with strict quotas should have a spare key ready. Test the draft first, save only passing keys, and add another passing key later if you want a backup."}
           </div>
@@ -321,19 +321,19 @@ function ProviderKeyCard({
   );
 
   return (
-    <Card className="rounded-[1.75rem] border-white/10 bg-[#07111d] text-white shadow-[0_18px_40px_rgba(2,8,20,0.36)]">
+    <Card className="rounded-[1.75rem] border-[#d4b07a]/10 bg-[#11100e] text-[#f7f2e9] shadow-[0_18px_40px_rgba(18,12,8,0.3)]">
       <CardHeader className="px-5 pb-2 pt-5">
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1.5">
-            <CardTitle className="text-lg text-white">{definition.label}</CardTitle>
-            <p className="text-[13px] leading-5 text-slate-400">{definition.description}</p>
+            <CardTitle className="text-lg text-[#fffaf2]">{definition.label}</CardTitle>
+            <p className="text-[13px] leading-5 text-stone-400">{definition.description}</p>
           </div>
           <StatusBadge label={observedConfig ? statusLabel(observedConfig.status) : "Standby"} tone={observedConfig ? statusTone(observedConfig.status) : "neutral"} />
         </div>
       </CardHeader>
       <CardContent className="space-y-3 px-5 pb-5">
         {showMetaPanel ? (
-          <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+          <div className="rounded-[1.2rem] border border-[#d4b07a]/10 bg-[#f5ead8]/[0.04] px-4 py-3 text-sm text-stone-300">
             {draftTest ? (
               <p className={cn("font-medium", draftTest.ok ? "text-emerald-200" : "text-rose-200")}>
                 Draft test: {draftTest.ok ? "Passed" : "Failed"}
@@ -343,16 +343,16 @@ function ProviderKeyCard({
             {draftTest?.health.failureReason ? <p className="mt-2 text-rose-200">{draftTest.health.failureReason}</p> : null}
             {storedConfig ? (
               <p className={draftTest ? "mt-2" : ""}>
-                Saved keys: <span className="text-white">{storedCount}</span>
+                Saved keys: <span className="text-[#fffaf2]">{storedCount}</span>
               </p>
             ) : null}
             {storedConfigs.length ? (
               <div className="mt-2 space-y-2">
                 {storedConfigs.map((config, index) => (
-                  <div key={config.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/10 px-3 py-2">
+                  <div key={config.id} className="flex items-center justify-between gap-3 rounded-xl border border-[#d4b07a]/10 bg-[#0d0b09] px-3 py-2">
                     <div className="min-w-0">
-                      <p className="text-xs uppercase tracking-[0.16em] text-slate-400">{index === 0 ? "Primary" : `Backup ${index}`}</p>
-                      <p className="truncate font-mono text-xs text-white">{config.secretMask}</p>
+                      <p className="text-xs uppercase tracking-[0.16em] text-stone-500">{index === 0 ? "Primary" : `Backup ${index}`}</p>
+                      <p className="truncate font-mono text-xs text-[#fffaf2]">{config.secretMask}</p>
                     </div>
                     <StatusBadge label={statusLabel(config.status)} tone={statusTone(config.status)} />
                   </div>
@@ -361,9 +361,9 @@ function ProviderKeyCard({
             ) : null}
             {observedConfig?.health.lastCheckedAt || observedConfig ? (
               <p className={storedConfig || draftTest ? "mt-2" : ""}>
-                Last check: <span className="text-white">{formatDateTime(observedConfig?.health.lastCheckedAt)}</span>
+                Last check: <span className="text-[#fffaf2]">{formatDateTime(observedConfig?.health.lastCheckedAt)}</span>
                 {" | "}
-                Latency: <span className="text-white">{formatLatency(observedConfig?.health.latencyMs)}</span>
+                Latency: <span className="text-[#fffaf2]">{formatLatency(observedConfig?.health.latencyMs)}</span>
               </p>
             ) : null}
             {observedConfig?.source === "environment" && !storedConfig ? (
@@ -375,7 +375,7 @@ function ProviderKeyCard({
         ) : null}
 
         <Input
-          className="h-11 border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
+          className="h-11 border-[#d4b07a]/10 bg-[#0b0908] text-[#fffaf2] placeholder:text-stone-500"
           placeholder={storedConfig ? `Paste another ${definition.label} key to add a backup` : definition.placeholder}
           type="password"
           value={draftValue}
@@ -384,7 +384,7 @@ function ProviderKeyCard({
 
         <div className="flex flex-wrap gap-3">
           <Button
-            className="h-10 bg-cyan-300 px-5 text-slate-950 hover:bg-cyan-200"
+            className="h-10 bg-[#d7b07b] px-5 text-[#221812] hover:bg-[#e5c190]"
             disabled={!draftValue.trim() || !testedDraftValid || saveBusy}
             type="button"
             onClick={() => void onSave(definition.provider)}
@@ -392,7 +392,7 @@ function ProviderKeyCard({
             {saveBusy ? "Saving..." : "Save"}
           </Button>
           <Button
-            className="h-10 border border-white/10 bg-white/5 px-5 text-white hover:bg-white/10"
+            className="h-10 border border-[#d4b07a]/10 bg-[#1b1714] px-5 text-[#f3eadf] hover:bg-[#25201c]"
             disabled={(!draftValue.trim() && !observedConfig) || testBusy}
             type="button"
             variant="ghost"
@@ -401,7 +401,7 @@ function ProviderKeyCard({
             {testBusy ? "Testing..." : "Test"}
           </Button>
           <Button
-            className="h-10 border border-rose-300/20 bg-rose-300/10 px-5 text-rose-100 hover:bg-rose-300/15"
+            className="h-10 border border-[#b97867]/20 bg-[#41241e] px-5 text-[#f2c1b7] hover:bg-[#55322b]"
             disabled={!storedCount || deleteBusy}
             type="button"
             variant="ghost"
@@ -420,11 +420,11 @@ function StatusBadge({ label, tone }: { label: string; tone: "success" | "warnin
     <span
       className={cn(
         "inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em]",
-        tone === "success" && "border-emerald-300/20 bg-emerald-300/12 text-emerald-100",
-        tone === "warning" && "border-amber-300/20 bg-amber-300/12 text-amber-100",
-        tone === "danger" && "border-rose-300/20 bg-rose-300/12 text-rose-100",
-        tone === "info" && "border-cyan-300/20 bg-cyan-300/12 text-cyan-100",
-        tone === "neutral" && "border-white/12 bg-white/[0.05] text-slate-200"
+        tone === "success" && "border-emerald-300/20 bg-emerald-300/10 text-emerald-200",
+        tone === "warning" && "border-[#d7b07b]/20 bg-[#d7b07b]/12 text-[#f4dfbd]",
+        tone === "danger" && "border-[#b97867]/24 bg-[#b97867]/12 text-[#f2c1b7]",
+        tone === "info" && "border-[#c59a67]/20 bg-[#c59a67]/12 text-[#f1d8b4]",
+        tone === "neutral" && "border-[#d4b07a]/14 bg-[#f3e3c5]/[0.05] text-[#eadbc4]"
       )}
     >
       {label}
