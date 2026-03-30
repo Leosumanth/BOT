@@ -28,7 +28,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }): JSX.Eleme
 
   function signOut(): void {
     startTransition(async () => {
-      await fetch("/api/session/logout", {
+      await fetch("/dashboard-api/session/logout", {
         method: "POST"
       }).catch(() => undefined);
 

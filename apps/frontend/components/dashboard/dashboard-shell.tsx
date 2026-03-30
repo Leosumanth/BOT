@@ -54,7 +54,7 @@ export function DashboardShell({ initialData }: DashboardShellProps): JSX.Elemen
 
     async function connect(): Promise<void> {
       try {
-        const tokenResponse = await fetch("/api/socket-token", {
+        const tokenResponse = await fetch("/dashboard-api/socket-token", {
           cache: "no-store"
         });
         if (!tokenResponse.ok) {

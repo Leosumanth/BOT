@@ -18,7 +18,7 @@ export default function LoginPage(): JSX.Element {
 
     startTransition(async () => {
       try {
-        const response = await fetch("/api/session/login", {
+        const response = await fetch("/dashboard-api/session/login", {
           method: "POST",
           headers: {
             "content-type": "application/json"

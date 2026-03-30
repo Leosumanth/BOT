@@ -31,7 +31,7 @@ function getServerBackendApiBaseUrl(): string {
 
 function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    return "/api/backend";
+    return "/dashboard-api/backend";
   }
 
   return getServerBackendApiBaseUrl();
