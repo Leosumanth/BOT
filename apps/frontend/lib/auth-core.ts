@@ -35,6 +35,10 @@ function signEncodedPayload(encodedPayload: string, secret: string): string {
   return createHmac("sha256", secret).update(encodedPayload).digest("base64url");
 }
 
+function deriveScopedSecret(scope: string, seed: string): string {
+  return createHash("sha256").update(`${scope}:${seed}`).digest("base64url");
+}
+
 function verifySignedToken(token: string, audience: string, secret: string): boolean {
   const [encodedPayload, encodedSignature] = token.split(".");
   if (!encodedPayload || !encodedSignature) {
@@ -84,10 +88,7 @@ function resolveDashboardPassword(): string {
 }
 
 function resolveDashboardSessionSecret(): string {
-  return resolveRequiredEnv(
-    "DASHBOARD_SESSION_SECRET",
-    process.env.PRIVATE_KEY_ENCRYPTION_SECRET?.trim() || resolveLegacySharedSecret()
-  );
+  return process.env.DASHBOARD_SESSION_SECRET?.trim() || deriveScopedSecret("dashboard-session", resolveDashboardPassword());
 }
 
 function resolveRealtimeSecret(): string {

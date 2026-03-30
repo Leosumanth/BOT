@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerAdminApiToken, getServerBackendApiBaseUrl } from "@/lib/auth-core";
 import { hasDashboardSession } from "@/lib/dashboard-session";
 
+export const runtime = "nodejs";
+
 async function handleProxy(request: Request, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
   if (!(await hasDashboardSession())) {
     return NextResponse.json({ message: "Authentication required." }, { status: 401 });

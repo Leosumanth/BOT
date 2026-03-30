@@ -6,6 +6,8 @@ import {
   isDashboardPasswordValid
 } from "@/lib/auth-core";
 
+export const runtime = "nodejs";
+
 export async function POST(request: Request): Promise<NextResponse> {
   try {
     const payload = (await request.json().catch(() => null)) as { password?: string } | null;

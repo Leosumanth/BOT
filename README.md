@@ -59,6 +59,41 @@ Optional dedicated worker:
 npm run dev:worker
 ```
 
+## Local Workflow
+
+Use localhost for fast fixes, then deploy to Railway once the whole flow is green.
+
+1. Install Docker Desktop.
+2. Start local PostgreSQL and Redis with `npm run local:infra:up`.
+3. Copy `.env.example` to `.env`.
+4. Keep these local defaults in `.env`:
+   - `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mintbot`
+   - `REDIS_URL=redis://localhost:6379`
+   - `FRONTEND_URL=http://localhost:3000`
+5. Fill the required secrets in `.env`.
+6. Run `npm run local:doctor` to check for missing local variables.
+7. For fast iteration, run `npm run local:dev`.
+8. In a second terminal, run `npm run local:verify`.
+9. For Railway-like single-service testing, run `npm run local:prod`.
+10. In a second terminal, run `npm run local:verify:prod`.
+
+Expected local URLs:
+
+- Dev mode frontend: `http://localhost:3000/login`
+- Dev mode backend: `http://localhost:4000/health`
+- Embedded production-like mode: `http://localhost:4000/login`
+- Embedded production-like dashboard auth health: `http://localhost:4000/dashboard-api/health`
+
+Helper commands:
+
+- `npm run local:infra:up`
+- `npm run local:infra:down`
+- `npm run local:infra:logs`
+- `npm run local:dev`
+- `npm run local:prod`
+- `npm run local:verify`
+- `npm run local:verify:prod`
+
 ## Build
 
 ```bash

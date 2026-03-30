@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { DASHBOARD_SESSION_COOKIE_NAME } from "@/lib/auth-core";
 
+export const runtime = "nodejs";
+
 export async function POST(): Promise<NextResponse> {
   const response = NextResponse.json({ ok: true });
   response.cookies.set(DASHBOARD_SESSION_COOKIE_NAME, "", {
