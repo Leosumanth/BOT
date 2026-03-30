@@ -91,6 +91,62 @@ export interface TaskRecord {
   failedCount: number;
 }
 
+export type ManagedApiKey =
+  | "ETHEREUM_RPC_HTTP_ALCHEMY"
+  | "ETHEREUM_RPC_HTTP_QUICKNODE"
+  | "ETHEREUM_RPC_WS_ALCHEMY"
+  | "ETHEREUM_RPC_WS_QUICKNODE"
+  | "BASE_RPC_HTTP_ALCHEMY"
+  | "BASE_RPC_HTTP_QUICKNODE"
+  | "BASE_RPC_WS_ALCHEMY"
+  | "BASE_RPC_WS_QUICKNODE"
+  | "FLASHBOTS_RELAY_URL"
+  | "FLASHBOTS_AUTH_PRIVATE_KEY";
+
+export type ApiKeySource = "database" | "env" | "default" | "unset";
+export type ApiKeyCategory = "rpc" | "flashbots";
+export type ApiKeyKind = "url" | "secret";
+
+export interface ApiKeyDescriptor {
+  key: ManagedApiKey;
+  label: string;
+  category: ApiKeyCategory;
+  provider: "alchemy" | "quicknode" | "flashbots";
+  kind: ApiKeyKind;
+  description: string;
+  chain?: ChainKey;
+  transport?: RpcEndpointConfig["transport"];
+  linkedPage?: "/rpc" | "/api";
+}
+
+export interface ApiKeyRecord extends ApiKeyDescriptor {
+  source: ApiKeySource;
+  enabled: boolean;
+  hasValue: boolean;
+  valueHint: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ApiKeyUpsertRequest {
+  value?: string;
+  enabled: boolean;
+}
+
+export interface ApiKeysDashboardResponse {
+  entries: ApiKeyRecord[];
+  summary: {
+    total: number;
+    configured: number;
+    databaseOverrides: number;
+    envBacked: number;
+    disabled: number;
+    rpcConfigured: number;
+    flashbotsReady: boolean;
+    lastRefreshedAt: string;
+  };
+}
+
 export interface SystemOverview {
   service: string;
   ok: boolean;

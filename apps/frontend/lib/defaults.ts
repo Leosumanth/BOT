@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, DashboardBootstrapResponse, RpcManagementResponse, SystemOverview, TaskRecord } from "@mintbot/shared";
+import type { AnalyticsSummary, ApiKeysDashboardResponse, DashboardBootstrapResponse, RpcManagementResponse, SystemOverview, TaskRecord } from "@mintbot/shared";
 
 export const emptyDashboard: DashboardBootstrapResponse = {
   snapshot: {
@@ -29,6 +29,20 @@ export const emptyRpcManagement: RpcManagementResponse = {
   endpoints: [],
   health: [],
   rankings: []
+};
+
+export const emptyApiKeysDashboard: ApiKeysDashboardResponse = {
+  entries: [],
+  summary: {
+    total: 0,
+    configured: 0,
+    databaseOverrides: 0,
+    envBacked: 0,
+    disabled: 0,
+    rpcConfigured: 0,
+    flashbotsReady: false,
+    lastRefreshedAt: new Date(0).toISOString()
+  }
 };
 
 export const emptySystemOverview: SystemOverview = {

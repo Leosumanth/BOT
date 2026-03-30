@@ -13,7 +13,7 @@ import {
   RpcRouter
 } from "@mintbot/blockchain";
 import type { NonceStore } from "@mintbot/blockchain";
-import type { RpcEndpointConfig } from "@mintbot/shared";
+import type { ManagedApiKey, RpcEndpointConfig } from "@mintbot/shared";
 import { AdaptiveFeedbackLoop, MintStrategyEngine, WalletStrategyEngine } from "@mintbot/bot";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { DatabaseService } from "../../database/database.service.js";
@@ -49,11 +49,11 @@ export class RuntimeService implements OnModuleInit {
   readonly feedbackLoop: AdaptiveFeedbackLoop;
   readonly walletStrategy: WalletStrategyEngine;
   readonly mintStrategy: MintStrategyEngine;
-  readonly flashbots?: FlashbotsBundleClient;
-  private readonly envRpcKeys: Set<string>;
+  flashbots?: FlashbotsBundleClient;
+  private envRpcKeys: Set<string>;
 
   constructor(
-    config: AppConfigService,
+    private readonly config: AppConfigService,
     private readonly database: DatabaseService,
     queueService: QueueService
   ) {
@@ -71,8 +71,9 @@ export class RuntimeService implements OnModuleInit {
     this.feedbackLoop = new AdaptiveFeedbackLoop();
     this.walletStrategy = new WalletStrategyEngine();
     this.mintStrategy = new MintStrategyEngine();
-    this.flashbots = config.flashbotsAuthPrivateKey
-      ? new FlashbotsBundleClient(config.flashbotsRelayUrl, config.flashbotsAuthPrivateKey)
+    const flashbotsConfig = config.getFlashbotsConfig();
+    this.flashbots = flashbotsConfig.relayUrl && flashbotsConfig.authPrivateKey
+      ? new FlashbotsBundleClient(flashbotsConfig.relayUrl, flashbotsConfig.authPrivateKey)
       : undefined;
   }
 
@@ -104,5 +105,27 @@ export class RuntimeService implements OnModuleInit {
     }
 
     return removed;
+  }
+
+  async applyManagedApiKeys(values: Partial<Record<ManagedApiKey, string | undefined>>): Promise<void> {
+    const nextEnvEndpoints = this.config.getRpcEndpoints(values);
+    const nextEnvKeys = new Set(nextEnvEndpoints.map((endpoint) => endpoint.key));
+
+    for (const key of this.envRpcKeys) {
+      if (!nextEnvKeys.has(key)) {
+        this.rpcRouter.removeConfig(key);
+      }
+    }
+
+    for (const endpoint of nextEnvEndpoints) {
+      this.rpcRouter.upsertConfig(endpoint);
+    }
+
+    this.envRpcKeys = nextEnvKeys;
+
+    const flashbotsConfig = this.config.getFlashbotsConfig(values);
+    this.flashbots = flashbotsConfig.relayUrl && flashbotsConfig.authPrivateKey
+      ? new FlashbotsBundleClient(flashbotsConfig.relayUrl, flashbotsConfig.authPrivateKey)
+      : undefined;
   }
 }

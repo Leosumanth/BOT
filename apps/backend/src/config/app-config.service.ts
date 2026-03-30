@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
 import { z } from "zod";
-import type { ChainKey, RpcEndpointConfig } from "@mintbot/shared";
+import type { ChainKey, ManagedApiKey, RpcEndpointConfig } from "@mintbot/shared";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const envFileCandidates = [
@@ -40,6 +40,8 @@ const normalizedEnv = {
   BACKEND_PORT: firstDefinedEnv("BACKEND_PORT", "PORT"),
   PRIVATE_KEY_ENCRYPTION_SECRET: firstDefinedEnv("PRIVATE_KEY_ENCRYPTION_SECRET", "ENCRYPTION_KEY")
 };
+
+type ManagedApiKeyValues = Partial<Record<ManagedApiKey, string | undefined>>;
 
 const envSchema = z.object({
   NODE_ENV: z.string().default("development"),
@@ -149,29 +151,60 @@ export class AppConfigService {
     return this.env.FLASHBOTS_AUTH_PRIVATE_KEY;
   }
 
-  getRpcEndpoints(): RpcEndpointConfig[] {
+  hasManagedApiKeyEnvValue(key: ManagedApiKey): boolean {
+    return Boolean(sanitizedProcessEnv[key]);
+  }
+
+  getManagedApiKeyValues(overrides: ManagedApiKeyValues = {}): ManagedApiKeyValues {
+    return {
+      ETHEREUM_RPC_HTTP_ALCHEMY: this.env.ETHEREUM_RPC_HTTP_ALCHEMY,
+      ETHEREUM_RPC_HTTP_QUICKNODE: this.env.ETHEREUM_RPC_HTTP_QUICKNODE,
+      ETHEREUM_RPC_WS_ALCHEMY: this.env.ETHEREUM_RPC_WS_ALCHEMY,
+      ETHEREUM_RPC_WS_QUICKNODE: this.env.ETHEREUM_RPC_WS_QUICKNODE,
+      BASE_RPC_HTTP_ALCHEMY: this.env.BASE_RPC_HTTP_ALCHEMY,
+      BASE_RPC_HTTP_QUICKNODE: this.env.BASE_RPC_HTTP_QUICKNODE,
+      BASE_RPC_WS_ALCHEMY: this.env.BASE_RPC_WS_ALCHEMY,
+      BASE_RPC_WS_QUICKNODE: this.env.BASE_RPC_WS_QUICKNODE,
+      FLASHBOTS_RELAY_URL: this.env.FLASHBOTS_RELAY_URL,
+      FLASHBOTS_AUTH_PRIVATE_KEY: this.env.FLASHBOTS_AUTH_PRIVATE_KEY,
+      ...overrides
+    };
+  }
+
+  getRpcEndpoints(overrides: ManagedApiKeyValues = {}): RpcEndpointConfig[] {
+    const values = this.getManagedApiKeyValues(overrides);
+
     return [
       ...this.buildChainRpcEndpoints("ethereum", {
         http: {
-          alchemy: this.env.ETHEREUM_RPC_HTTP_ALCHEMY,
-          quicknode: this.env.ETHEREUM_RPC_HTTP_QUICKNODE
+          alchemy: values.ETHEREUM_RPC_HTTP_ALCHEMY,
+          quicknode: values.ETHEREUM_RPC_HTTP_QUICKNODE
         },
         ws: {
-          alchemy: this.env.ETHEREUM_RPC_WS_ALCHEMY,
-          quicknode: this.env.ETHEREUM_RPC_WS_QUICKNODE
+          alchemy: values.ETHEREUM_RPC_WS_ALCHEMY,
+          quicknode: values.ETHEREUM_RPC_WS_QUICKNODE
         }
       }),
       ...this.buildChainRpcEndpoints("base", {
         http: {
-          alchemy: this.env.BASE_RPC_HTTP_ALCHEMY,
-          quicknode: this.env.BASE_RPC_HTTP_QUICKNODE
+          alchemy: values.BASE_RPC_HTTP_ALCHEMY,
+          quicknode: values.BASE_RPC_HTTP_QUICKNODE
         },
         ws: {
-          alchemy: this.env.BASE_RPC_WS_ALCHEMY,
-          quicknode: this.env.BASE_RPC_WS_QUICKNODE
+          alchemy: values.BASE_RPC_WS_ALCHEMY,
+          quicknode: values.BASE_RPC_WS_QUICKNODE
         }
       })
     ];
+  }
+
+  getFlashbotsConfig(overrides: ManagedApiKeyValues = {}): { relayUrl?: string; authPrivateKey?: string } {
+    const values = this.getManagedApiKeyValues(overrides);
+
+    return {
+      relayUrl: values.FLASHBOTS_RELAY_URL,
+      authPrivateKey: values.FLASHBOTS_AUTH_PRIVATE_KEY
+    };
   }
 
   private buildChainRpcEndpoints(

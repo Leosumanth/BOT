@@ -1,14 +1,11 @@
 import type { JSX } from "react";
-import type { ContractAnalysisResult, SystemOverview } from "@mintbot/shared";
+import type { ApiKeysDashboardResponse } from "@mintbot/shared";
 import { ApiPage } from "@/components/pages/api-page";
 import { backendFetch } from "@/lib/api";
-import { emptySystemOverview } from "@/lib/defaults";
+import { emptyApiKeysDashboard } from "@/lib/defaults";
 
 export default async function ApiRoute(): Promise<JSX.Element> {
-  const [overview, contracts] = await Promise.all([
-    backendFetch<SystemOverview>("/system").catch(() => emptySystemOverview),
-    backendFetch<ContractAnalysisResult[]>("/contracts").catch(() => [])
-  ]);
+  const dashboard = await backendFetch<ApiKeysDashboardResponse>("/api-keys").catch(() => emptyApiKeysDashboard);
 
-  return <ApiPage contracts={contracts} overview={overview} />;
+  return <ApiPage dashboard={dashboard} />;
 }

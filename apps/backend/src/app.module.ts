@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AnalyticsModule } from "./modules/analytics/analytics.module.js";
+import { ApiKeysModule } from "./modules/api-keys/api-keys.module.js";
 import { BotModule } from "./modules/bot/bot.module.js";
 import { ContractsModule } from "./modules/contracts/contracts.module.js";
 import { QueueModule } from "./modules/queues/queue.module.js";
@@ -23,6 +24,7 @@ import { InfrastructureModule } from "./infrastructure.module.js";
     WalletsModule,
     ContractsModule,
     AnalyticsModule,
+    ApiKeysModule,
     TrackerModule,
     BotModule,
     TasksModule,

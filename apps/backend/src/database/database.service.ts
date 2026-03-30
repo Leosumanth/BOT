@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type {
   ContractAnalysisResult,
+  ManagedApiKey,
   MintExecutionAttempt,
   MintJobInput,
   MintJobResult,
@@ -17,6 +18,15 @@ import type {
 } from "@mintbot/shared";
 import { AppConfigService } from "../config/app-config.service.js";
 import { stringifyJson } from "../utils/json.js";
+
+interface StoredApiCredentialRecord {
+  key: ManagedApiKey;
+  valueCiphertext: string | null;
+  valueHint: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -276,6 +286,65 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.query<{ key: string }>(
       `
       delete from rpc_endpoints
+      where key = $1
+      returning key
+      `,
+      [key]
+    );
+
+    return rows.length > 0;
+  }
+
+  async upsertApiCredential(entry: {
+    key: ManagedApiKey;
+    valueCiphertext: string | null;
+    valueHint: string;
+    enabled: boolean;
+  }): Promise<StoredApiCredentialRecord> {
+    const [row] = await this.query<StoredApiCredentialRecord>(
+      `
+      insert into api_credentials (key, value_ciphertext, value_hint, enabled, created_at, updated_at)
+      values ($1, $2, $3, $4, now(), now())
+      on conflict (key)
+      do update set
+        value_ciphertext = excluded.value_ciphertext,
+        value_hint = excluded.value_hint,
+        enabled = excluded.enabled,
+        updated_at = now()
+      returning
+        key,
+        value_ciphertext as "valueCiphertext",
+        value_hint as "valueHint",
+        enabled,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      `,
+      [entry.key, entry.valueCiphertext, entry.valueHint, entry.enabled]
+    );
+
+    return row;
+  }
+
+  async listApiCredentials(): Promise<StoredApiCredentialRecord[]> {
+    return this.query<StoredApiCredentialRecord>(
+      `
+      select
+        key,
+        value_ciphertext as "valueCiphertext",
+        value_hint as "valueHint",
+        enabled,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      from api_credentials
+      order by key asc
+      `
+    );
+  }
+
+  async deleteApiCredential(key: ManagedApiKey): Promise<boolean> {
+    const rows = await this.query<{ key: ManagedApiKey }>(
+      `
+      delete from api_credentials
       where key = $1
       returning key
       `,

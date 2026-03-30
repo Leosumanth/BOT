@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import type { SystemOverview } from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
+import { RuntimeService } from "../runtime/runtime.service.js";
 
 function isPublicFrontend(frontendUrl: string): boolean {
   try {
@@ -13,7 +14,10 @@ function isPublicFrontend(frontendUrl: string): boolean {
 
 @Injectable()
 export class SystemService {
-  constructor(private readonly config: AppConfigService) {}
+  constructor(
+    private readonly config: AppConfigService,
+    private readonly runtime: RuntimeService
+  ) {}
 
   getOverview(): SystemOverview {
     return {
@@ -25,7 +29,7 @@ export class SystemService {
       socketPath: "/socket.io",
       timestamp: new Date().toISOString(),
       featureFlags: {
-        flashbots: Boolean(this.config.flashbotsAuthPrivateKey),
+        flashbots: Boolean(this.runtime.flashbots),
         rustExecutor: this.config.enableRustExecutor,
         inlineWorker: this.config.enableInlineWorker,
         mempoolTracker: this.config.enableMempoolTracker
@@ -40,6 +44,7 @@ export class SystemService {
         "/api/tasks",
         "/api/rpc",
         "/api/wallets",
+        "/api/api-keys",
         "/api/contracts",
         "/api/system"
       ]

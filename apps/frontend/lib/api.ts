@@ -42,7 +42,14 @@ export async function backendFetch<T>(path: string, init?: RequestInit): Promise
   });
 
   if (!response.ok) {
-    throw new Error(`Backend request failed with ${response.status}`);
+    const payload = await response.json().catch(() => null);
+    const message =
+      typeof payload?.message === "string"
+        ? payload.message
+        : Array.isArray(payload?.message)
+          ? payload.message.join(", ")
+          : `Backend request failed with ${response.status}`;
+    throw new Error(message);
   }
 
   const payload = await response.json();

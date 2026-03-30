@@ -135,6 +135,19 @@ create table if not exists rpc_endpoints (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists api_credentials (
+  key text primary key,
+  value_ciphertext text,
+  value_hint text not null default '',
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table api_credentials add column if not exists value_ciphertext text;
+alter table api_credentials add column if not exists value_hint text not null default '';
+alter table api_credentials add column if not exists enabled boolean not null default true;
+
 create index if not exists idx_logs_created_at on logs(created_at desc);
 create index if not exists idx_jobs_created_at on jobs(created_at desc);
 create index if not exists idx_transactions_job_id on transactions(job_id);
