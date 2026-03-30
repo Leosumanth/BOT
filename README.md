@@ -101,7 +101,7 @@ Deploy the repository root and let Railway use `/railway.json`. That build runs 
 
 - Root service config file: `/railway.json`
 - Keep `FRONTEND_URL` unset or on its localhost default so the backend does not redirect away from itself
-- Leave `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SOCKET_URL` unset in Railway so the frontend uses same-origin `/api` and Socket.IO
+- Leave `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SOCKET_URL` unset in Railway so the frontend uses the same origin for its authenticated `/dashboard-api/*` proxy routes and Socket.IO
 - Still set `ADMIN_API_TOKEN`, `REALTIME_AUTH_SECRET`, `DASHBOARD_ACCESS_PASSWORD`, and `DASHBOARD_SESSION_SECRET`
 
 ## API Surface
@@ -128,4 +128,4 @@ Deploy the repository root and let Railway use `/railway.json`. That build runs 
 - Backend API routes require the admin bearer token in `ADMIN_API_TOKEN`
 - Realtime Socket.IO connections require a short-lived signed token derived from `REALTIME_AUTH_SECRET`
 - Frontend pages are protected by a dashboard password and an HTTP-only session cookie
-- Browser API calls are proxied through authenticated Next.js route handlers so wallet secrets and backend admin credentials stay server-side
+- Browser API calls are proxied through authenticated Next.js route handlers under `/dashboard-api/*` so wallet secrets and backend admin credentials stay server-side
