@@ -1,559 +1,1030 @@
 "use client";
 
-import type { ChangeEvent, JSX } from "react";
-import { useEffect, useState } from "react";
-import type { ApiKeyRecord, ApiKeysDashboardResponse, ApiKeyTestResponse, ApiKeyTestResult } from "@mintbot/shared";
+import type { ChangeEvent, FormEvent, JSX } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ApiConfigCreateRequest,
+  ApiConfigRecord,
+  ApiConfigTestResponse,
+  ApiConfigUpdateRequest,
+  ApiKeysDashboardResponse,
+  ApiProviderId
+} from "@mintbot/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { backendFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const PROVIDER_META = {
-  opensea: {
-    title: "OpenSea",
-    subtitle: "Marketplace intelligence for collections and drops."
+type DrawerState = { mode: "create"; provider?: ApiProviderId } | { mode: "edit"; id: string } | null;
+
+type ApiFormState = {
+  provider: ApiProviderId;
+  label: string;
+  value: string;
+  endpointUrl: string;
+  priority: string;
+  maxLatencyMs: string;
+  isBackup: boolean;
+  enabled: boolean;
+  autoFailover: boolean;
+  automationEnabled: boolean;
+  notes: string;
+};
+
+const FALLBACK_PROVIDERS = [
+  {
+    provider: "opensea",
+    label: "OpenSea",
+    description: "Marketplace intelligence and drop awareness.",
+    defaultEndpointUrl: "https://api.opensea.io/api/v2/collections/cryptopunks"
   },
-  etherscan: {
-    title: "Etherscan",
-    subtitle: "Explorer access for ABI lookups and contract metadata."
+  {
+    provider: "etherscan",
+    label: "Etherscan",
+    description: "Explorer metadata and contract lookup.",
+    defaultEndpointUrl: "https://api.etherscan.io/v2/api"
   },
-  drpc: {
-    title: "dRPC",
-    subtitle: "Authenticated RPC-service credentials for infrastructure requests."
+  {
+    provider: "drpc",
+    label: "dRPC",
+    description: "Authenticated RPC-service checks for automation support.",
+    defaultEndpointUrl: "https://lb.drpc.live/ethereum"
   },
-  openai: {
-    title: "OpenAI",
-    subtitle: "AI-assisted analysis and automation features."
+  {
+    provider: "openai",
+    label: "OpenAI",
+    description: "AI-assisted automation and recovery support.",
+    defaultEndpointUrl: "https://api.openai.com/v1/models"
   }
-} satisfies Record<ApiKeyRecord["provider"], { title: string; subtitle: string }>;
+] as const satisfies Array<{
+  provider: ApiProviderId;
+  label: string;
+  description: string;
+  defaultEndpointUrl: string;
+}>;
+
+function createEmptyForm(provider: ApiProviderId = "opensea"): ApiFormState {
+  return {
+    provider,
+    label: "",
+    value: "",
+    endpointUrl: FALLBACK_PROVIDERS.find((entry) => entry.provider === provider)?.defaultEndpointUrl ?? "",
+    priority: "10",
+    maxLatencyMs: "2500",
+    isBackup: false,
+    enabled: true,
+    autoFailover: true,
+    automationEnabled: true,
+    notes: ""
+  };
+}
 
 export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }): JSX.Element {
-  const [entries, setEntries] = useState<ApiKeyRecord[]>(dashboard.entries);
-  const [selectedKey, setSelectedKey] = useState<ApiKeyRecord["key"] | null>(dashboard.entries[0]?.key ?? null);
-  const [draftValue, setDraftValue] = useState("");
+  const [data, setData] = useState<ApiKeysDashboardResponse>(dashboard);
+  const [selectedId, setSelectedId] = useState<string | null>(dashboard.configs[0]?.id ?? null);
+  const [drawer, setDrawer] = useState<DrawerState>(null);
+  const [form, setForm] = useState<ApiFormState>(createEmptyForm());
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<ApiKeyRecord["key"], ApiKeyTestResult>>({} as Record<ApiKeyRecord["key"], ApiKeyTestResult>);
-  const [lastTestedAt, setLastTestedAt] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [isTestingOne, setIsTestingOne] = useState(false);
-  const [isTestingAll, setIsTestingAll] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    setEntries(dashboard.entries);
-  }, [dashboard.entries]);
+    setData(dashboard);
+  }, [dashboard]);
 
   useEffect(() => {
-    if (!selectedKey && entries[0]) {
-      setSelectedKey(entries[0].key);
+    if (!selectedId && data.configs[0]) {
+      setSelectedId(data.configs[0].id);
       return;
     }
 
-    if (selectedKey && !entries.some((entry) => entry.key === selectedKey)) {
-      setSelectedKey(entries[0]?.key ?? null);
+    if (selectedId && !data.configs.some((config) => config.id === selectedId)) {
+      setSelectedId(data.configs[0]?.id ?? null);
     }
-  }, [entries, selectedKey]);
+  }, [data.configs, selectedId]);
 
-  useEffect(() => {
-    setDraftValue("");
-  }, [selectedKey]);
+  const selectedConfig = data.configs.find((entry) => entry.id === selectedId) ?? data.configs[0] ?? null;
+  const providerCatalog = useMemo(
+    () =>
+      FALLBACK_PROVIDERS.map((fallback) => ({
+        ...fallback,
+        runtime: data.providers.find((entry) => entry.provider === fallback.provider) ?? null
+      })),
+    [data.providers]
+  );
 
-  const selectedEntry = entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null;
-  const selectedTest = selectedEntry ? testResults[selectedEntry.key] : undefined;
-  const selectedStatus = selectedEntry ? getDisplayStatus(selectedEntry, selectedTest) : null;
-  const summary = summarize(entries, testResults);
-  const providerGroups = buildProviderGroups(entries, testResults);
-  const isBusy = isSaving || isDeleting || isTestingOne || isTestingAll;
-
-  async function refreshEntries(): Promise<void> {
+  async function refreshDashboard(nextFeedback?: string): Promise<ApiKeysDashboardResponse> {
     const next = await backendFetch<ApiKeysDashboardResponse>("/api-keys");
-    setEntries(next.entries);
+    setData(next);
+    if (nextFeedback) {
+      setFeedback(nextFeedback);
+    }
+    return next;
   }
 
-  function clearTestResult(key: ApiKeyRecord["key"]): void {
-    setTestResults((current) => {
+  async function runAction<T>(key: string, action: () => Promise<T>): Promise<T | null> {
+    setBusyKey(key);
+    try {
+      return await action();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to complete this API action.");
+      return null;
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function openCreate(provider?: ApiProviderId): void {
+    setForm(createEmptyForm(provider ?? selectedConfig?.provider ?? "opensea"));
+    setDrawer({ mode: "create", provider });
+  }
+
+  function openEdit(config: ApiConfigRecord): void {
+    setForm({
+      provider: config.provider,
+      label: config.label,
+      value: "",
+      endpointUrl: config.endpointUrl,
+      priority: String(config.priority),
+      maxLatencyMs: String(config.maxLatencyMs),
+      isBackup: config.isBackup,
+      enabled: config.enabled,
+      autoFailover: config.autoFailover,
+      automationEnabled: config.automationEnabled,
+      notes: config.notes
+    });
+    setDrawer({ mode: "edit", id: config.id });
+  }
+
+  function closeDrawer(): void {
+    setDrawer(null);
+    setForm(createEmptyForm(selectedConfig?.provider ?? "opensea"));
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    const request = {
+      provider: form.provider,
+      label: form.label.trim(),
+      value: form.value.trim(),
+      endpointUrl: form.endpointUrl.trim(),
+      priority: Number(form.priority),
+      maxLatencyMs: Number(form.maxLatencyMs),
+      isBackup: form.isBackup,
+      enabled: form.enabled,
+      autoFailover: form.autoFailover,
+      automationEnabled: form.automationEnabled,
+      notes: form.notes.trim()
+    };
+
+    const saved = await runAction(drawer?.mode === "edit" ? `save-${drawer.id}` : "create-config", async () => {
+      if (drawer?.mode === "edit") {
+        await backendFetch<ApiConfigRecord>(`/api-keys/configs/${drawer.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            label: request.label,
+            value: request.value || undefined,
+            endpointUrl: request.endpointUrl,
+            priority: request.priority,
+            maxLatencyMs: request.maxLatencyMs,
+            isBackup: request.isBackup,
+            enabled: request.enabled,
+            autoFailover: request.autoFailover,
+            automationEnabled: request.automationEnabled,
+            notes: request.notes
+          } satisfies ApiConfigUpdateRequest)
+        });
+        return refreshDashboard(`${request.label} updated.`);
+      }
+
+      await backendFetch<ApiConfigRecord>("/api-keys/configs", {
+        method: "POST",
+        body: JSON.stringify(request satisfies ApiConfigCreateRequest)
+      });
+      return refreshDashboard(`${request.label} added to the automation pool.`);
+    });
+
+    if (saved) {
+      const focusId = drawer?.mode === "edit" ? drawer.id : saved.configs.find((entry) => entry.label === request.label)?.id;
+      if (focusId) {
+        setSelectedId(focusId);
+      }
+      closeDrawer();
+    }
+  }
+
+  async function handleDelete(config: ApiConfigRecord): Promise<void> {
+    if (config.source !== "database") {
+      return;
+    }
+
+    if (!window.confirm(`Remove ${config.label} from the automation pool?`)) {
+      return;
+    }
+
+    const removed = await runAction(`delete-${config.id}`, async () => {
+      await backendFetch<{ removed: boolean }>(`/api-keys/configs/${config.id}`, {
+        method: "DELETE"
+      });
+      return refreshDashboard(`${config.label} removed.`);
+    });
+
+    if (removed && selectedId === config.id) {
+      setSelectedId(removed.configs[0]?.id ?? null);
+    }
+  }
+
+  async function handleTest(config: ApiConfigRecord): Promise<void> {
+    const result = await runAction(`test-${config.id}`, async () => {
+      await backendFetch<ApiConfigTestResponse>(`/api-keys/configs/${config.id}/test`, {
+        method: "POST"
+      });
+      return refreshDashboard(`${config.label} tested.`);
+    });
+
+    if (result) {
+      setSelectedId(config.id);
+    }
+  }
+
+  async function handleBenchmark(): Promise<void> {
+    await runAction("benchmark", async () => {
+      await backendFetch("/api-keys/maintenance/run", {
+        method: "POST"
+      });
+      await refreshDashboard("Benchmark and maintenance run completed.");
+    });
+  }
+
+  async function handleReveal(config: ApiConfigRecord): Promise<void> {
+    const response = await runAction(`reveal-${config.id}`, async () =>
+      backendFetch<{ id: string; value: string }>(`/api-keys/configs/${config.id}/secret`)
+    );
+
+    if (response) {
+      setRevealedSecrets((current) => ({
+        ...current,
+        [config.id]: response.value
+      }));
+      setSelectedId(config.id);
+    }
+  }
+
+  function handleHide(configId: string): void {
+    setRevealedSecrets((current) => {
       const next = { ...current };
-      delete next[key];
+      delete next[configId];
       return next;
     });
   }
 
-  async function handleSave(): Promise<void> {
-    if (!selectedEntry) {
-      return;
-    }
-
-    if (!draftValue.trim()) {
-      setFeedback("Enter an API key before saving.");
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      await backendFetch<ApiKeyRecord>(`/api-keys/${selectedEntry.key}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          value: draftValue.trim(),
-          enabled: true
-        })
-      });
-
-      await refreshEntries();
-      clearTestResult(selectedEntry.key);
-      setDraftValue("");
-      setFeedback(`${selectedEntry.label} saved.`);
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to save this API key.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function handleDelete(): Promise<void> {
-    if (!selectedEntry || selectedEntry.source !== "database") {
-      return;
-    }
-
-    if (!window.confirm(`Delete the saved key for ${selectedEntry.label}?`)) {
-      return;
-    }
-
-    setIsDeleting(true);
-    try {
-      await backendFetch<{ removed: boolean }>(`/api-keys/${selectedEntry.key}`, {
-        method: "DELETE"
-      });
-
-      await refreshEntries();
-      clearTestResult(selectedEntry.key);
-      setDraftValue("");
-      setFeedback(`${selectedEntry.label} deleted.`);
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to delete this API key.");
-    } finally {
-      setIsDeleting(false);
-    }
-  }
-
-  async function handleTestOne(): Promise<void> {
-    if (!selectedEntry) {
-      return;
-    }
-
-    setIsTestingOne(true);
-    try {
-      const result = await backendFetch<ApiKeyTestResult>(`/api-keys/${selectedEntry.key}/test`, {
-        method: "POST"
-      });
-
-      setTestResults((current) => ({
-        ...current,
-        [result.key]: result
-      }));
-      setLastTestedAt(result.testedAt);
-      setFeedback(`${selectedEntry.label}: ${result.status === "invalid" ? "not valid" : result.status}.`);
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to test this API key.");
-    } finally {
-      setIsTestingOne(false);
-    }
-  }
-
-  async function handleTestAll(): Promise<void> {
-    setIsTestingAll(true);
-    try {
-      const response = await backendFetch<ApiKeyTestResponse>("/api-keys/test", {
-        method: "POST"
-      });
-
-      setTestResults(
-        response.results.reduce(
-          (accumulator, result) => {
-            accumulator[result.key] = result;
-            return accumulator;
-          },
-          {} as Record<ApiKeyRecord["key"], ApiKeyTestResult>
-        )
+  async function handleCopy(config: ApiConfigRecord): Promise<void> {
+    let value = revealedSecrets[config.id];
+    if (!value) {
+      const response = await runAction(`copy-${config.id}`, async () =>
+        backendFetch<{ id: string; value: string }>(`/api-keys/configs/${config.id}/secret`)
       );
-      setLastTestedAt(response.testedAt);
-      setFeedback(`Tested all keys: ${response.summary.valid} valid, ${response.summary.invalid} not valid.`);
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to test API keys.");
-    } finally {
-      setIsTestingAll(false);
+
+      if (!response) {
+        return;
+      }
+
+      value = response.value;
+      setRevealedSecrets((current) => ({
+        ...current,
+        [config.id]: response.value
+      }));
     }
+
+    await navigator.clipboard.writeText(value);
+    setFeedback(`${config.label} copied.`);
+  }
+
+  function updateForm<K extends keyof ApiFormState>(key: K, value: ApiFormState[K]): void {
+    setForm((current) => ({ ...current, [key]: value }));
   }
 
   return (
-    <div className="space-y-4">
-      <Card className="border-blue-100 bg-white shadow-panel">
-        <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              <SummaryChip label="Managed" value={summary.managed} />
-              <SummaryChip label="Valid" tone="valid" value={summary.valid} />
-              <SummaryChip label="Not valid" tone="invalid" value={summary.invalid} />
-              <SummaryChip label="Untested" tone="warning" value={summary.untested} />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Manage integration keys from one compact view.")}
+    <div className="space-y-6">
+      <HeroSection data={data} feedback={feedback} busyKey={busyKey} onBenchmark={handleBenchmark} onCreate={openCreate} />
+
+      <section className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
+        <div className="space-y-6">
+          <ProviderGrid catalog={providerCatalog} />
+          <ConfigTable
+            busyKey={busyKey}
+            configs={data.configs}
+            revealedSecrets={revealedSecrets}
+            selectedId={selectedId}
+            onCopy={handleCopy}
+            onDelete={handleDelete}
+            onEdit={openEdit}
+            onHide={handleHide}
+            onReveal={handleReveal}
+            onSelect={setSelectedId}
+            onTest={handleTest}
+          />
+        </div>
+
+        <div className="space-y-6">
+          <ReadinessCard data={data} onBenchmark={handleBenchmark} />
+          <MaintenanceCard data={data} onBenchmark={handleBenchmark} />
+          <ConfigDetail
+            busyKey={busyKey}
+            config={selectedConfig}
+            revealedValue={selectedConfig ? revealedSecrets[selectedConfig.id] : undefined}
+            onCopy={handleCopy}
+            onDelete={handleDelete}
+            onEdit={openEdit}
+            onHide={handleHide}
+            onReveal={handleReveal}
+            onTest={handleTest}
+          />
+        </div>
+      </section>
+
+      <LogPanel logs={data.logs} />
+      {drawer ? (
+        <ConfigDrawer
+          busyKey={busyKey}
+          drawer={drawer}
+          form={form}
+          providerCatalog={providerCatalog}
+          onClose={closeDrawer}
+          onSubmit={handleSave}
+          onUpdateForm={updateForm}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function HeroSection({
+  data,
+  feedback,
+  busyKey,
+  onBenchmark,
+  onCreate
+}: {
+  data: ApiKeysDashboardResponse;
+  feedback: string | null;
+  busyKey: string | null;
+  onBenchmark: () => Promise<void>;
+  onCreate: (provider?: ApiProviderId) => void;
+}): JSX.Element {
+  const cards = [
+    { label: "Configs", value: data.summary.totalConfigs },
+    { label: "Active", value: data.summary.activeConfigs },
+    { label: "Backups", value: data.summary.backupConfigs },
+    { label: "Risk States", value: data.summary.invalidConfigs + data.summary.rateLimitedConfigs + data.summary.offlineConfigs },
+    { label: "Failovers", value: data.summary.failoverActiveProviders }
+  ];
+
+  return (
+    <section className="relative overflow-hidden rounded-[2rem] border border-cyan-400/20 bg-[#07111d] text-white shadow-[0_30px_80px_rgba(3,9,24,0.55)]">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.22),transparent_28%),radial-gradient(circle_at_top_right,rgba(56,189,248,0.18),transparent_26%),linear-gradient(180deg,rgba(8,15,28,0.96),rgba(4,8,18,0.98))]" />
+      <div className="relative space-y-6 p-6 md:p-8">
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.32em] text-cyan-200/75">Autonomous API Control</p>
+            <h1 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
+              External service APIs that benchmark themselves, fail over automatically, and stay mint-ready.
+            </h1>
+            <p className="text-sm leading-6 text-slate-300 md:text-base">
+              This page manages only external service APIs. RPC routing stays on the dedicated RPC page while this dashboard focuses on keys, health,
+              automation selection, pre-mint readiness, and recovery actions.
+            </p>
+            <p className="text-sm text-slate-400">
+              {feedback ?? `${data.readiness.summary} Last refresh ${formatDateTime(data.summary.lastRefreshedAt)}.`}
             </p>
           </div>
 
-          <Button className="rounded-full px-6" disabled={isBusy} type="button" onClick={handleTestAll}>
-            {isTestingAll ? "Testing..." : "Test all keys"}
-          </Button>
-        </CardContent>
-      </Card>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              className="border border-cyan-300/20 bg-white/10 text-white hover:bg-white/15"
+              disabled={busyKey === "benchmark"}
+              type="button"
+              variant="ghost"
+              onClick={() => void onBenchmark()}
+            >
+              {busyKey === "benchmark" ? "Benchmarking..." : "Benchmark now"}
+            </Button>
+            <Button className="bg-cyan-300 text-slate-950 hover:bg-cyan-200" type="button" onClick={() => onCreate()}>
+              Add API config
+            </Button>
+          </div>
+        </div>
 
-      <section className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
-        <div className="space-y-4">
-          {providerGroups.map((group) => (
-            <Card key={group.id} className="border-blue-100 bg-white shadow-panel">
-              <CardHeader className="border-b border-blue-100/80 pb-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <CardTitle className="text-lg text-foreground">{group.title}</CardTitle>
-                    <p className="mt-1 text-xs text-muted-foreground">{group.subtitle}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <MiniBadge label={`V ${group.summary.valid}`} tone="valid" />
-                    <MiniBadge label={`N ${group.summary.invalid}`} tone="invalid" />
-                    <MiniBadge label={`U ${group.summary.untested}`} tone="warning" />
-                  </div>
-                </div>
-              </CardHeader>
-
-              <CardContent className="space-y-2 p-3">
-                {group.entries.map((entry) => {
-                  const active = selectedEntry?.key === entry.key;
-                  const status = getDisplayStatus(entry, testResults[entry.key]);
-
-                  return (
-                    <button
-                      key={entry.key}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-3 rounded-[1.25rem] border px-4 py-3 text-left transition",
-                        active
-                          ? "border-blue-200 bg-[linear-gradient(135deg,#eef2ff,#fbfdff)] shadow-[0_12px_26px_rgba(54,72,185,0.10)]"
-                          : "border-border bg-white hover:border-blue-100 hover:bg-muted/30"
-                      )}
-                      type="button"
-                      onClick={() => setSelectedKey(entry.key)}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-foreground">{entry.label}</p>
-                          <StatusPill label={status.label} tone={status.tone} />
-                        </div>
-                        <p className="mt-1 text-xs text-muted-foreground">{[categoryLabel(entry.category), getSourceLabel(entry)].join(" | ")}</p>
-                      </div>
-                      <span className="truncate font-mono text-[11px] text-muted-foreground">{entry.key}</span>
-                    </button>
-                  );
-                })}
-              </CardContent>
-            </Card>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {cards.map((card) => (
+            <div key={card.label} className="rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 backdrop-blur">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{card.label}</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{card.value}</p>
+            </div>
           ))}
         </div>
+      </div>
+    </section>
+  );
+}
 
-        <div className="xl:sticky xl:top-28 xl:self-start">
-          <Card className="border-blue-100 bg-white shadow-panel">
-            <CardHeader className="border-b border-blue-100/80 pb-4">
-              {selectedEntry ? (
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <CardTitle className="text-lg text-foreground">{selectedEntry.label}</CardTitle>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {[providerLabel(selectedEntry.provider), categoryLabel(selectedEntry.category)].join(" | ")}
-                    </p>
-                    <p className="mt-3 text-sm text-muted-foreground">{selectedEntry.description}</p>
-                  </div>
-                  {selectedStatus ? <StatusPill label={selectedStatus.label} tone={selectedStatus.tone} /> : null}
-                </div>
-              ) : (
-                <CardTitle className="text-lg text-foreground">Select a key</CardTitle>
-              )}
-            </CardHeader>
+function ProviderGrid({
+  catalog
+}: {
+  catalog: Array<{
+    provider: ApiProviderId;
+    label: string;
+    description: string;
+    defaultEndpointUrl: string;
+    runtime: ApiKeysDashboardResponse["providers"][number] | null;
+  }>;
+}): JSX.Element {
+  return (
+    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-xl text-white">Provider health matrix</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+        {catalog.map(({ provider, label, description, runtime }) => (
+          <div key={provider} className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-white">{label}</p>
+                <p className="mt-1 text-xs text-slate-400">{description}</p>
+              </div>
+              <StatusBadge label={runtime ? readinessLabel(runtime.readiness) : "No data"} tone={runtime ? readinessTone(runtime.readiness) : "warning"} />
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <Metric label="Active" value={runtime?.activeLabel ?? "None"} />
+              <Metric label="Healthy" value={String(runtime?.healthyCount ?? 0)} />
+              <Metric label="Latency" value={formatLatency(runtime?.averageLatencyMs)} />
+              <Metric label="Success" value={formatPercent(runtime?.successRate)} />
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
 
-            <CardContent className="space-y-4 p-5">
-              {selectedEntry ? (
-                <>
-                  <label className="space-y-2 text-sm font-medium text-foreground">
-                    <span>New value</span>
-                    <Input
-                      autoCapitalize="none"
-                      autoComplete="new-password"
-                      autoCorrect="off"
-                      className="h-11 rounded-2xl border-blue-100 bg-white text-foreground placeholder:text-muted-foreground focus-visible:ring-ring"
-                      placeholder="Paste secret key"
-                      spellCheck={false}
-                      type="password"
-                      value={draftValue}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftValue(event.target.value)}
-                    />
-                  </label>
-
-                  <div className="rounded-[1.25rem] border border-blue-100 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
-                    {selectedTest?.message ?? `${selectedEntry.valueHint}. Saved values stay encrypted and are never shown back in the UI.`}
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Button className="h-11 rounded-full" disabled={isBusy} type="button" onClick={handleSave}>
-                      {isSaving ? "Saving..." : "Save"}
-                    </Button>
-                    <Button className="h-11 rounded-full" disabled={isBusy} type="button" variant="outline" onClick={handleTestOne}>
-                      {isTestingOne ? "Testing..." : "Test"}
-                    </Button>
-                  </div>
-
-                  <Button
-                    className="h-11 w-full rounded-full"
-                    disabled={isBusy || selectedEntry.source !== "database"}
-                    type="button"
-                    variant="destructive"
-                    onClick={handleDelete}
+function ConfigTable({
+  configs,
+  selectedId,
+  revealedSecrets,
+  busyKey,
+  onSelect,
+  onEdit,
+  onDelete,
+  onTest,
+  onReveal,
+  onHide,
+  onCopy
+}: {
+  configs: ApiConfigRecord[];
+  selectedId: string | null;
+  revealedSecrets: Record<string, string>;
+  busyKey: string | null;
+  onSelect: (id: string) => void;
+  onEdit: (config: ApiConfigRecord) => void;
+  onDelete: (config: ApiConfigRecord) => Promise<void>;
+  onTest: (config: ApiConfigRecord) => Promise<void>;
+  onReveal: (config: ApiConfigRecord) => Promise<void>;
+  onHide: (id: string) => void;
+  onCopy: (config: ApiConfigRecord) => Promise<void>;
+}): JSX.Element {
+  return (
+    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-xl text-white">Operational config table</CardTitle>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="min-w-[1040px] text-sm">
+          <thead className="text-left text-xs uppercase tracking-[0.2em] text-slate-400">
+            <tr>
+              <th className="pb-3 pr-4">Config</th>
+              <th className="pb-3 pr-4">Secret</th>
+              <th className="pb-3 pr-4">Status</th>
+              <th className="pb-3 pr-4">Role</th>
+              <th className="pb-3 pr-4">Latency</th>
+              <th className="pb-3 pr-4">Rate limit</th>
+              <th className="pb-3 pr-4">Score</th>
+              <th className="pb-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {configs.length ? (
+              configs.map((config) => {
+                const revealed = revealedSecrets[config.id];
+                return (
+                  <tr
+                    key={config.id}
+                    className={cn(
+                      "cursor-pointer border-t border-white/10 align-top transition",
+                      selectedId === config.id ? "bg-cyan-300/8" : "hover:bg-white/[0.035]"
+                    )}
+                    onClick={() => onSelect(config.id)}
                   >
-                    {isDeleting ? "Deleting..." : "Delete saved"}
-                  </Button>
-                </>
-              ) : (
-                <div className="rounded-[1.25rem] border border-dashed border-border p-5 text-sm text-muted-foreground">
-                  Pick a key from the left to edit it.
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                    <td className="py-4 pr-4">
+                      <p className="font-semibold text-white">{config.label}</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {providerLabel(config.provider)} | {config.source} | rank #{config.selection.rank}
+                      </p>
+                    </td>
+                    <td className="py-4 pr-4 font-mono text-xs text-slate-300">{revealed ?? config.secretMask}</td>
+                    <td className="py-4 pr-4">
+                      <StatusBadge label={statusLabel(config.status)} tone={statusTone(config.status)} />
+                    </td>
+                    <td className="py-4 pr-4 text-slate-300">{config.isBackup ? `Backup P${config.priority}` : `Primary P${config.priority}`}</td>
+                    <td className="py-4 pr-4 text-slate-300">{formatLatency(config.health.latencyMs)}</td>
+                    <td className="py-4 pr-4 text-slate-300">{formatRateLimit(config)}</td>
+                    <td className="py-4 pr-4 text-slate-300">{config.selection.value}</td>
+                    <td className="py-4">
+                      <div className="flex flex-wrap gap-2">
+                        <MiniButton busy={busyKey === `test-${config.id}`} label="Test" onClick={() => void onTest(config)} />
+                        <MiniButton label={revealed ? "Hide" : "Show"} onClick={() => (revealed ? onHide(config.id) : void onReveal(config))} />
+                        <MiniButton label="Copy" onClick={() => void onCopy(config)} />
+                        <MiniButton disabled={config.source !== "database"} label="Edit" onClick={() => onEdit(config)} />
+                        <MiniButton disabled={config.source !== "database"} label="Delete" tone="danger" onClick={() => void onDelete(config)} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            ) : (
+              <tr>
+                <td className="py-8 text-sm text-slate-400" colSpan={8}>
+                  No API configs are registered yet. Add a primary config to start automated health tracking and failover.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReadinessCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse; onBenchmark: () => Promise<void> }): JSX.Element {
+  return (
+    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
+      <CardHeader className="pb-4">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-xl text-white">Pre-mint readiness</CardTitle>
+          <StatusBadge label={readinessLabel(data.readiness.state)} tone={readinessTone(data.readiness.state)} />
         </div>
-      </section>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm text-slate-300">
+        <p>{data.readiness.summary}</p>
+        <ul className="space-y-2">
+          {data.readiness.blockers.map((entry) => (
+            <li key={entry} className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-rose-100">
+              {entry}
+            </li>
+          ))}
+          {data.readiness.warnings.map((entry) => (
+            <li key={entry} className="rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-amber-100">
+              {entry}
+            </li>
+          ))}
+          {!data.readiness.blockers.length && !data.readiness.warnings.length ? (
+            <li className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-emerald-100">
+              All required providers are healthy, benchmarked, and ready for automation.
+            </li>
+          ) : null}
+        </ul>
+        <Button className="w-full bg-white/10 text-white hover:bg-white/15" type="button" variant="ghost" onClick={() => void onBenchmark()}>
+          Refresh readiness now
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MaintenanceCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse; onBenchmark: () => Promise<void> }): JSX.Element {
+  const maintenance = data.maintenance;
+  return (
+    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
+      <CardHeader className="pb-4">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-xl text-white">Background maintenance</CardTitle>
+          <StatusBadge label={maintenance.status} tone={maintenance.status === "failed" ? "danger" : maintenance.status === "running" ? "warning" : "success"} />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm text-slate-300">
+        <p>{maintenance.summary}</p>
+        <div className="grid grid-cols-2 gap-3">
+          <Metric label="Trigger" value={maintenance.trigger} />
+          <Metric label="Checked" value={String(maintenance.checkedConfigs)} />
+          <Metric label="Healthy" value={String(maintenance.healthyConfigs)} />
+          <Metric label="Failovers" value={String(maintenance.failoversActivated)} />
+          <Metric label="Warnings" value={String(maintenance.warnings)} />
+          <Metric label="Completed" value={formatDateTime(maintenance.completedAt)} />
+        </div>
+        <Button className="w-full bg-cyan-300 text-slate-950 hover:bg-cyan-200" type="button" onClick={() => void onBenchmark()}>
+          Benchmark now
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConfigDetail({
+  config,
+  revealedValue,
+  busyKey,
+  onEdit,
+  onDelete,
+  onTest,
+  onReveal,
+  onHide,
+  onCopy
+}: {
+  config: ApiConfigRecord | null;
+  revealedValue?: string;
+  busyKey: string | null;
+  onEdit: (config: ApiConfigRecord) => void;
+  onDelete: (config: ApiConfigRecord) => Promise<void>;
+  onTest: (config: ApiConfigRecord) => Promise<void>;
+  onReveal: (config: ApiConfigRecord) => Promise<void>;
+  onHide: (id: string) => void;
+  onCopy: (config: ApiConfigRecord) => Promise<void>;
+}): JSX.Element {
+  return (
+    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-xl text-white">{config ? config.label : "Select a config"}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {config ? (
+          <div className="space-y-5 text-sm text-slate-300">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge label={statusLabel(config.status)} tone={statusTone(config.status)} />
+                <StatusBadge label={config.isBackup ? "Backup" : "Primary"} tone="info" />
+                <StatusBadge label={config.source} tone="neutral" />
+              </div>
+              <p className="text-slate-400">{config.description}</p>
+            </div>
+
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Masked secret</p>
+              <p className="mt-3 break-all font-mono text-xs text-white">{revealedValue ?? config.secretMask}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <MiniButton busy={busyKey === `test-${config.id}`} label="Test" onClick={() => void onTest(config)} />
+                <MiniButton label={revealedValue ? "Hide" : "Show"} onClick={() => (revealedValue ? onHide(config.id) : void onReveal(config))} />
+                <MiniButton label="Copy" onClick={() => void onCopy(config)} />
+                <MiniButton disabled={config.source !== "database"} label="Edit" onClick={() => onEdit(config)} />
+                <MiniButton disabled={config.source !== "database"} label="Delete" tone="danger" onClick={() => void onDelete(config)} />
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Metric label="Last checked" value={formatDateTime(config.health.lastCheckedAt)} />
+              <Metric label="Latency" value={formatLatency(config.health.latencyMs)} />
+              <Metric label="Rate limit" value={formatRateLimit(config)} />
+              <Metric label="Selection score" value={`${config.selection.value} / #${config.selection.rank}`} />
+              <Metric label="Success rate" value={formatPercent(config.memory.recentSuccessRate)} />
+              <Metric label="Failure count" value={String(config.memory.recentFailureCount)} />
+              <Metric label="Failover frequency" value={String(config.memory.failoverFrequency)} />
+              <Metric label="Recovery history" value={String(config.memory.recoverySuccessHistory)} />
+            </div>
+
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Automation decisions</p>
+              <ul className="mt-3 space-y-2 text-sm text-slate-300">
+                {config.selection.reasons.map((entry) => (
+                  <li key={entry}>• {entry}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Failure classification</p>
+              <p className="mt-3 text-white">{config.health.errorType ? errorLabel(config.health.errorType) : "No active error"}</p>
+              <p className="mt-2 text-slate-400">{config.health.failureReason ?? "The latest probe completed without a failure."}</p>
+              <p className="mt-3 break-all font-mono text-xs text-slate-500">{config.endpointUrl}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-400">Pick a config from the table to inspect health, memory, recovery status, and secret controls.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LogPanel({ logs }: { logs: ApiKeysDashboardResponse["logs"] }): JSX.Element {
+  return (
+    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-xl text-white">Automation decision log</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {logs.length ? (
+          logs.map((entry) => (
+            <div key={entry.id} className="rounded-[1.4rem] border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge label={entry.eventType} tone="info" />
+                {entry.errorType ? <StatusBadge label={errorLabel(entry.errorType)} tone="danger" /> : null}
+                <p className="text-xs text-slate-500">{formatDateTime(entry.timestamp)}</p>
+              </div>
+              <p className="mt-3 text-sm font-semibold text-white">{entry.apiName}</p>
+              <p className="mt-1 text-sm text-slate-300">{entry.message}</p>
+              <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                {entry.action} • {entry.result}
+              </p>
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-slate-400">Maintenance, failover, benchmark, and recovery decisions will appear here once the system starts observing configs.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConfigDrawer({
+  drawer,
+  form,
+  busyKey,
+  providerCatalog,
+  onClose,
+  onSubmit,
+  onUpdateForm
+}: {
+  drawer: DrawerState;
+  form: ApiFormState;
+  busyKey: string | null;
+  providerCatalog: Array<{
+    provider: ApiProviderId;
+    label: string;
+    description: string;
+    defaultEndpointUrl: string;
+    runtime: ApiKeysDashboardResponse["providers"][number] | null;
+  }>;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onUpdateForm: <K extends keyof ApiFormState>(key: K, value: ApiFormState[K]) => void;
+}): JSX.Element {
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
+      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-[#07111d] p-6 text-white shadow-[0_20px_60px_rgba(2,8,20,0.65)]">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{drawer?.mode === "edit" ? "Edit config" : "Add config"}</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">{drawer?.mode === "edit" ? "Refine automation behavior" : "Register a new external API"}</h2>
+          </div>
+          <Button className="border border-white/10 bg-white/5 text-white hover:bg-white/10" type="button" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+
+        <form className="mt-6 space-y-5" onSubmit={(event) => void onSubmit(event)}>
+          <Field label="Provider">
+            <select
+              className="h-11 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 text-sm text-white"
+              value={form.provider}
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                const provider = event.target.value as ApiProviderId;
+                const nextEndpoint = providerCatalog.find((entry) => entry.provider === provider)?.defaultEndpointUrl ?? "";
+                onUpdateForm("provider", provider);
+                onUpdateForm("endpointUrl", nextEndpoint);
+              }}
+            >
+              {providerCatalog.map((entry) => (
+                <option key={entry.provider} value={entry.provider}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Label">
+            <Input
+              className="border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
+              placeholder="Primary OpenSea key"
+              value={form.label}
+              onChange={(event) => onUpdateForm("label", event.target.value)}
+            />
+          </Field>
+
+          <Field label={drawer?.mode === "edit" ? "Replace secret (optional)" : "Secret"}>
+            <Input
+              className="border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
+              placeholder="sk_live_..."
+              type="password"
+              value={form.value}
+              onChange={(event) => onUpdateForm("value", event.target.value)}
+            />
+          </Field>
+
+          <Field label="Endpoint URL">
+            <Input
+              className="border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
+              value={form.endpointUrl}
+              onChange={(event) => onUpdateForm("endpointUrl", event.target.value)}
+            />
+          </Field>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Priority">
+              <Input className="border-white/10 bg-slate-950 text-white" value={form.priority} onChange={(event) => onUpdateForm("priority", event.target.value)} />
+            </Field>
+            <Field label="Max latency (ms)">
+              <Input
+                className="border-white/10 bg-slate-950 text-white"
+                value={form.maxLatencyMs}
+                onChange={(event) => onUpdateForm("maxLatencyMs", event.target.value)}
+              />
+            </Field>
+          </div>
+
+          <Field label="Automation notes">
+            <Textarea
+              className="min-h-[110px] border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
+              placeholder="Explain when this config should be preferred or kept as backup."
+              value={form.notes}
+              onChange={(event) => onUpdateForm("notes", event.target.value)}
+            />
+          </Field>
+
+          <ToggleRow checked={form.enabled} label="Enabled" onChange={(checked) => onUpdateForm("enabled", checked)} />
+          <ToggleRow checked={form.isBackup} label="Backup config" onChange={(checked) => onUpdateForm("isBackup", checked)} />
+          <ToggleRow checked={form.autoFailover} label="Auto failover" onChange={(checked) => onUpdateForm("autoFailover", checked)} />
+          <ToggleRow checked={form.automationEnabled} label="Automation eligible" onChange={(checked) => onUpdateForm("automationEnabled", checked)} />
+
+          <Button className="w-full bg-cyan-300 text-slate-950 hover:bg-cyan-200" disabled={Boolean(busyKey)} type="submit">
+            {busyKey ? "Saving..." : drawer?.mode === "edit" ? "Update config" : "Create config"}
+          </Button>
+        </form>
+      </div>
     </div>
   );
 }
 
-function summarize(
-  entries: ApiKeyRecord[],
-  testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
-): {
-  managed: number;
-  valid: number;
-  invalid: number;
-  untested: number;
-} {
-  let valid = 0;
-  let invalid = 0;
-  let untested = 0;
-
-  for (const entry of entries) {
-    const test = testResults[entry.key];
-
-    if (test?.status === "valid") {
-      valid += 1;
-      continue;
-    }
-
-    if (test?.status === "invalid") {
-      invalid += 1;
-      continue;
-    }
-
-    if (!entry.hasValue) {
-      invalid += 1;
-      continue;
-    }
-
-    untested += 1;
-  }
-
-  return {
-    managed: entries.length,
-    valid,
-    invalid,
-    untested
-  };
-}
-
-function summarizeGroup(
-  entries: ApiKeyRecord[],
-  testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
-): {
-  valid: number;
-  invalid: number;
-  untested: number;
-} {
-  return entries.reduce(
-    (accumulator, entry) => {
-      const status = getDisplayStatus(entry, testResults[entry.key]);
-
-      if (status.tone === "valid") {
-        accumulator.valid += 1;
-      } else if (status.tone === "invalid") {
-        accumulator.invalid += 1;
-      } else {
-        accumulator.untested += 1;
-      }
-
-      return accumulator;
-    },
-    { valid: 0, invalid: 0, untested: 0 }
+function Field({ label, children }: { label: string; children: JSX.Element }): JSX.Element {
+  return (
+    <label className="space-y-2 text-sm font-medium text-slate-300">
+      <span>{label}</span>
+      {children}
+    </label>
   );
 }
 
-function buildProviderGroups(
-  entries: ApiKeyRecord[],
-  testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
-): Array<{
-  id: ApiKeyRecord["provider"];
-  title: string;
-  subtitle: string;
-  entries: ApiKeyRecord[];
-  summary: { valid: number; invalid: number; untested: number };
-}> {
-  const groups = (Object.entries(PROVIDER_META) as Array<[ApiKeyRecord["provider"], { title: string; subtitle: string }]>).map(([provider, meta]) => ({
-    id: provider,
-    title: meta.title,
-    subtitle: meta.subtitle,
-    entries: entries.filter((entry) => entry.provider === provider)
-  }));
-
-  return groups
-    .filter((group) => group.entries.length > 0)
-    .map((group) => ({
-      ...group,
-      summary: summarizeGroup(group.entries, testResults)
-    }));
+function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }): JSX.Element {
+  return (
+    <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+      <span>{label}</span>
+      <input checked={checked} className="h-4 w-4 accent-cyan-300" type="checkbox" onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
 }
 
-function getDisplayStatus(
-  entry: ApiKeyRecord,
-  test?: ApiKeyTestResult
-): { label: string; tone: "valid" | "warning" | "invalid" } {
-  if (test?.status === "valid") {
-    return { label: "Valid", tone: "valid" };
-  }
-
-  if (test?.status === "invalid") {
-    return { label: "Not valid", tone: "invalid" };
-  }
-
-  if (test?.status === "skipped") {
-    return { label: "Skipped", tone: "warning" };
-  }
-
-  if (!entry.hasValue) {
-    return { label: "Not valid", tone: "invalid" };
-  }
-
-  return { label: "Untested", tone: "warning" };
+function StatusBadge({ label, tone }: { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral" }): JSX.Element {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em]",
+        tone === "success" && "border-emerald-300/20 bg-emerald-300/12 text-emerald-100",
+        tone === "warning" && "border-amber-300/20 bg-amber-300/12 text-amber-100",
+        tone === "danger" && "border-rose-300/20 bg-rose-300/12 text-rose-100",
+        tone === "info" && "border-cyan-300/20 bg-cyan-300/12 text-cyan-100",
+        tone === "neutral" && "border-white/12 bg-white/[0.05] text-slate-200"
+      )}
+    >
+      {label}
+    </span>
+  );
 }
 
-function SummaryChip({
+function Metric({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] px-3 py-3">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="mt-2 text-sm font-medium text-white">{value}</p>
+    </div>
+  );
+}
+
+function MiniButton({
   label,
-  value,
+  onClick,
+  busy = false,
+  disabled = false,
   tone = "default"
 }: {
   label: string;
-  value: number;
-  tone?: "default" | "valid" | "warning" | "invalid";
+  onClick: () => void;
+  busy?: boolean;
+  disabled?: boolean;
+  tone?: "default" | "danger";
 }): JSX.Element {
   return (
-    <div
+    <button
       className={cn(
-        "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium",
-        tone === "default" && "border-blue-100 bg-white text-foreground",
-        tone === "valid" && "border-teal-100 bg-teal-50 text-teal-700",
-        tone === "warning" && "border-blue-100 bg-blue-50 text-blue-700",
-        tone === "invalid" && "border-rose-100 bg-rose-50 text-rose-700"
+        "rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] transition",
+        tone === "default" && "border-white/12 bg-white/[0.06] text-slate-200 hover:bg-white/[0.12]",
+        tone === "danger" && "border-rose-300/18 bg-rose-300/10 text-rose-100 hover:bg-rose-300/16",
+        (disabled || busy) && "cursor-not-allowed opacity-40"
       )}
+      disabled={disabled || busy}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
     >
-      <span>{label}</span>
-      <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-semibold text-foreground">{value}</span>
-    </div>
+      {busy ? "Working..." : label}
+    </button>
   );
 }
 
-function MiniBadge({
-  label,
-  tone
-}: {
-  label: string;
-  tone: "valid" | "warning" | "invalid";
-}): JSX.Element {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
-        tone === "valid" && "bg-teal-50 text-teal-700",
-        tone === "warning" && "bg-blue-50 text-blue-700",
-        tone === "invalid" && "bg-rose-50 text-rose-700"
-      )}
-    >
-      {label}
-    </span>
-  );
+function providerLabel(provider: ApiProviderId): string {
+  return FALLBACK_PROVIDERS.find((entry) => entry.provider === provider)?.label ?? provider;
 }
 
-function StatusPill({
-  label,
-  tone
-}: {
-  label: string;
-  tone: "valid" | "warning" | "invalid";
-}): JSX.Element {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
-        tone === "valid" && "bg-teal-50 text-teal-700",
-        tone === "warning" && "bg-blue-50 text-blue-700",
-        tone === "invalid" && "bg-rose-50 text-rose-700"
-      )}
-    >
-      {label}
-    </span>
-  );
+function readinessLabel(state: ApiKeysDashboardResponse["readiness"]["state"]): string {
+  return state === "ready" ? "Ready" : state === "warning" ? "Warning" : "Blocked";
 }
 
-function providerLabel(provider: ApiKeyRecord["provider"]): string {
-  switch (provider) {
-    case "opensea":
-      return "OpenSea";
-    case "etherscan":
-      return "Etherscan";
-    case "drpc":
-      return "dRPC";
-    case "openai":
-      return "OpenAI";
+function readinessTone(state: ApiKeysDashboardResponse["readiness"]["state"]): "success" | "warning" | "danger" {
+  return state === "ready" ? "success" : state === "warning" ? "warning" : "danger";
+}
+
+function statusLabel(status: ApiConfigRecord["status"]): string {
+  switch (status) {
+    case "invalid-key":
+      return "Invalid Key";
+    case "rate-limited":
+      return "Rate Limited";
+    case "failover-active":
+      return "Failover Active";
+    case "backup":
+      return "Backup";
+    case "active":
+      return "Active";
     default:
-      return provider;
+      return "Offline";
   }
 }
 
-function categoryLabel(category: ApiKeyRecord["category"]): string {
-  switch (category) {
-    case "marketplace":
-      return "Marketplace";
-    case "explorer":
-      return "Explorer";
-    case "rpc-service":
-      return "RPC Service";
-    case "ai":
-      return "AI";
+function statusTone(status: ApiConfigRecord["status"]): "success" | "warning" | "danger" | "info" {
+  switch (status) {
+    case "active":
+      return "success";
+    case "backup":
+      return "info";
+    case "failover-active":
+      return "warning";
+    case "rate-limited":
+      return "warning";
+    case "invalid-key":
+      return "danger";
     default:
-      return category;
+      return "danger";
   }
 }
 
-function getSourceLabel(entry: ApiKeyRecord): string {
-  switch (entry.source) {
-    case "database":
-      return "Saved override";
-    case "env":
-      return "Environment";
-    case "unset":
-      return "Not configured";
+function errorLabel(errorType: NonNullable<ApiConfigRecord["health"]["errorType"]>): string {
+  switch (errorType) {
+    case "auth-error":
+      return "Auth Error";
+    case "invalid-response":
+      return "Invalid Response";
+    case "network-error":
+      return "Network Error";
+    case "rate-limited":
+      return "Rate Limited";
+    case "server-error":
+      return "Server Error";
+    case "timeout":
+      return "Timeout";
     default:
-      return entry.source;
+      return "Unknown Error";
   }
+}
+
+function formatLatency(value?: number | null): string {
+  return value ? `${value}ms` : "Not checked";
+}
+
+function formatPercent(value?: number | null): string {
+  return value === null || value === undefined ? "0%" : `${Math.round(value)}%`;
+}
+
+function formatRateLimit(config: ApiConfigRecord): string {
+  const snapshot = config.health.rateLimit;
+  if (!snapshot.available) {
+    return "Not reported";
+  }
+
+  if (snapshot.limit !== null && snapshot.remaining !== null) {
+    return `${snapshot.remaining}/${snapshot.limit} left`;
+  }
+
+  return snapshot.resetAt ? `Resets ${formatDateTime(snapshot.resetAt)}` : "Tracked";
 }

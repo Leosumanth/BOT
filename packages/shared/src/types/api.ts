@@ -97,59 +97,221 @@ export type ManagedApiKey =
   | "DRPC_API_KEY"
   | "OPENAI_API_KEY";
 
-export type ApiKeySource = "database" | "env" | "unset";
+export type ApiProviderId = "opensea" | "etherscan" | "drpc" | "openai";
+export type ApiConfigSource = "database" | "environment";
 export type ApiKeyCategory = "marketplace" | "explorer" | "rpc-service" | "ai";
-export type ApiKeyKind = "secret";
+export type ApiHealthStatus = "active" | "backup" | "invalid-key" | "rate-limited" | "offline" | "failover-active";
+export type ApiReadinessState = "ready" | "warning" | "blocked";
+export type ApiRateLimitRisk = "low" | "medium" | "high";
+export type ApiErrorType = "timeout" | "auth-error" | "rate-limited" | "network-error" | "invalid-response" | "server-error" | "unknown-error";
+export type ApiMaintenanceTrigger = "bootstrap" | "background" | "manual";
+export type ApiMaintenanceStatus = "idle" | "running" | "completed" | "failed";
 
-export interface ApiKeyDescriptor {
-  key: ManagedApiKey;
+export interface ApiProviderDescriptor {
+  provider: ApiProviderId;
+  managedKey: ManagedApiKey;
   label: string;
   category: ApiKeyCategory;
-  provider: "opensea" | "etherscan" | "drpc" | "openai";
-  kind: ApiKeyKind;
   description: string;
+  defaultEndpointUrl: string;
+  requiredForAutomation: boolean;
+  defaultMaxLatencyMs: number;
 }
 
-export interface ApiKeyRecord extends ApiKeyDescriptor {
-  source: ApiKeySource;
-  hasValue: boolean;
-  valueHint: string;
+export interface ApiRateLimitSnapshot {
+  available: boolean;
+  limit?: number | null;
+  remaining?: number | null;
+  used?: number | null;
+  resetAt?: string | null;
+  windowLabel?: string | null;
+  risk: ApiRateLimitRisk;
+}
+
+export interface ApiProbeHealth {
+  reachable: boolean;
+  authValid: boolean;
+  latencyMs?: number | null;
+  lastCheckedAt?: string | null;
+  lastSuccessfulAt?: string | null;
+  lastFailureAt?: string | null;
+  failureReason?: string | null;
+  errorType?: ApiErrorType | null;
+  rawMessage?: string | null;
+  rateLimit: ApiRateLimitSnapshot;
+}
+
+export interface ApiReliabilityMemory {
+  recentSuccessRate: number;
+  recentFailureCount: number;
+  averageLatencyMs?: number | null;
+  latencyHistoryMs: number[];
+  failureCount: number;
+  timeoutCount: number;
+  authFailureCount: number;
+  rateLimitCount: number;
+  networkErrorCount: number;
+  invalidResponseCount: number;
+  serverErrorCount: number;
+  unknownErrorCount: number;
+  failoverFrequency: number;
+  recoverySuccessHistory: number;
+  lastKnownStableAt?: string | null;
+  lastKnownStableState?: ApiHealthStatus | null;
+}
+
+export interface ApiSelectionScore {
+  value: number;
+  rank: number;
+  reasons: string[];
+}
+
+export interface ApiConfigRecord extends ApiProviderDescriptor {
+  id: string;
+  label: string;
+  endpointUrl: string;
+  source: ApiConfigSource;
+  enabled: boolean;
+  priority: number;
+  isBackup: boolean;
+  autoFailover: boolean;
+  automationEnabled: boolean;
+  maxLatencyMs: number;
+  notes: string;
+  secretMask: string;
+  secretAvailable: boolean;
+  revealSupported: boolean;
+  copySupported: boolean;
+  active: boolean;
+  failoverActive: boolean;
+  status: ApiHealthStatus;
+  health: ApiProbeHealth;
+  memory: ApiReliabilityMemory;
+  selection: ApiSelectionScore;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export interface ApiKeyUpsertRequest {
-  value?: string;
+export interface ApiProviderStatus {
+  provider: ApiProviderId;
+  label: string;
+  category: ApiKeyCategory;
+  description: string;
+  requiredForAutomation: boolean;
+  readiness: ApiReadinessState;
+  currentStatus: ApiHealthStatus | "offline";
+  activeConfigId?: string | null;
+  activeLabel?: string | null;
+  configCount: number;
+  backupCount: number;
+  healthyCount: number;
+  failoverActive: boolean;
+  averageLatencyMs?: number | null;
+  successRate: number;
+  score: number;
+  rateLimitRisk: ApiRateLimitRisk;
+}
+
+export interface ApiReadinessReport {
+  checkedAt: string;
+  state: ApiReadinessState;
+  summary: string;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface ApiAutomationLogEntry {
+  id: string;
+  timestamp: string;
+  configId?: string | null;
+  provider: ApiProviderId;
+  apiName: string;
+  eventType: string;
+  errorType?: ApiErrorType | null;
+  action: string;
+  result: string;
+  message: string;
+}
+
+export interface ApiMaintenanceSnapshot {
+  id: string;
+  trigger: ApiMaintenanceTrigger;
+  status: ApiMaintenanceStatus;
+  summary: string;
+  startedAt: string;
+  completedAt?: string | null;
+  checkedConfigs: number;
+  healthyConfigs: number;
+  failoversActivated: number;
+  warnings: number;
 }
 
 export interface ApiKeysDashboardResponse {
-  entries: ApiKeyRecord[];
+  configs: ApiConfigRecord[];
+  providers: ApiProviderStatus[];
+  logs: ApiAutomationLogEntry[];
+  readiness: ApiReadinessReport;
+  maintenance: ApiMaintenanceSnapshot;
   summary: {
-    total: number;
-    configured: number;
-    databaseOverrides: number;
-    envBacked: number;
+    totalConfigs: number;
+    activeConfigs: number;
+    backupConfigs: number;
+    invalidConfigs: number;
+    rateLimitedConfigs: number;
+    offlineConfigs: number;
+    failoverActiveProviders: number;
+    readyProviders: number;
+    warningProviders: number;
+    blockedProviders: number;
     lastRefreshedAt: string;
   };
 }
 
-export type ApiKeyTestStatus = "valid" | "invalid" | "skipped";
-
-export interface ApiKeyTestResult {
-  key: ManagedApiKey;
-  status: ApiKeyTestStatus;
-  message: string;
-  testedAt: string;
+export interface ApiConfigCreateRequest {
+  provider: ApiProviderId;
+  label: string;
+  value: string;
+  endpointUrl?: string;
+  enabled?: boolean;
+  priority?: number;
+  isBackup?: boolean;
+  autoFailover?: boolean;
+  automationEnabled?: boolean;
+  maxLatencyMs?: number;
+  notes?: string;
 }
 
-export interface ApiKeyTestResponse {
+export interface ApiConfigUpdateRequest {
+  label?: string;
+  value?: string;
+  endpointUrl?: string;
+  enabled?: boolean;
+  priority?: number;
+  isBackup?: boolean;
+  autoFailover?: boolean;
+  automationEnabled?: boolean;
+  maxLatencyMs?: number;
+  notes?: string;
+}
+
+export interface ApiSecretRevealResponse {
+  id: string;
+  value: string;
+  masked: string;
+  source: ApiConfigSource;
+}
+
+export interface ApiConfigTestResponse {
+  configId: string;
   testedAt: string;
-  summary: {
-    valid: number;
-    invalid: number;
-    skipped: number;
-  };
-  results: ApiKeyTestResult[];
+  status: ApiHealthStatus;
+  log: ApiAutomationLogEntry;
+  health: ApiProbeHealth;
+}
+
+export interface ApiMaintenanceRunResponse {
+  maintenance: ApiMaintenanceSnapshot;
+  readiness: ApiReadinessReport;
 }
 
 export interface SystemOverview {

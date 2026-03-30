@@ -148,8 +148,91 @@ alter table api_credentials add column if not exists value_ciphertext text;
 alter table api_credentials add column if not exists value_hint text not null default '';
 alter table api_credentials add column if not exists enabled boolean not null default true;
 
+create table if not exists api_service_configs (
+  id text primary key,
+  provider text not null,
+  label text not null,
+  value_ciphertext text,
+  endpoint_url text not null,
+  enabled boolean not null default true,
+  priority integer not null default 10,
+  is_backup boolean not null default false,
+  auto_failover boolean not null default true,
+  automation_enabled boolean not null default true,
+  max_latency_ms integer not null default 2500,
+  notes text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists api_service_state (
+  config_ref text primary key,
+  provider text not null,
+  status text not null default 'offline',
+  active boolean not null default false,
+  failover_active boolean not null default false,
+  reachable boolean not null default false,
+  auth_valid boolean not null default false,
+  last_latency_ms integer,
+  last_checked_at timestamptz,
+  last_successful_at timestamptz,
+  last_failure_at timestamptz,
+  failure_reason text,
+  error_type text,
+  raw_error_message text,
+  last_known_stable_at timestamptz,
+  last_known_stable_state text,
+  observed_success_count integer not null default 0,
+  observed_failure_count integer not null default 0,
+  timeout_count integer not null default 0,
+  auth_failure_count integer not null default 0,
+  rate_limit_count integer not null default 0,
+  network_error_count integer not null default 0,
+  invalid_response_count integer not null default 0,
+  server_error_count integer not null default 0,
+  unknown_error_count integer not null default 0,
+  failover_count integer not null default 0,
+  recovery_success_count integer not null default 0,
+  latency_history_ms jsonb not null default '[]'::jsonb,
+  rate_limit_snapshot jsonb not null default '{}'::jsonb,
+  selection_score numeric not null default 0,
+  selection_reasons jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists api_service_logs (
+  id text primary key,
+  config_ref text,
+  provider text not null,
+  api_name text not null,
+  event_type text not null,
+  error_type text,
+  action_taken text not null,
+  result text not null,
+  message text not null,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists api_service_maintenance_runs (
+  id text primary key,
+  trigger text not null,
+  status text not null,
+  summary text not null default '',
+  checked_configs integer not null default 0,
+  healthy_configs integer not null default 0,
+  failovers_activated integer not null default 0,
+  warnings integer not null default 0,
+  started_at timestamptz not null,
+  completed_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists idx_logs_created_at on logs(created_at desc);
 create index if not exists idx_jobs_created_at on jobs(created_at desc);
 create index if not exists idx_transactions_job_id on transactions(job_id);
 create index if not exists idx_mints_wallet_id on mints(wallet_id);
 create index if not exists idx_rpc_endpoints_chain on rpc_endpoints(chain, transport, priority);
+create index if not exists idx_api_service_configs_provider on api_service_configs(provider, priority, created_at);
+create index if not exists idx_api_service_logs_created_at on api_service_logs(created_at desc);
+create index if not exists idx_api_service_maintenance_runs_started_at on api_service_maintenance_runs(started_at desc);

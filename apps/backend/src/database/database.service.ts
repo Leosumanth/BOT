@@ -5,6 +5,11 @@ import type { QueryResultRow } from "pg";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type {
+  ApiErrorType,
+  ApiHealthStatus,
+  ApiMaintenanceStatus,
+  ApiMaintenanceTrigger,
+  ApiProviderId,
   ContractAnalysisResult,
   ManagedApiKey,
   MintExecutionAttempt,
@@ -25,6 +30,86 @@ interface StoredApiCredentialRecord {
   valueHint: string;
   enabled: boolean;
   createdAt: string;
+  updatedAt: string;
+}
+
+interface StoredApiServiceConfigRecord {
+  id: string;
+  provider: ApiProviderId;
+  label: string;
+  valueCiphertext: string | null;
+  endpointUrl: string;
+  enabled: boolean;
+  priority: number;
+  isBackup: boolean;
+  autoFailover: boolean;
+  automationEnabled: boolean;
+  maxLatencyMs: number;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface StoredApiServiceStateRecord {
+  configRef: string;
+  provider: ApiProviderId;
+  status: ApiHealthStatus;
+  active: boolean;
+  failoverActive: boolean;
+  reachable: boolean;
+  authValid: boolean;
+  lastLatencyMs: number | null;
+  lastCheckedAt: string | null;
+  lastSuccessfulAt: string | null;
+  lastFailureAt: string | null;
+  failureReason: string | null;
+  errorType: ApiErrorType | null;
+  rawErrorMessage: string | null;
+  lastKnownStableAt: string | null;
+  lastKnownStableState: ApiHealthStatus | null;
+  observedSuccessCount: number;
+  observedFailureCount: number;
+  timeoutCount: number;
+  authFailureCount: number;
+  rateLimitCount: number;
+  networkErrorCount: number;
+  invalidResponseCount: number;
+  serverErrorCount: number;
+  unknownErrorCount: number;
+  failoverCount: number;
+  recoverySuccessCount: number;
+  latencyHistoryMs: number[];
+  rateLimitSnapshot: Record<string, unknown>;
+  selectionScore: number;
+  selectionReasons: string[];
+  updatedAt: string;
+}
+
+interface StoredApiServiceLogRecord {
+  id: string;
+  configRef: string | null;
+  provider: ApiProviderId;
+  apiName: string;
+  eventType: string;
+  errorType: ApiErrorType | null;
+  actionTaken: string;
+  result: string;
+  message: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+interface StoredApiMaintenanceRunRecord {
+  id: string;
+  trigger: ApiMaintenanceTrigger;
+  status: ApiMaintenanceStatus;
+  summary: string;
+  checkedConfigs: number;
+  healthyConfigs: number;
+  failoversActivated: number;
+  warnings: number;
+  startedAt: string;
+  completedAt: string | null;
   updatedAt: string;
 }
 
@@ -352,6 +437,557 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
 
     return rows.length > 0;
+  }
+
+  async upsertApiServiceConfig(entry: {
+    id: string;
+    provider: ApiProviderId;
+    label: string;
+    valueCiphertext: string | null;
+    endpointUrl: string;
+    enabled: boolean;
+    priority: number;
+    isBackup: boolean;
+    autoFailover: boolean;
+    automationEnabled: boolean;
+    maxLatencyMs: number;
+    notes: string;
+  }): Promise<StoredApiServiceConfigRecord> {
+    const [row] = await this.query<StoredApiServiceConfigRecord>(
+      `
+      insert into api_service_configs (
+        id,
+        provider,
+        label,
+        value_ciphertext,
+        endpoint_url,
+        enabled,
+        priority,
+        is_backup,
+        auto_failover,
+        automation_enabled,
+        max_latency_ms,
+        notes,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), now())
+      on conflict (id)
+      do update set
+        provider = excluded.provider,
+        label = excluded.label,
+        value_ciphertext = excluded.value_ciphertext,
+        endpoint_url = excluded.endpoint_url,
+        enabled = excluded.enabled,
+        priority = excluded.priority,
+        is_backup = excluded.is_backup,
+        auto_failover = excluded.auto_failover,
+        automation_enabled = excluded.automation_enabled,
+        max_latency_ms = excluded.max_latency_ms,
+        notes = excluded.notes,
+        updated_at = now()
+      returning
+        id,
+        provider,
+        label,
+        value_ciphertext as "valueCiphertext",
+        endpoint_url as "endpointUrl",
+        enabled,
+        priority,
+        is_backup as "isBackup",
+        auto_failover as "autoFailover",
+        automation_enabled as "automationEnabled",
+        max_latency_ms as "maxLatencyMs",
+        notes,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      `,
+      [
+        entry.id,
+        entry.provider,
+        entry.label,
+        entry.valueCiphertext,
+        entry.endpointUrl,
+        entry.enabled,
+        entry.priority,
+        entry.isBackup,
+        entry.autoFailover,
+        entry.automationEnabled,
+        entry.maxLatencyMs,
+        entry.notes
+      ]
+    );
+
+    return row;
+  }
+
+  async getApiServiceConfig(id: string): Promise<StoredApiServiceConfigRecord | null> {
+    const [row] = await this.query<StoredApiServiceConfigRecord>(
+      `
+      select
+        id,
+        provider,
+        label,
+        value_ciphertext as "valueCiphertext",
+        endpoint_url as "endpointUrl",
+        enabled,
+        priority,
+        is_backup as "isBackup",
+        auto_failover as "autoFailover",
+        automation_enabled as "automationEnabled",
+        max_latency_ms as "maxLatencyMs",
+        notes,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      from api_service_configs
+      where id = $1
+      `,
+      [id]
+    );
+
+    return row ?? null;
+  }
+
+  async listApiServiceConfigs(): Promise<StoredApiServiceConfigRecord[]> {
+    return this.query<StoredApiServiceConfigRecord>(
+      `
+      select
+        id,
+        provider,
+        label,
+        value_ciphertext as "valueCiphertext",
+        endpoint_url as "endpointUrl",
+        enabled,
+        priority,
+        is_backup as "isBackup",
+        auto_failover as "autoFailover",
+        automation_enabled as "automationEnabled",
+        max_latency_ms as "maxLatencyMs",
+        notes,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      from api_service_configs
+      order by provider asc, priority asc, created_at asc
+      `
+    );
+  }
+
+  async deleteApiServiceConfig(id: string): Promise<boolean> {
+    const rows = await this.query<{ id: string }>(
+      `
+      delete from api_service_configs
+      where id = $1
+      returning id
+      `,
+      [id]
+    );
+
+    return rows.length > 0;
+  }
+
+  async upsertApiServiceState(entry: {
+    configRef: string;
+    provider: ApiProviderId;
+    status: ApiHealthStatus;
+    active: boolean;
+    failoverActive: boolean;
+    reachable: boolean;
+    authValid: boolean;
+    lastLatencyMs?: number | null;
+    lastCheckedAt?: string | null;
+    lastSuccessfulAt?: string | null;
+    lastFailureAt?: string | null;
+    failureReason?: string | null;
+    errorType?: ApiErrorType | null;
+    rawErrorMessage?: string | null;
+    lastKnownStableAt?: string | null;
+    lastKnownStableState?: ApiHealthStatus | null;
+    observedSuccessCount: number;
+    observedFailureCount: number;
+    timeoutCount: number;
+    authFailureCount: number;
+    rateLimitCount: number;
+    networkErrorCount: number;
+    invalidResponseCount: number;
+    serverErrorCount: number;
+    unknownErrorCount: number;
+    failoverCount: number;
+    recoverySuccessCount: number;
+    latencyHistoryMs: number[];
+    rateLimitSnapshot: Record<string, unknown>;
+    selectionScore: number;
+    selectionReasons: string[];
+  }): Promise<StoredApiServiceStateRecord> {
+    const [row] = await this.query<StoredApiServiceStateRecord>(
+      `
+      insert into api_service_state (
+        config_ref,
+        provider,
+        status,
+        active,
+        failover_active,
+        reachable,
+        auth_valid,
+        last_latency_ms,
+        last_checked_at,
+        last_successful_at,
+        last_failure_at,
+        failure_reason,
+        error_type,
+        raw_error_message,
+        last_known_stable_at,
+        last_known_stable_state,
+        observed_success_count,
+        observed_failure_count,
+        timeout_count,
+        auth_failure_count,
+        rate_limit_count,
+        network_error_count,
+        invalid_response_count,
+        server_error_count,
+        unknown_error_count,
+        failover_count,
+        recovery_success_count,
+        latency_history_ms,
+        rate_limit_snapshot,
+        selection_score,
+        selection_reasons,
+        updated_at
+      )
+      values (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+        $21, $22, $23, $24, $25, $26, $27::jsonb, $28::jsonb, $29, $30::jsonb, now()
+      )
+      on conflict (config_ref)
+      do update set
+        provider = excluded.provider,
+        status = excluded.status,
+        active = excluded.active,
+        failover_active = excluded.failover_active,
+        reachable = excluded.reachable,
+        auth_valid = excluded.auth_valid,
+        last_latency_ms = excluded.last_latency_ms,
+        last_checked_at = excluded.last_checked_at,
+        last_successful_at = excluded.last_successful_at,
+        last_failure_at = excluded.last_failure_at,
+        failure_reason = excluded.failure_reason,
+        error_type = excluded.error_type,
+        raw_error_message = excluded.raw_error_message,
+        last_known_stable_at = excluded.last_known_stable_at,
+        last_known_stable_state = excluded.last_known_stable_state,
+        observed_success_count = excluded.observed_success_count,
+        observed_failure_count = excluded.observed_failure_count,
+        timeout_count = excluded.timeout_count,
+        auth_failure_count = excluded.auth_failure_count,
+        rate_limit_count = excluded.rate_limit_count,
+        network_error_count = excluded.network_error_count,
+        invalid_response_count = excluded.invalid_response_count,
+        server_error_count = excluded.server_error_count,
+        unknown_error_count = excluded.unknown_error_count,
+        failover_count = excluded.failover_count,
+        recovery_success_count = excluded.recovery_success_count,
+        latency_history_ms = excluded.latency_history_ms,
+        rate_limit_snapshot = excluded.rate_limit_snapshot,
+        selection_score = excluded.selection_score,
+        selection_reasons = excluded.selection_reasons,
+        updated_at = now()
+      returning
+        config_ref as "configRef",
+        provider,
+        status,
+        active,
+        failover_active as "failoverActive",
+        reachable,
+        auth_valid as "authValid",
+        last_latency_ms as "lastLatencyMs",
+        last_checked_at as "lastCheckedAt",
+        last_successful_at as "lastSuccessfulAt",
+        last_failure_at as "lastFailureAt",
+        failure_reason as "failureReason",
+        error_type as "errorType",
+        raw_error_message as "rawErrorMessage",
+        last_known_stable_at as "lastKnownStableAt",
+        last_known_stable_state as "lastKnownStableState",
+        observed_success_count as "observedSuccessCount",
+        observed_failure_count as "observedFailureCount",
+        timeout_count as "timeoutCount",
+        auth_failure_count as "authFailureCount",
+        rate_limit_count as "rateLimitCount",
+        network_error_count as "networkErrorCount",
+        invalid_response_count as "invalidResponseCount",
+        server_error_count as "serverErrorCount",
+        unknown_error_count as "unknownErrorCount",
+        failover_count as "failoverCount",
+        recovery_success_count as "recoverySuccessCount",
+        latency_history_ms as "latencyHistoryMs",
+        rate_limit_snapshot as "rateLimitSnapshot",
+        selection_score::float8 as "selectionScore",
+        selection_reasons as "selectionReasons",
+        updated_at as "updatedAt"
+      `,
+      [
+        entry.configRef,
+        entry.provider,
+        entry.status,
+        entry.active,
+        entry.failoverActive,
+        entry.reachable,
+        entry.authValid,
+        entry.lastLatencyMs ?? null,
+        entry.lastCheckedAt ?? null,
+        entry.lastSuccessfulAt ?? null,
+        entry.lastFailureAt ?? null,
+        entry.failureReason ?? null,
+        entry.errorType ?? null,
+        entry.rawErrorMessage ?? null,
+        entry.lastKnownStableAt ?? null,
+        entry.lastKnownStableState ?? null,
+        entry.observedSuccessCount,
+        entry.observedFailureCount,
+        entry.timeoutCount,
+        entry.authFailureCount,
+        entry.rateLimitCount,
+        entry.networkErrorCount,
+        entry.invalidResponseCount,
+        entry.serverErrorCount,
+        entry.unknownErrorCount,
+        entry.failoverCount,
+        entry.recoverySuccessCount,
+        stringifyJson(entry.latencyHistoryMs),
+        stringifyJson(entry.rateLimitSnapshot),
+        entry.selectionScore,
+        stringifyJson(entry.selectionReasons)
+      ]
+    );
+
+    return row;
+  }
+
+  async listApiServiceStates(): Promise<StoredApiServiceStateRecord[]> {
+    return this.query<StoredApiServiceStateRecord>(
+      `
+      select
+        config_ref as "configRef",
+        provider,
+        status,
+        active,
+        failover_active as "failoverActive",
+        reachable,
+        auth_valid as "authValid",
+        last_latency_ms as "lastLatencyMs",
+        last_checked_at as "lastCheckedAt",
+        last_successful_at as "lastSuccessfulAt",
+        last_failure_at as "lastFailureAt",
+        failure_reason as "failureReason",
+        error_type as "errorType",
+        raw_error_message as "rawErrorMessage",
+        last_known_stable_at as "lastKnownStableAt",
+        last_known_stable_state as "lastKnownStableState",
+        observed_success_count as "observedSuccessCount",
+        observed_failure_count as "observedFailureCount",
+        timeout_count as "timeoutCount",
+        auth_failure_count as "authFailureCount",
+        rate_limit_count as "rateLimitCount",
+        network_error_count as "networkErrorCount",
+        invalid_response_count as "invalidResponseCount",
+        server_error_count as "serverErrorCount",
+        unknown_error_count as "unknownErrorCount",
+        failover_count as "failoverCount",
+        recovery_success_count as "recoverySuccessCount",
+        latency_history_ms as "latencyHistoryMs",
+        rate_limit_snapshot as "rateLimitSnapshot",
+        selection_score::float8 as "selectionScore",
+        selection_reasons as "selectionReasons",
+        updated_at as "updatedAt"
+      from api_service_state
+      order by updated_at desc
+      `
+    );
+  }
+
+  async deleteApiServiceState(configRef: string): Promise<void> {
+    await this.pool.query(
+      `
+      delete from api_service_state
+      where config_ref = $1
+      `,
+      [configRef]
+    );
+  }
+
+  async insertApiServiceLog(params: {
+    configRef?: string | null;
+    provider: ApiProviderId;
+    apiName: string;
+    eventType: string;
+    errorType?: ApiErrorType | null;
+    actionTaken: string;
+    result: string;
+    message: string;
+    payload?: unknown;
+  }): Promise<StoredApiServiceLogRecord> {
+    const [row] = await this.query<StoredApiServiceLogRecord>(
+      `
+      insert into api_service_logs (
+        id,
+        config_ref,
+        provider,
+        api_name,
+        event_type,
+        error_type,
+        action_taken,
+        result,
+        message,
+        payload,
+        created_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, now())
+      returning
+        id,
+        config_ref as "configRef",
+        provider,
+        api_name as "apiName",
+        event_type as "eventType",
+        error_type as "errorType",
+        action_taken as "actionTaken",
+        result,
+        message,
+        payload,
+        created_at as "createdAt"
+      `,
+      [
+        randomUUID(),
+        params.configRef ?? null,
+        params.provider,
+        params.apiName,
+        params.eventType,
+        params.errorType ?? null,
+        params.actionTaken,
+        params.result,
+        params.message,
+        stringifyJson(params.payload ?? {})
+      ]
+    );
+
+    return row;
+  }
+
+  async listApiServiceLogs(limit = 60): Promise<StoredApiServiceLogRecord[]> {
+    return this.query<StoredApiServiceLogRecord>(
+      `
+      select
+        id,
+        config_ref as "configRef",
+        provider,
+        api_name as "apiName",
+        event_type as "eventType",
+        error_type as "errorType",
+        action_taken as "actionTaken",
+        result,
+        message,
+        payload,
+        created_at as "createdAt"
+      from api_service_logs
+      order by created_at desc
+      limit $1
+      `,
+      [limit]
+    );
+  }
+
+  async upsertApiMaintenanceRun(entry: {
+    id: string;
+    trigger: ApiMaintenanceTrigger;
+    status: ApiMaintenanceStatus;
+    summary: string;
+    checkedConfigs: number;
+    healthyConfigs: number;
+    failoversActivated: number;
+    warnings: number;
+    startedAt: string;
+    completedAt?: string | null;
+  }): Promise<StoredApiMaintenanceRunRecord> {
+    const [row] = await this.query<StoredApiMaintenanceRunRecord>(
+      `
+      insert into api_service_maintenance_runs (
+        id,
+        trigger,
+        status,
+        summary,
+        checked_configs,
+        healthy_configs,
+        failovers_activated,
+        warnings,
+        started_at,
+        completed_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+      on conflict (id)
+      do update set
+        trigger = excluded.trigger,
+        status = excluded.status,
+        summary = excluded.summary,
+        checked_configs = excluded.checked_configs,
+        healthy_configs = excluded.healthy_configs,
+        failovers_activated = excluded.failovers_activated,
+        warnings = excluded.warnings,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
+        updated_at = now()
+      returning
+        id,
+        trigger,
+        status,
+        summary,
+        checked_configs as "checkedConfigs",
+        healthy_configs as "healthyConfigs",
+        failovers_activated as "failoversActivated",
+        warnings,
+        started_at as "startedAt",
+        completed_at as "completedAt",
+        updated_at as "updatedAt"
+      `,
+      [
+        entry.id,
+        entry.trigger,
+        entry.status,
+        entry.summary,
+        entry.checkedConfigs,
+        entry.healthyConfigs,
+        entry.failoversActivated,
+        entry.warnings,
+        entry.startedAt,
+        entry.completedAt ?? null
+      ]
+    );
+
+    return row;
+  }
+
+  async getLatestApiMaintenanceRun(): Promise<StoredApiMaintenanceRunRecord | null> {
+    const [row] = await this.query<StoredApiMaintenanceRunRecord>(
+      `
+      select
+        id,
+        trigger,
+        status,
+        summary,
+        checked_configs as "checkedConfigs",
+        healthy_configs as "healthyConfigs",
+        failovers_activated as "failoversActivated",
+        warnings,
+        started_at as "startedAt",
+        completed_at as "completedAt",
+        updated_at as "updatedAt"
+      from api_service_maintenance_runs
+      order by started_at desc
+      limit 1
+      `
+    );
+
+    return row ?? null;
   }
 
   async createMintJob(job: MintJobInput): Promise<void> {

@@ -32,12 +32,39 @@ export const emptyRpcManagement: RpcManagementResponse = {
 };
 
 export const emptyApiKeysDashboard: ApiKeysDashboardResponse = {
-  entries: [],
+  configs: [],
+  providers: [],
+  logs: [],
+  readiness: {
+    checkedAt: new Date(0).toISOString(),
+    state: "blocked",
+    summary: "API readiness data is unavailable.",
+    blockers: [],
+    warnings: []
+  },
+  maintenance: {
+    id: "maintenance-idle",
+    trigger: "bootstrap",
+    status: "idle",
+    summary: "No maintenance run has completed yet.",
+    startedAt: new Date(0).toISOString(),
+    completedAt: null,
+    checkedConfigs: 0,
+    healthyConfigs: 0,
+    failoversActivated: 0,
+    warnings: 0
+  },
   summary: {
-    total: 0,
-    configured: 0,
-    databaseOverrides: 0,
-    envBacked: 0,
+    totalConfigs: 0,
+    activeConfigs: 0,
+    backupConfigs: 0,
+    invalidConfigs: 0,
+    rateLimitedConfigs: 0,
+    offlineConfigs: 0,
+    failoverActiveProviders: 0,
+    readyProviders: 0,
+    warningProviders: 0,
+    blockedProviders: 0,
     lastRefreshedAt: new Date(0).toISOString()
   }
 };
