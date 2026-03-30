@@ -185,23 +185,23 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   }
 
   return (
-    <div className="space-y-6">
-      <section className="relative overflow-hidden rounded-[2rem] border border-cyan-400/20 bg-[#07111d] text-white shadow-[0_30px_80px_rgba(3,9,24,0.55)]">
+    <div className="space-y-5">
+      <section className="relative overflow-hidden rounded-[1.75rem] border border-cyan-400/20 bg-[#07111d] text-white shadow-[0_24px_60px_rgba(3,9,24,0.48)]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_30%),linear-gradient(180deg,rgba(8,15,28,0.96),rgba(4,8,18,0.98))]" />
-        <div className="relative space-y-4 p-6 md:p-8">
+        <div className="relative space-y-3 p-5 md:p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.32em] text-cyan-200/75">API Keys</p>
-          <h1 className="max-w-3xl text-3xl font-semibold tracking-tight text-white md:text-4xl">Paste provider keys and let the backend handle the rest.</h1>
-          <p className="max-w-3xl text-sm leading-6 text-slate-300 md:text-base">
+          <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-white md:text-3xl">Paste provider keys and let the backend handle the rest.</h1>
+          <p className="max-w-3xl text-sm leading-6 text-slate-300">
             This page is intentionally simple. You code the provider placeholder, then come here to paste the key, save it, test it, or delete it.
             All automation, failover, recovery, and self-sustaining behavior stays in the backend.
           </p>
-          <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.05] px-4 py-4 text-sm text-slate-300">
+          <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-slate-300">
             {feedback ?? "Each block below is a coded provider slot. Save stores the key, Test checks the current provider key, and Delete clears the saved key."}
           </div>
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-2">
+      <section className="grid gap-4 xl:grid-cols-2">
         {API_KEY_FIELDS.map((definition) => {
           const providerConfigs = getProviderConfigs(definition.provider);
           const storedConfigs = providerConfigs.filter((entry) => entry.source === "database");
@@ -255,37 +255,50 @@ function ProviderKeyCard({
   const saveBusy = busyKey === `save-${definition.provider}`;
   const testBusy = busyKey === `test-${definition.provider}`;
   const deleteBusy = busyKey === `delete-${definition.provider}`;
+  const showMetaPanel = Boolean(
+    storedConfig ||
+      observedConfig?.health.lastCheckedAt ||
+      observedConfig?.health.failureReason ||
+      (observedConfig?.source === "environment" && !storedConfig) ||
+      storedCount > 1
+  );
 
   return (
-    <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
-      <CardHeader className="pb-4">
+    <Card className="rounded-[1.75rem] border-white/10 bg-[#07111d] text-white shadow-[0_18px_40px_rgba(2,8,20,0.36)]">
+      <CardHeader className="px-5 pb-2 pt-5">
         <div className="flex items-start justify-between gap-3">
-          <div className="space-y-2">
-            <CardTitle className="text-xl text-white">{definition.label}</CardTitle>
-            <p className="text-sm leading-6 text-slate-400">{definition.description}</p>
+          <div className="space-y-1.5">
+            <CardTitle className="text-lg text-white">{definition.label}</CardTitle>
+            <p className="text-[13px] leading-5 text-slate-400">{definition.description}</p>
           </div>
           <StatusBadge label={observedConfig ? statusLabel(observedConfig.status) : "Empty"} tone={observedConfig ? statusTone(observedConfig.status) : "neutral"} />
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-sm text-slate-300">
-          <p>
-            Stored key: <span className="font-mono text-white">{storedConfig?.secretMask ?? "Not saved"}</span>
-          </p>
-          <p className="mt-2">
-            Last check: <span className="text-white">{formatDateTime(observedConfig?.health.lastCheckedAt)}</span>
-            {" | "}
-            Latency: <span className="text-white">{formatLatency(observedConfig?.health.latencyMs)}</span>
-          </p>
-          {observedConfig?.source === "environment" && !storedConfig ? (
-            <p className="mt-2 text-slate-400">This provider is currently supplied by an environment key. Saving here will create a local stored key.</p>
-          ) : null}
-          {storedCount > 1 ? <p className="mt-2 text-amber-200">Multiple saved keys exist for this provider. Delete will clear all saved entries.</p> : null}
-          {observedConfig?.health.failureReason ? <p className="mt-2 text-rose-200">{observedConfig.health.failureReason}</p> : null}
-        </div>
+      <CardContent className="space-y-3 px-5 pb-5">
+        {showMetaPanel ? (
+          <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+            {storedConfig ? (
+              <p>
+                Stored key: <span className="font-mono text-white">{storedConfig.secretMask}</span>
+              </p>
+            ) : null}
+            {observedConfig?.health.lastCheckedAt || observedConfig ? (
+              <p className={storedConfig ? "mt-2" : ""}>
+                Last check: <span className="text-white">{formatDateTime(observedConfig?.health.lastCheckedAt)}</span>
+                {" | "}
+                Latency: <span className="text-white">{formatLatency(observedConfig?.health.latencyMs)}</span>
+              </p>
+            ) : null}
+            {observedConfig?.source === "environment" && !storedConfig ? (
+              <p className="mt-2 text-slate-400">This provider is currently supplied by an environment key. Saving here will create a local stored key.</p>
+            ) : null}
+            {storedCount > 1 ? <p className="mt-2 text-amber-200">Multiple saved keys exist for this provider. Delete will clear all saved entries.</p> : null}
+            {observedConfig?.health.failureReason ? <p className="mt-2 text-rose-200">{observedConfig.health.failureReason}</p> : null}
+          </div>
+        ) : null}
 
         <Input
-          className="h-12 border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
+          className="h-11 border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
           placeholder={storedConfig ? `Paste a new ${definition.label} key to replace the saved one` : definition.placeholder}
           type="password"
           value={draftValue}
@@ -294,7 +307,7 @@ function ProviderKeyCard({
 
         <div className="flex flex-wrap gap-3">
           <Button
-            className="bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+            className="h-10 bg-cyan-300 px-5 text-slate-950 hover:bg-cyan-200"
             disabled={!draftValue.trim() || saveBusy}
             type="button"
             onClick={() => void onSave(definition.provider)}
@@ -302,7 +315,7 @@ function ProviderKeyCard({
             {saveBusy ? "Saving..." : "Save"}
           </Button>
           <Button
-            className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
+            className="h-10 border border-white/10 bg-white/5 px-5 text-white hover:bg-white/10"
             disabled={!observedConfig || testBusy}
             type="button"
             variant="ghost"
@@ -311,7 +324,7 @@ function ProviderKeyCard({
             {testBusy ? "Testing..." : "Test"}
           </Button>
           <Button
-            className="border border-rose-300/20 bg-rose-300/10 text-rose-100 hover:bg-rose-300/15"
+            className="h-10 border border-rose-300/20 bg-rose-300/10 px-5 text-rose-100 hover:bg-rose-300/15"
             disabled={!storedConfig || deleteBusy}
             type="button"
             variant="ghost"
