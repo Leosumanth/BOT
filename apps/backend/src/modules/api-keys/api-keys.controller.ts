@@ -5,6 +5,8 @@ import type {
   ApiConfigRecord,
   ApiConfigTestResponse,
   ApiConfigUpdateRequest,
+  ApiDraftKeyTestRequest,
+  ApiDraftKeyTestResponse,
   ApiKeysDashboardResponse,
   ApiMaintenanceRunResponse,
   ApiSecretRevealResponse
@@ -43,6 +45,11 @@ export class ApiKeysController {
   @Post("configs/:id/test")
   async testConfig(@Param("id") id: string): Promise<ApiEnvelope<ApiConfigTestResponse>> {
     return { data: await this.apiKeysService.testConfig(id) };
+  }
+
+  @Post("test-draft")
+  async testDraft(@Body() body: ApiDraftKeyTestRequest): Promise<ApiEnvelope<ApiDraftKeyTestResponse>> {
+    return { data: await this.apiKeysService.testDraft(body) };
   }
 
   @Post("maintenance/run")

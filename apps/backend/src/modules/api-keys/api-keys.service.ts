@@ -8,6 +8,8 @@ import type {
   ApiConfigSource,
   ApiConfigTestResponse,
   ApiConfigUpdateRequest,
+  ApiDraftKeyTestRequest,
+  ApiDraftKeyTestResponse,
   ApiErrorType,
   ApiHealthStatus,
   ApiKeysDashboardResponse,
@@ -338,6 +340,54 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       status: config.status,
       log,
       health: config.health
+    };
+  }
+
+  async testDraft(request: ApiDraftKeyTestRequest): Promise<ApiDraftKeyTestResponse> {
+    const provider = this.getProviderDefinition(request.provider);
+    const value = request.value?.trim();
+
+    if (!value) {
+      throw new BadRequestException(`A secret is required to test ${provider.label}.`);
+    }
+
+    const config: RuntimeConfig = {
+      id: `draft-${provider.provider}`,
+      provider,
+      label: `${provider.label} Draft`,
+      endpointUrl: provider.defaultEndpointUrl,
+      source: "database",
+      enabled: true,
+      priority: 10,
+      isBackup: false,
+      autoFailover: true,
+      automationEnabled: true,
+      maxLatencyMs: provider.defaultMaxLatencyMs,
+      notes: "",
+      secret: value
+    };
+
+    const outcome = await this.probeConfig(config);
+    const state = this.applyProbeOutcome(this.defaultState(config.id, provider.provider), config, outcome);
+
+    return {
+      provider: provider.provider,
+      testedAt: outcome.testedAt,
+      status: state.status,
+      ok: Boolean(outcome.reachable && outcome.authValid),
+      health: {
+        reachable: outcome.reachable,
+        authValid: outcome.authValid,
+        latencyMs: outcome.latencyMs,
+        lastCheckedAt: outcome.testedAt,
+        lastSuccessfulAt: outcome.reachable && outcome.authValid ? outcome.testedAt : null,
+        lastFailureAt: outcome.reachable && outcome.authValid ? null : outcome.testedAt,
+        failureReason: outcome.failureReason,
+        errorType: outcome.errorType,
+        rawMessage: outcome.rawMessage,
+        rateLimit: outcome.rateLimit
+      },
+      secretMask: this.maskSecret(value)
     };
   }
 

@@ -2,7 +2,15 @@
 
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
-import type { ApiConfigCreateRequest, ApiConfigRecord, ApiConfigTestResponse, ApiConfigUpdateRequest, ApiKeysDashboardResponse, ApiProviderId } from "@mintbot/shared";
+import type {
+  ApiConfigCreateRequest,
+  ApiConfigRecord,
+  ApiConfigTestResponse,
+  ApiDraftKeyTestRequest,
+  ApiDraftKeyTestResponse,
+  ApiKeysDashboardResponse,
+  ApiProviderId
+} from "@mintbot/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -53,9 +61,19 @@ function createDrafts(): Record<ApiProviderId, string> {
   };
 }
 
+function createDraftTests(): Record<ApiProviderId, ApiDraftKeyTestResponse | null> {
+  return {
+    opensea: null,
+    etherscan: null,
+    drpc: null,
+    openai: null
+  };
+}
+
 export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }): JSX.Element {
   const [data, setData] = useState<ApiKeysDashboardResponse>(dashboard);
   const [drafts, setDrafts] = useState<Record<ApiProviderId, string>>(createDrafts());
+  const [draftTests, setDraftTests] = useState<Record<ApiProviderId, ApiDraftKeyTestResponse | null>>(createDraftTests());
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
@@ -89,6 +107,10 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       ...current,
       [provider]: value
     }));
+    setDraftTests((current) => ({
+      ...current,
+      [provider]: null
+    }));
   }
 
   function getProviderConfigs(provider: ApiProviderId): ApiConfigRecord[] {
@@ -102,48 +124,75 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   async function handleSave(provider: ApiProviderId): Promise<void> {
     const value = drafts[provider].trim();
     const label = providerLabel(provider);
+    const draftTest = draftTests[provider];
 
     if (!value) {
       setFeedback(`Paste the ${label} key first.`);
       return;
     }
 
-    const storedConfigs = getStoredConfigs(provider);
-    const storedConfig = storedConfigs[0] ?? null;
+    if (!draftTest?.ok) {
+      setFeedback(`Test the ${label} key successfully before saving it.`);
+      return;
+    }
+
+    const existingCount = getStoredConfigs(provider).length;
 
     const saved = await runAction(`save-${provider}`, async () => {
-      if (storedConfig) {
-        await backendFetch<ApiConfigRecord>(`/api-keys/configs/${storedConfig.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            value
-          } satisfies ApiConfigUpdateRequest)
-        });
-      } else {
-        await backendFetch<ApiConfigRecord>("/api-keys/configs", {
-          method: "POST",
-          body: JSON.stringify({
-            provider,
-            value
-          } satisfies ApiConfigCreateRequest)
-        });
-      }
+      await backendFetch<ApiConfigRecord>("/api-keys/configs", {
+        method: "POST",
+        body: JSON.stringify({
+          provider,
+          value
+        } satisfies ApiConfigCreateRequest)
+      });
 
-      const next = await refreshDashboard(`${label} key ${storedConfig ? "updated" : "saved"}.`);
+      const next = await refreshDashboard(existingCount > 0 ? `${label} backup key saved.` : `${label} key saved.`);
       return next;
     });
 
     if (saved) {
       updateDraft(provider, "");
+      setDraftTests((current) => ({
+        ...current,
+        [provider]: null
+      }));
     }
   }
 
   async function handleTest(provider: ApiProviderId): Promise<void> {
     const label = providerLabel(provider);
+    const draftValue = drafts[provider].trim();
+
+    if (draftValue) {
+      const result = await runAction(`test-${provider}`, async () =>
+        backendFetch<ApiDraftKeyTestResponse>("/api-keys/test-draft", {
+          method: "POST",
+          body: JSON.stringify({
+            provider,
+            value: draftValue
+          } satisfies ApiDraftKeyTestRequest)
+        })
+      );
+
+      if (result) {
+        setDraftTests((current) => ({
+          ...current,
+          [provider]: result
+        }));
+        setFeedback(
+          result.ok
+            ? `${label} key passed the connection test.`
+            : `${label} key failed: ${result.health.failureReason ?? statusLabel(result.status)}`
+        );
+      }
+      return;
+    }
+
     const target = getStoredConfigs(provider)[0] ?? getProviderConfigs(provider)[0] ?? null;
 
     if (!target) {
-      setFeedback(`Save the ${label} key before testing.`);
+      setFeedback(`Paste the ${label} key first, or save one key for provider health retests.`);
       return;
     }
 
@@ -164,7 +213,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
       return;
     }
 
-    if (!window.confirm(`Delete the saved ${label} key${storedConfigs.length > 1 ? "s" : ""}?`)) {
+    if (!window.confirm(`Delete ${storedConfigs.length} saved ${label} key${storedConfigs.length > 1 ? "s" : ""}?`)) {
       return;
     }
 
@@ -175,12 +224,16 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
         });
       }
 
-      const next = await refreshDashboard(`${label} key deleted.`);
+      const next = await refreshDashboard(`${label} ${storedConfigs.length > 1 ? "keys deleted" : "key deleted"}.`);
       return next;
     });
 
     if (removed) {
       updateDraft(provider, "");
+      setDraftTests((current) => ({
+        ...current,
+        [provider]: null
+      }));
     }
   }
 
@@ -192,11 +245,12 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           <p className="text-xs font-semibold uppercase tracking-[0.32em] text-cyan-200/75">API Keys</p>
           <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-white md:text-3xl">Store keys and stay ahead of provider limits.</h1>
           <p className="max-w-3xl text-sm leading-6 text-slate-300">
-            Save a key, run a quick test, and let the backend handle health checks, failover, recovery, and automation behavior.
+            Paste a key, test it first, then save it. Saving another tested key for the same provider adds it as a backup while the backend handles health checks,
+            failover, recovery, and automation behavior.
           </p>
           <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-slate-300">
             {feedback ??
-              "Tip: providers with strict quotas should have a spare key ready. Test after saving, rotate keys before limits are exhausted, and let backend checks watch latency and rate-limit pressure."}
+              "Tip: providers with strict quotas should have a spare key ready. Test the draft first, save only passing keys, and add another passing key later if you want a backup."}
           </div>
         </div>
       </section>
@@ -205,8 +259,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
         {API_KEY_FIELDS.map((definition) => {
           const providerConfigs = getProviderConfigs(definition.provider);
           const storedConfigs = providerConfigs.filter((entry) => entry.source === "database");
-          const storedConfig = storedConfigs[0] ?? null;
-          const observedConfig = storedConfig ?? providerConfigs[0] ?? null;
+          const observedConfig = storedConfigs[0] ?? providerConfigs[0] ?? null;
 
           return (
             <ProviderKeyCard
@@ -214,9 +267,9 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
               busyKey={busyKey}
               definition={definition}
               draftValue={drafts[definition.provider]}
+              draftTest={draftTests[definition.provider]}
               observedConfig={observedConfig}
-              storedConfig={storedConfig}
-              storedCount={storedConfigs.length}
+              storedConfigs={storedConfigs}
               onDelete={handleDelete}
               onDraftChange={updateDraft}
               onSave={handleSave}
@@ -231,9 +284,9 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
 function ProviderKeyCard({
   definition,
-  storedConfig,
+  draftTest,
   observedConfig,
-  storedCount,
+  storedConfigs,
   draftValue,
   busyKey,
   onDraftChange,
@@ -242,9 +295,9 @@ function ProviderKeyCard({
   onDelete
 }: {
   definition: ApiKeyFieldDefinition;
-  storedConfig: ApiConfigRecord | null;
+  draftTest: ApiDraftKeyTestResponse | null;
   observedConfig: ApiConfigRecord | null;
-  storedCount: number;
+  storedConfigs: ApiConfigRecord[];
   draftValue: string;
   busyKey: string | null;
   onDraftChange: (provider: ApiProviderId, value: string) => void;
@@ -252,11 +305,15 @@ function ProviderKeyCard({
   onTest: (provider: ApiProviderId) => Promise<void>;
   onDelete: (provider: ApiProviderId) => Promise<void>;
 }): JSX.Element {
+  const storedConfig = storedConfigs[0] ?? null;
+  const storedCount = storedConfigs.length;
   const saveBusy = busyKey === `save-${definition.provider}`;
   const testBusy = busyKey === `test-${definition.provider}`;
   const deleteBusy = busyKey === `delete-${definition.provider}`;
+  const testedDraftValid = Boolean(draftTest?.ok && draftValue.trim());
   const showMetaPanel = Boolean(
-    storedConfig ||
+    draftTest ||
+      storedConfig ||
       observedConfig?.health.lastCheckedAt ||
       observedConfig?.health.failureReason ||
       (observedConfig?.source === "environment" && !storedConfig) ||
@@ -277,13 +334,33 @@ function ProviderKeyCard({
       <CardContent className="space-y-3 px-5 pb-5">
         {showMetaPanel ? (
           <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
-            {storedConfig ? (
-              <p>
-                Stored key: <span className="font-mono text-white">{storedConfig.secretMask}</span>
+            {draftTest ? (
+              <p className={cn("font-medium", draftTest.ok ? "text-emerald-200" : "text-rose-200")}>
+                Draft test: {draftTest.ok ? "Passed" : "Failed"}
+                {draftTest.health.latencyMs ? ` | ${draftTest.health.latencyMs}ms` : ""}
               </p>
             ) : null}
+            {draftTest?.health.failureReason ? <p className="mt-2 text-rose-200">{draftTest.health.failureReason}</p> : null}
+            {storedConfig ? (
+              <p className={draftTest ? "mt-2" : ""}>
+                Saved keys: <span className="text-white">{storedCount}</span>
+              </p>
+            ) : null}
+            {storedConfigs.length ? (
+              <div className="mt-2 space-y-2">
+                {storedConfigs.map((config, index) => (
+                  <div key={config.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/10 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-400">{index === 0 ? "Primary" : `Backup ${index}`}</p>
+                      <p className="truncate font-mono text-xs text-white">{config.secretMask}</p>
+                    </div>
+                    <StatusBadge label={statusLabel(config.status)} tone={statusTone(config.status)} />
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {observedConfig?.health.lastCheckedAt || observedConfig ? (
-              <p className={storedConfig ? "mt-2" : ""}>
+              <p className={storedConfig || draftTest ? "mt-2" : ""}>
                 Last check: <span className="text-white">{formatDateTime(observedConfig?.health.lastCheckedAt)}</span>
                 {" | "}
                 Latency: <span className="text-white">{formatLatency(observedConfig?.health.latencyMs)}</span>
@@ -292,14 +369,14 @@ function ProviderKeyCard({
             {observedConfig?.source === "environment" && !storedConfig ? (
               <p className="mt-2 text-slate-400">This provider is currently supplied by an environment key. Saving here will create a local stored key.</p>
             ) : null}
-            {storedCount > 1 ? <p className="mt-2 text-amber-200">Multiple saved keys exist for this provider. Delete will clear all saved entries.</p> : null}
+            {storedCount > 1 ? <p className="mt-2 text-amber-200">Each additional successful save becomes a backup key for this provider. Delete clears all saved keys in this block.</p> : null}
             {observedConfig?.health.failureReason ? <p className="mt-2 text-rose-200">{observedConfig.health.failureReason}</p> : null}
           </div>
         ) : null}
 
         <Input
           className="h-11 border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
-          placeholder={storedConfig ? `Paste a new ${definition.label} key to replace the saved one` : definition.placeholder}
+          placeholder={storedConfig ? `Paste another ${definition.label} key to add a backup` : definition.placeholder}
           type="password"
           value={draftValue}
           onChange={(event) => onDraftChange(definition.provider, event.target.value)}
@@ -308,7 +385,7 @@ function ProviderKeyCard({
         <div className="flex flex-wrap gap-3">
           <Button
             className="h-10 bg-cyan-300 px-5 text-slate-950 hover:bg-cyan-200"
-            disabled={!draftValue.trim() || saveBusy}
+            disabled={!draftValue.trim() || !testedDraftValid || saveBusy}
             type="button"
             onClick={() => void onSave(definition.provider)}
           >
@@ -316,7 +393,7 @@ function ProviderKeyCard({
           </Button>
           <Button
             className="h-10 border border-white/10 bg-white/5 px-5 text-white hover:bg-white/10"
-            disabled={!observedConfig || testBusy}
+            disabled={(!draftValue.trim() && !observedConfig) || testBusy}
             type="button"
             variant="ghost"
             onClick={() => void onTest(definition.provider)}
@@ -325,7 +402,7 @@ function ProviderKeyCard({
           </Button>
           <Button
             className="h-10 border border-rose-300/20 bg-rose-300/10 px-5 text-rose-100 hover:bg-rose-300/15"
-            disabled={!storedConfig || deleteBusy}
+            disabled={!storedCount || deleteBusy}
             type="button"
             variant="ghost"
             onClick={() => void onDelete(definition.provider)}

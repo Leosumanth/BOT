@@ -309,6 +309,20 @@ export interface ApiConfigTestResponse {
   health: ApiProbeHealth;
 }
 
+export interface ApiDraftKeyTestRequest {
+  provider: ApiProviderId;
+  value: string;
+}
+
+export interface ApiDraftKeyTestResponse {
+  provider: ApiProviderId;
+  testedAt: string;
+  status: ApiHealthStatus;
+  ok: boolean;
+  health: ApiProbeHealth;
+  secretMask: string;
+}
+
 export interface ApiMaintenanceRunResponse {
   maintenance: ApiMaintenanceSnapshot;
   readiness: ApiReadinessReport;
