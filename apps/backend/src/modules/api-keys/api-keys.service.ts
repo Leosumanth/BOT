@@ -601,8 +601,14 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
   }
 
   private buildProviderStatuses(configs: ApiConfigRecord[]): ApiProviderStatus[] {
-    return PROVIDER_CATALOG.map((definition) => {
+    const providers: ApiProviderStatus[] = [];
+
+    for (const definition of PROVIDER_CATALOG) {
       const providerConfigs = configs.filter((entry) => entry.provider === definition.provider);
+      if (!providerConfigs.length) {
+        continue;
+      }
+
       const active = providerConfigs.find((entry) => entry.active) ?? null;
       const healthy = providerConfigs.filter((entry) => entry.health.reachable && entry.health.authValid);
       const warnings: string[] = [];
@@ -640,7 +646,7 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       const averageLatencyMs =
         latencyValues.length > 0 ? Math.round(latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length) : null;
 
-      return {
+      providers.push({
         provider: definition.provider,
         label: definition.label,
         category: definition.category,
@@ -658,11 +664,23 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
         successRate,
         score: active?.selection.value ?? 0,
         rateLimitRisk: active?.health.rateLimit.risk ?? "low"
-      };
-    });
+      });
+    }
+
+    return providers;
   }
 
   private buildReadinessReport(providers: ApiProviderStatus[], configs: ApiConfigRecord[]): ApiReadinessReport {
+    if (!configs.length) {
+      return {
+        checkedAt: new Date().toISOString(),
+        state: "warning",
+        summary: "No API configs added yet. Add your first external API config to start health checks and failover.",
+        blockers: [],
+        warnings: []
+      };
+    }
+
     const blockers: string[] = [];
     const warnings: string[] = [];
 

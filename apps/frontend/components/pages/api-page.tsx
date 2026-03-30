@@ -107,14 +107,8 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   }, [data.configs, selectedId]);
 
   const selectedConfig = data.configs.find((entry) => entry.id === selectedId) ?? data.configs[0] ?? null;
-  const providerCatalog = useMemo(
-    () =>
-      FALLBACK_PROVIDERS.map((fallback) => ({
-        ...fallback,
-        runtime: data.providers.find((entry) => entry.provider === fallback.provider) ?? null
-      })),
-    [data.providers]
-  );
+  const providerCatalog = useMemo(() => FALLBACK_PROVIDERS.map((fallback) => ({ ...fallback })), []);
+  const visibleProviders = useMemo(() => data.providers.filter((entry) => entry.configCount > 0), [data.providers]);
 
   async function refreshDashboard(nextFeedback?: string): Promise<ApiKeysDashboardResponse> {
     const next = await backendFetch<ApiKeysDashboardResponse>("/api-keys");
@@ -314,7 +308,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
 
       <section className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
         <div className="space-y-6">
-          <ProviderGrid catalog={providerCatalog} />
+          <ProviderGrid providers={visibleProviders} />
           <ConfigTable
             busyKey={busyKey}
             configs={data.configs}
@@ -433,15 +427,9 @@ function HeroSection({
 }
 
 function ProviderGrid({
-  catalog
+  providers
 }: {
-  catalog: Array<{
-    provider: ApiProviderId;
-    label: string;
-    description: string;
-    defaultEndpointUrl: string;
-    runtime: ApiKeysDashboardResponse["providers"][number] | null;
-  }>;
+  providers: ApiKeysDashboardResponse["providers"];
 }): JSX.Element {
   return (
     <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
@@ -449,23 +437,29 @@ function ProviderGrid({
         <CardTitle className="text-xl text-white">Provider health matrix</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-        {catalog.map(({ provider, label, description, runtime }) => (
-          <div key={provider} className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-white">{label}</p>
-                <p className="mt-1 text-xs text-slate-400">{description}</p>
+        {providers.length ? (
+          providers.map((provider) => (
+            <div key={provider.provider} className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-white">{provider.label}</p>
+                  <p className="mt-1 text-xs text-slate-400">{provider.description}</p>
+                </div>
+                <StatusBadge label={readinessLabel(provider.readiness)} tone={readinessTone(provider.readiness)} />
               </div>
-              <StatusBadge label={runtime ? readinessLabel(runtime.readiness) : "No data"} tone={runtime ? readinessTone(runtime.readiness) : "warning"} />
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <Metric label="Active" value={provider.activeLabel ?? "None"} />
+                <Metric label="Healthy" value={String(provider.healthyCount)} />
+                <Metric label="Configs" value={String(provider.configCount)} />
+                <Metric label="Latency" value={formatLatency(provider.averageLatencyMs)} />
+              </div>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-              <Metric label="Active" value={runtime?.activeLabel ?? "None"} />
-              <Metric label="Healthy" value={String(runtime?.healthyCount ?? 0)} />
-              <Metric label="Latency" value={formatLatency(runtime?.averageLatencyMs)} />
-              <Metric label="Success" value={formatPercent(runtime?.successRate)} />
-            </div>
+          ))
+        ) : (
+          <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-white/[0.03] p-6 text-sm text-slate-300 md:col-span-2 2xl:col-span-4">
+            Provider health will appear here after you add your first API config. Nothing is preloaded or evaluated until a real config exists.
           </div>
-        ))}
+        )}
       </CardContent>
     </Card>
   );
@@ -569,36 +563,45 @@ function ConfigTable({
 }
 
 function ReadinessCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse; onBenchmark: () => Promise<void> }): JSX.Element {
+  const hasConfigs = data.configs.length > 0;
   return (
     <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-xl text-white">Pre-mint readiness</CardTitle>
-          <StatusBadge label={readinessLabel(data.readiness.state)} tone={readinessTone(data.readiness.state)} />
+          <StatusBadge label={hasConfigs ? readinessLabel(data.readiness.state) : "Standby"} tone={hasConfigs ? readinessTone(data.readiness.state) : "neutral"} />
         </div>
       </CardHeader>
       <CardContent className="space-y-4 text-sm text-slate-300">
-        <p>{data.readiness.summary}</p>
-        <ul className="space-y-2">
-          {data.readiness.blockers.map((entry) => (
-            <li key={entry} className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-rose-100">
-              {entry}
-            </li>
-          ))}
-          {data.readiness.warnings.map((entry) => (
-            <li key={entry} className="rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-amber-100">
-              {entry}
-            </li>
-          ))}
-          {!data.readiness.blockers.length && !data.readiness.warnings.length ? (
-            <li className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-emerald-100">
-              All required providers are healthy, benchmarked, and ready for automation.
-            </li>
-          ) : null}
-        </ul>
-        <Button className="w-full bg-white/10 text-white hover:bg-white/15" type="button" variant="ghost" onClick={() => void onBenchmark()}>
-          Refresh readiness now
-        </Button>
+        {hasConfigs ? (
+          <>
+            <p>{data.readiness.summary}</p>
+            <ul className="space-y-2">
+              {data.readiness.blockers.map((entry) => (
+                <li key={entry} className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-rose-100">
+                  {entry}
+                </li>
+              ))}
+              {data.readiness.warnings.map((entry) => (
+                <li key={entry} className="rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-amber-100">
+                  {entry}
+                </li>
+              ))}
+              {!data.readiness.blockers.length && !data.readiness.warnings.length ? (
+                <li className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-emerald-100">
+                  All required providers are healthy, benchmarked, and ready for automation.
+                </li>
+              ) : null}
+            </ul>
+            <Button className="w-full bg-white/10 text-white hover:bg-white/15" type="button" variant="ghost" onClick={() => void onBenchmark()}>
+              Refresh readiness now
+            </Button>
+          </>
+        ) : (
+          <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-white/[0.03] px-4 py-5 text-slate-300">
+            Add your first external API config to enable live readiness checks, backup validation, and automation gating.
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -606,27 +609,39 @@ function ReadinessCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse; 
 
 function MaintenanceCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse; onBenchmark: () => Promise<void> }): JSX.Element {
   const maintenance = data.maintenance;
+  const hasConfigs = data.configs.length > 0;
   return (
     <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-xl text-white">Background maintenance</CardTitle>
-          <StatusBadge label={maintenance.status} tone={maintenance.status === "failed" ? "danger" : maintenance.status === "running" ? "warning" : "success"} />
+          <StatusBadge
+            label={hasConfigs ? maintenance.status : "Standby"}
+            tone={hasConfigs ? (maintenance.status === "failed" ? "danger" : maintenance.status === "running" ? "warning" : "success") : "neutral"}
+          />
         </div>
       </CardHeader>
       <CardContent className="space-y-4 text-sm text-slate-300">
-        <p>{maintenance.summary}</p>
-        <div className="grid grid-cols-2 gap-3">
-          <Metric label="Trigger" value={maintenance.trigger} />
-          <Metric label="Checked" value={String(maintenance.checkedConfigs)} />
-          <Metric label="Healthy" value={String(maintenance.healthyConfigs)} />
-          <Metric label="Failovers" value={String(maintenance.failoversActivated)} />
-          <Metric label="Warnings" value={String(maintenance.warnings)} />
-          <Metric label="Completed" value={formatDateTime(maintenance.completedAt)} />
-        </div>
-        <Button className="w-full bg-cyan-300 text-slate-950 hover:bg-cyan-200" type="button" onClick={() => void onBenchmark()}>
-          Benchmark now
-        </Button>
+        {hasConfigs ? (
+          <>
+            <p>{maintenance.summary}</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Metric label="Trigger" value={maintenance.trigger} />
+              <Metric label="Checked" value={String(maintenance.checkedConfigs)} />
+              <Metric label="Healthy" value={String(maintenance.healthyConfigs)} />
+              <Metric label="Failovers" value={String(maintenance.failoversActivated)} />
+              <Metric label="Warnings" value={String(maintenance.warnings)} />
+              <Metric label="Completed" value={formatDateTime(maintenance.completedAt)} />
+            </div>
+            <Button className="w-full bg-cyan-300 text-slate-950 hover:bg-cyan-200" type="button" onClick={() => void onBenchmark()}>
+              Benchmark now
+            </Button>
+          </>
+        ) : (
+          <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-white/[0.03] px-4 py-5 text-slate-300">
+            Background maintenance stays idle until at least one API config is registered.
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -687,7 +702,6 @@ function ConfigDetail({
               <Metric label="Latency" value={formatLatency(config.health.latencyMs)} />
               <Metric label="Rate limit" value={formatRateLimit(config)} />
               <Metric label="Selection score" value={`${config.selection.value} / #${config.selection.rank}`} />
-              <Metric label="Success rate" value={formatPercent(config.memory.recentSuccessRate)} />
               <Metric label="Failure count" value={String(config.memory.recentFailureCount)} />
               <Metric label="Failover frequency" value={String(config.memory.failoverFrequency)} />
               <Metric label="Recovery history" value={String(config.memory.recoverySuccessHistory)} />
@@ -764,7 +778,6 @@ function ConfigDrawer({
     label: string;
     description: string;
     defaultEndpointUrl: string;
-    runtime: ApiKeysDashboardResponse["providers"][number] | null;
   }>;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
