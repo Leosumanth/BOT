@@ -19,22 +19,37 @@ export class RpcRouter {
 
   constructor(configs: RpcEndpointConfig[]) {
     for (const config of configs.filter((entry) => entry.enabled)) {
-      const transport = config.transport === "ws" ? webSocket(config.url) : http(config.url, { retryCount: 0 });
-      const chain = resolveViemChain(config.chain);
-      this.endpoints.set(config.key, {
-        config,
-        publicClient: createPublicClient({ chain, transport }),
-        walletClient: createWalletClient({ chain, transport }),
-        health: {
-          endpointKey: config.key,
-          latencyMs: Number.POSITIVE_INFINITY,
-          successRate: 1,
-          failureCount: 0,
-          lastCheckedAt: nowIso(),
-          live: true
-        }
-      });
+      this.upsertConfig(config);
     }
+  }
+
+  upsertConfig(config: RpcEndpointConfig): void {
+    if (!config.enabled) {
+      this.endpoints.delete(config.key);
+      return;
+    }
+
+    const transport = config.transport === "ws" ? webSocket(config.url) : http(config.url, { retryCount: 0 });
+    const chain = resolveViemChain(config.chain);
+    const existing = this.endpoints.get(config.key);
+
+    this.endpoints.set(config.key, {
+      config,
+      publicClient: createPublicClient({ chain, transport }),
+      walletClient: createWalletClient({ chain, transport }),
+      health: existing?.health ?? {
+        endpointKey: config.key,
+        latencyMs: Number.POSITIVE_INFINITY,
+        successRate: 1,
+        failureCount: 0,
+        lastCheckedAt: nowIso(),
+        live: true
+      }
+    });
+  }
+
+  removeConfig(key: string): void {
+    this.endpoints.delete(key);
   }
 
   getHealthSnapshot(chain?: ChainKey): RpcHealthSnapshot[] {

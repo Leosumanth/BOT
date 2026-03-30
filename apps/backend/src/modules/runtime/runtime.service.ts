@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import type { OnModuleInit } from "@nestjs/common";
 import {
   BlockTimingEngine,
   CompetitionAnalyzer,
@@ -12,8 +13,10 @@ import {
   RpcRouter
 } from "@mintbot/blockchain";
 import type { NonceStore } from "@mintbot/blockchain";
+import type { RpcEndpointConfig } from "@mintbot/shared";
 import { AdaptiveFeedbackLoop, MintStrategyEngine, WalletStrategyEngine } from "@mintbot/bot";
 import { AppConfigService } from "../../config/app-config.service.js";
+import { DatabaseService } from "../../database/database.service.js";
 import { QueueService } from "../queues/queue.service.js";
 
 class RedisNonceStore implements NonceStore {
@@ -33,7 +36,7 @@ class RedisNonceStore implements NonceStore {
 }
 
 @Injectable()
-export class RuntimeService {
+export class RuntimeService implements OnModuleInit {
   readonly rpcRouter: RpcRouter;
   readonly analyzer: ContractAnalyzer;
   readonly blockTiming: BlockTimingEngine;
@@ -47,12 +50,16 @@ export class RuntimeService {
   readonly walletStrategy: WalletStrategyEngine;
   readonly mintStrategy: MintStrategyEngine;
   readonly flashbots?: FlashbotsBundleClient;
+  private readonly envRpcKeys: Set<string>;
 
   constructor(
     config: AppConfigService,
+    private readonly database: DatabaseService,
     queueService: QueueService
   ) {
-    this.rpcRouter = new RpcRouter(config.getRpcEndpoints());
+    const envRpcEndpoints = config.getRpcEndpoints();
+    this.envRpcKeys = new Set(envRpcEndpoints.map((endpoint) => endpoint.key));
+    this.rpcRouter = new RpcRouter(envRpcEndpoints);
     this.analyzer = new ContractAnalyzer(this.rpcRouter);
     this.blockTiming = new BlockTimingEngine();
     this.gasPredictor = new PredictiveGasModel();
@@ -67,5 +74,35 @@ export class RuntimeService {
     this.flashbots = config.flashbotsAuthPrivateKey
       ? new FlashbotsBundleClient(config.flashbotsRelayUrl, config.flashbotsAuthPrivateKey)
       : undefined;
+  }
+
+  async onModuleInit(): Promise<void> {
+    await this.database.ensureSchema();
+    const customEndpoints = await this.database.listRpcEndpoints();
+    for (const endpoint of customEndpoints) {
+      this.rpcRouter.upsertConfig(endpoint);
+    }
+  }
+
+  isEnvRpcKey(key: string): boolean {
+    return this.envRpcKeys.has(key);
+  }
+
+  async saveCustomRpcEndpoint(endpoint: RpcEndpointConfig): Promise<void> {
+    await this.database.upsertRpcEndpoint(endpoint);
+    this.rpcRouter.upsertConfig(endpoint);
+  }
+
+  async deleteCustomRpcEndpoint(key: string): Promise<boolean> {
+    if (this.isEnvRpcKey(key)) {
+      return false;
+    }
+
+    const removed = await this.database.deleteRpcEndpoint(key);
+    if (removed) {
+      this.rpcRouter.removeConfig(key);
+    }
+
+    return removed;
   }
 }

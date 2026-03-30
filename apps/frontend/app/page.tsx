@@ -1,24 +1,15 @@
 import type { JSX } from "react";
-import type { DashboardBootstrapResponse } from "@mintbot/shared";
-import { DashboardShell } from "@/components/dashboard/dashboard-shell";
+import type { AnalyticsSummary, DashboardBootstrapResponse, SystemOverview } from "@mintbot/shared";
+import { HomeOverviewPage } from "@/components/pages/home-page";
 import { backendFetch } from "@/lib/api";
-
-const emptyDashboard: DashboardBootstrapResponse = {
-  snapshot: {
-    botStatus: "idle",
-    activeJobs: [],
-    recentActivity: [],
-    gasFeed: [],
-    rpcHealth: [],
-    walletMetrics: [],
-    trackedContracts: []
-  },
-  wallets: [],
-  recentJobs: []
-};
+import { emptyDashboard, emptySummary, emptySystemOverview } from "@/lib/defaults";
 
 export default async function HomePage(): Promise<JSX.Element> {
-  const initialData = await backendFetch<DashboardBootstrapResponse>("/analytics/dashboard").catch(() => emptyDashboard);
+  const [dashboard, summary, system] = await Promise.all([
+    backendFetch<DashboardBootstrapResponse>("/analytics/dashboard").catch(() => emptyDashboard),
+    backendFetch<AnalyticsSummary>("/analytics/summary").catch(() => emptySummary),
+    backendFetch<SystemOverview>("/system").catch(() => emptySystemOverview)
+  ]);
 
-  return <DashboardShell initialData={initialData} />;
+  return <HomeOverviewPage snapshot={dashboard.snapshot} summary={summary} system={system} />;
 }

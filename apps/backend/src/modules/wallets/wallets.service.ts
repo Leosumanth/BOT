@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
-import type { ChainKey, WalletRecord, WalletUpsertRequest } from "@mintbot/shared";
+import type { ChainKey, WalletRecord, WalletUpdateRequest, WalletUpsertRequest } from "@mintbot/shared";
 import { nowIso } from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { DatabaseService } from "../../database/database.service.js";
@@ -33,6 +33,14 @@ export class WalletsService {
       createdAt: timestamp,
       updatedAt: timestamp
     });
+  }
+
+  async update(walletId: string, request: WalletUpdateRequest): Promise<WalletRecord | null> {
+    return this.database.updateWallet(walletId, request);
+  }
+
+  async delete(walletId: string): Promise<boolean> {
+    return this.database.deleteWallet(walletId);
   }
 
   async getUnlockedWallets(walletIds: string[]): Promise<UnlockedWallet[]> {

@@ -52,6 +52,16 @@ export class QueueService implements OnModuleDestroy {
     });
   }
 
+  async removeMintJob(jobId: string): Promise<boolean> {
+    const job = await this.mintQueue.getJob(jobId);
+    if (!job) {
+      return false;
+    }
+
+    await job.remove();
+    return true;
+  }
+
   async onModuleDestroy(): Promise<void> {
     await Promise.all([this.mintQueue.close(), this.trackerQueue.close(), this.redis.quit()]);
   }

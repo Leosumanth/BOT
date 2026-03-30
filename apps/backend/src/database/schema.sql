@@ -63,6 +63,26 @@ create table if not exists contracts (
   primary key (address, chain)
 );
 
+create table if not exists jobs (
+  id text primary key,
+  status text not null,
+  chain text not null,
+  contract_address text not null,
+  mint_function text,
+  quantity integer not null,
+  value_wei numeric,
+  wallet_ids jsonb not null default '[]'::jsonb,
+  gas_strategy text not null,
+  use_flashbots boolean not null default false,
+  simulate_first boolean not null default true,
+  source text not null default 'manual',
+  last_message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  stopped_at timestamptz,
+  deleted_at timestamptz
+);
+
 create table if not exists transactions (
   id text primary key,
   job_id text not null,
@@ -102,6 +122,21 @@ create table if not exists logs (
   created_at timestamptz not null default now()
 );
 
+create table if not exists rpc_endpoints (
+  key text primary key,
+  label text not null,
+  chain text not null,
+  transport text not null,
+  provider text not null,
+  url text not null,
+  priority integer not null default 10,
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists idx_logs_created_at on logs(created_at desc);
+create index if not exists idx_jobs_created_at on jobs(created_at desc);
 create index if not exists idx_transactions_job_id on transactions(job_id);
 create index if not exists idx_mints_wallet_id on mints(wallet_id);
+create index if not exists idx_rpc_endpoints_chain on rpc_endpoints(chain, transport, priority);

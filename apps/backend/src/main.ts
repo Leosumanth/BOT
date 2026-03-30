@@ -52,7 +52,8 @@ function getRequestPath(req: FrontendRequest): string {
 }
 
 function isFrontendRoute(path: string, apiPrefix: string): boolean {
-  return path !== "/health" && !path.startsWith(`/${apiPrefix}`) && !path.startsWith("/socket.io");
+  const apiRoot = `/${apiPrefix}`;
+  return path !== "/health" && !path.startsWith("/socket.io") && (path === apiRoot || path === `${apiRoot}/` || !path.startsWith(apiRoot));
 }
 
 function buildFrontendRedirectUrl(frontendUrl: URL, originalUrl: string | undefined): string {
