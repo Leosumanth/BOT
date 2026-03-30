@@ -21,25 +21,25 @@ const API_KEY_FIELDS = [
   {
     provider: "opensea",
     label: "OpenSea API",
-    description: "Paste the OpenSea key here. If you want another provider on this page, add another coded placeholder.",
+    description: "Paste the OpenSea key.",
     placeholder: "Paste OpenSea API key"
   },
   {
     provider: "etherscan",
     label: "Etherscan API",
-    description: "Paste the Etherscan key here once you want this provider enabled on the page.",
+    description: "Paste the Etherscan key.",
     placeholder: "Paste Etherscan API key"
   },
   {
     provider: "drpc",
     label: "dRPC API",
-    description: "Paste the dRPC key here when you want the backend to use the coded dRPC integration.",
+    description: "Paste the dRPC key.",
     placeholder: "Paste dRPC API key"
   },
   {
     provider: "openai",
     label: "OpenAI API",
-    description: "Paste the OpenAI key here when you want the coded OpenAI automation hooks to run.",
+    description: "Paste the OpenAI key.",
     placeholder: "sk-..."
   }
 ] as const satisfies ApiKeyFieldDefinition[];
@@ -190,13 +190,13 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_30%),linear-gradient(180deg,rgba(8,15,28,0.96),rgba(4,8,18,0.98))]" />
         <div className="relative space-y-3 p-5 md:p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.32em] text-cyan-200/75">API Keys</p>
-          <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-white md:text-3xl">Paste provider keys and let the backend handle the rest.</h1>
+          <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-white md:text-3xl">Store keys and stay ahead of provider limits.</h1>
           <p className="max-w-3xl text-sm leading-6 text-slate-300">
-            This page is intentionally simple. You code the provider placeholder, then come here to paste the key, save it, test it, or delete it.
-            All automation, failover, recovery, and self-sustaining behavior stays in the backend.
+            Save a key, run a quick test, and let the backend handle health checks, failover, recovery, and automation behavior.
           </p>
           <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-slate-300">
-            {feedback ?? "Each block below is a coded provider slot. Save stores the key, Test checks the current provider key, and Delete clears the saved key."}
+            {feedback ??
+              "Tip: providers with strict quotas should have a spare key ready. Test after saving, rotate keys before limits are exhausted, and let backend checks watch latency and rate-limit pressure."}
           </div>
         </div>
       </section>
@@ -271,7 +271,7 @@ function ProviderKeyCard({
             <CardTitle className="text-lg text-white">{definition.label}</CardTitle>
             <p className="text-[13px] leading-5 text-slate-400">{definition.description}</p>
           </div>
-          <StatusBadge label={observedConfig ? statusLabel(observedConfig.status) : "Empty"} tone={observedConfig ? statusTone(observedConfig.status) : "neutral"} />
+          <StatusBadge label={observedConfig ? statusLabel(observedConfig.status) : "Standby"} tone={observedConfig ? statusTone(observedConfig.status) : "neutral"} />
         </div>
       </CardHeader>
       <CardContent className="space-y-3 px-5 pb-5">
