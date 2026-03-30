@@ -31,6 +31,21 @@ function firstDefinedEnv(...keys: string[]): string | undefined {
   return undefined;
 }
 
+function normalizeOriginCandidate(value: string | undefined): string | null {
+  const candidate = value?.trim();
+  if (!candidate) {
+    return null;
+  }
+
+  const withProtocol = /^[a-z]+:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+
+  try {
+    return new URL(withProtocol).origin;
+  } catch {
+    return null;
+  }
+}
+
 const sanitizedProcessEnv = Object.fromEntries(
   Object.entries(process.env).map(([key, value]) => [key, value?.trim() ? value : undefined])
 );
@@ -216,9 +231,21 @@ export class AppConfigService {
       return true;
     }
 
+    const configuredOrigins = new Set(
+      [
+        normalizeOriginCandidate(this.frontendUrl),
+        normalizeOriginCandidate(process.env.RAILWAY_STATIC_URL),
+        normalizeOriginCandidate(process.env.RAILWAY_PUBLIC_DOMAIN)
+      ].filter((value): value is string => Boolean(value))
+    );
+
+    if (configuredOrigins.has(origin)) {
+      return true;
+    }
+
     try {
-      const frontendOrigin = new URL(this.frontendUrl).origin;
-      if (origin === frontendOrigin) {
+      const frontendOrigin = normalizeOriginCandidate(this.frontendUrl);
+      if (frontendOrigin && origin === frontendOrigin) {
         return true;
       }
     } catch {
