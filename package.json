@@ -13,7 +13,10 @@
     "dev": "concurrently \"npm run dev -w @mintbot/backend\" \"npm run dev -w @mintbot/frontend\"",
     "dev:backend": "npm run dev -w @mintbot/backend",
     "dev:frontend": "npm run dev -w @mintbot/frontend",
-    "dev:worker": "npm run dev:worker -w @mintbot/backend"
+    "dev:worker": "npm run dev:worker -w @mintbot/backend",
+    "start": "npm run start:backend",
+    "start:backend": "npm run start -w @mintbot/backend",
+    "start:frontend": "npm run start -w @mintbot/frontend"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
