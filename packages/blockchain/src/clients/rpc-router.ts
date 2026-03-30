@@ -80,6 +80,11 @@ export class RpcRouter {
     return runtime.publicClient;
   }
 
+  getPreferredConfig(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): RpcEndpointConfig {
+    const runtime = this.getPreferredRuntime(chain, transport);
+    return runtime.config;
+  }
+
   getPreferredWalletClient(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): WalletClient {
     const runtime = this.getPreferredRuntime(chain, transport);
     return runtime.walletClient;

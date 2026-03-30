@@ -13,6 +13,11 @@ const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   MINT_QUEUE_NAME: z.string().default("mint-jobs"),
   TRACKER_QUEUE_NAME: z.string().default("tracker-jobs"),
+  ENABLE_RUST_EXECUTOR: z.coerce.boolean().default(true),
+  RUST_MINT_QUEUE_NAME: z.string().default("rust:mint"),
+  RUST_RESULT_CHANNEL: z.string().default("rust:mint:results"),
+  RUST_EXECUTION_TIMEOUT_MS: z.coerce.number().default(45_000),
+  RUST_SUCCESS_RESULT_TTL_MS: z.coerce.number().default(600_000),
   ENABLE_INLINE_WORKER: z.coerce.boolean().default(true),
   ENABLE_MEMPOOL_TRACKER: z.coerce.boolean().default(true),
   PRIVATE_KEY_ENCRYPTION_SECRET: z.string().min(32),
@@ -58,6 +63,26 @@ export class AppConfigService {
 
   get trackerQueueName(): string {
     return this.env.TRACKER_QUEUE_NAME;
+  }
+
+  get enableRustExecutor(): boolean {
+    return this.env.ENABLE_RUST_EXECUTOR;
+  }
+
+  get rustMintQueueName(): string {
+    return this.env.RUST_MINT_QUEUE_NAME;
+  }
+
+  get rustResultChannel(): string {
+    return this.env.RUST_RESULT_CHANNEL;
+  }
+
+  get rustExecutionTimeoutMs(): number {
+    return this.env.RUST_EXECUTION_TIMEOUT_MS;
+  }
+
+  get rustSuccessResultTtlMs(): number {
+    return this.env.RUST_SUCCESS_RESULT_TTL_MS;
   }
 
   get enableInlineWorker(): boolean {

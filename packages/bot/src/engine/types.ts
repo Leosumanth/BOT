@@ -1,4 +1,4 @@
-import type { ChainKey, MintJobInput, MintJobResult, WalletPerformanceMetric } from "@mintbot/shared";
+import type { ChainKey, MintJobInput, MintJobResult, RustMintExecutionRequest, RustMintExecutionResult, WalletPerformanceMetric } from "@mintbot/shared";
 
 export interface UnlockedWallet {
   id: string;
@@ -33,6 +33,10 @@ export interface MintBotExecutionContext {
 
 export interface MintBotTelemetrySink {
   publish(event: MintBotTelemetryEvent): Promise<void> | void;
+}
+
+export interface MintExecutionAdapter {
+  execute(request: RustMintExecutionRequest): Promise<RustMintExecutionResult>;
 }
 
 export interface WalletPerformanceStore {

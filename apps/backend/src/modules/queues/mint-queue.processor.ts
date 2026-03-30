@@ -11,6 +11,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway.js";
 import { BotControlRegistry } from "../bot/bot-control.registry.js";
 import { deserializeMintJob } from "../../utils/json.js";
 import { AppConfigService } from "../../config/app-config.service.js";
+import { RustExecutionBridgeService } from "../rust-execution/rust-execution-bridge.service.js";
 
 @Injectable()
 export class MintQueueProcessor implements OnModuleInit, OnModuleDestroy {
@@ -24,7 +25,8 @@ export class MintQueueProcessor implements OnModuleInit, OnModuleDestroy {
     private readonly database: DatabaseService,
     private readonly realtime: RealtimeGateway,
     private readonly control: BotControlRegistry,
-    private readonly config: AppConfigService
+    private readonly config: AppConfigService,
+    private readonly rustExecution: RustExecutionBridgeService
   ) {}
 
   onModuleInit(): void {
@@ -77,6 +79,7 @@ export class MintQueueProcessor implements OnModuleInit, OnModuleDestroy {
           gasStrategy: this.runtime.gasStrategy,
           presignedTransactions: this.runtime.presignedTransactions,
           flashbots: this.runtime.flashbots,
+          executionAdapter: this.config.enableRustExecutor ? this.rustExecution : undefined,
           telemetry: {
             publish: async (event) => {
               await this.database.insertLog({

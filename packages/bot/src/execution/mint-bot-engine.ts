@@ -5,6 +5,8 @@ import {
   type MintExecutionAttempt,
   type MintJobInput,
   type MintJobResult,
+  type RpcEndpointConfig,
+  type RustMintExecutionRequest,
   type WalletPerformanceMetric
 } from "@mintbot/shared";
 import {
@@ -15,7 +17,7 @@ import {
   PresignedTransactionService,
   type RpcRouter
 } from "@mintbot/blockchain";
-import type { MintBotExecutionContext, MintBotExecutionOutput, MintBotTelemetrySink, UnlockedWallet } from "../engine/types.js";
+import type { MintBotExecutionContext, MintBotExecutionOutput, MintBotTelemetrySink, MintExecutionAdapter, UnlockedWallet } from "../engine/types.js";
 
 interface MintBotDependencies {
   rpcRouter: RpcRouter;
@@ -25,6 +27,7 @@ interface MintBotDependencies {
   presignedTransactions: PresignedTransactionService;
   flashbots?: FlashbotsBundleClient;
   telemetry?: MintBotTelemetrySink;
+  executionAdapter?: MintExecutionAdapter;
 }
 
 export class MintBotEngine {
@@ -94,20 +97,6 @@ export class MintBotEngine {
         )
     });
 
-    await this.emit(job, "sign", "info", `Signing transaction for ${wallet.label}.`, {
-      wallet: wallet.label,
-      nonce
-    });
-
-    const signed = await this.deps.presignedTransactions.sign({
-      privateKey: wallet.privateKey,
-      nonce,
-      chainId: CHAIN_LOOKUP[job.target.chain].id,
-      gas: transaction.gasEstimate,
-      transaction,
-      fees: feeResult
-    });
-
     const attempt: MintExecutionAttempt = {
       walletId: wallet.id,
       nonce,
@@ -116,9 +105,55 @@ export class MintBotEngine {
       submittedAt: nowIso()
     };
 
-    const shouldUseFlashbots = Boolean(job.policy.useFlashbots && this.deps.flashbots && job.target.chain === "ethereum");
+    const shouldUseFlashbots = Boolean(job.policy.useFlashbots && job.target.chain === "ethereum" && (this.deps.executionAdapter || this.deps.flashbots));
 
     try {
+      if (this.deps.executionAdapter) {
+        const submission = await this.executeViaRust(job, wallet, transaction, nonce, feeResult, shouldUseFlashbots);
+        attempt.txHash = submission.txHash;
+        attempt.rpcKey = submission.rpcKey;
+        attempt.simulated = submission.simulated;
+
+        await this.emit(job, "submit", "success", `Rust executor submitted transaction for ${wallet.label}.`, {
+          wallet: wallet.label,
+          txHash: submission.txHash
+        });
+
+        const receipt = await this.deps.rpcRouter.executeWithFailover(job.target.chain, (runtime) =>
+          runtime.publicClient.waitForTransactionReceipt({ hash: submission.txHash, confirmations: 1, timeout: 60_000 })
+        );
+
+        attempt.success = receipt.status === "success";
+        attempt.confirmedAt = nowIso();
+
+        await this.emit(
+          job,
+          "confirm",
+          attempt.success ? "success" : "error",
+          attempt.success ? `Mint confirmed for ${wallet.label}.` : `Mint reverted for ${wallet.label}.`,
+          {
+            wallet: wallet.label,
+            txHash: submission.txHash
+          }
+        );
+
+        return attempt;
+      }
+
+      await this.emit(job, "sign", "info", `Signing transaction for ${wallet.label}.`, {
+        wallet: wallet.label,
+        nonce
+      });
+
+      const signed = await this.deps.presignedTransactions.sign({
+        privateKey: wallet.privateKey,
+        nonce,
+        chainId: CHAIN_LOOKUP[job.target.chain].id,
+        gas: transaction.gasEstimate,
+        transaction,
+        fees: feeResult
+      });
+
       if (job.policy.simulateFirst && shouldUseFlashbots) {
         const nextBlock = bigintToHex(latestBlock.number + 1n);
         const simulation = await this.deps.flashbots!.simulate([signed], nextBlock);
@@ -188,6 +223,66 @@ export class MintBotEngine {
 
       return attempt;
     }
+  }
+
+  private async executeViaRust(
+    job: MintJobInput,
+    wallet: UnlockedWallet,
+    transaction: Awaited<ReturnType<MintTransactionBuilder["build"]>>,
+    nonce: number,
+    feeResult: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
+    shouldUseFlashbots: boolean
+  ): Promise<{ txHash: `0x${string}`; rpcKey: string; simulated: boolean }> {
+    const preferredRpc = this.getPreferredExecutionRpc(job.target.chain);
+    const request: RustMintExecutionRequest = {
+      jobId: `${job.id}:${wallet.id}`,
+      mintJobId: job.id,
+      walletId: wallet.id,
+      walletAddress: wallet.address,
+      walletPrivateKey: wallet.privateKey,
+      nonce,
+      to: transaction.to,
+      data: transaction.data,
+      value: transaction.value.toString(),
+      chainId: CHAIN_LOOKUP[job.target.chain].id,
+      rpcUrl: preferredRpc.url,
+      rpcKey: preferredRpc.key,
+      gas: {
+        maxFeePerGas: feeResult.maxFeePerGas.toString(),
+        maxPriorityFeePerGas: feeResult.maxPriorityFeePerGas.toString(),
+        gasLimit: this.withGasBuffer(transaction.gasEstimate).toString()
+      },
+      useFlashbots: shouldUseFlashbots,
+      simulateBeforeSend: shouldUseFlashbots && job.policy.simulateFirst
+    };
+
+    await this.emit(job, "sign", "info", `Dispatching execution to Rust worker for ${wallet.label}.`, {
+      wallet: wallet.label,
+      nonce
+    });
+
+    const result = await this.deps.executionAdapter!.execute(request);
+    if (result.status !== "success" || !result.txHash) {
+      throw new Error(result.error ?? `Rust executor failed for ${wallet.label}.`);
+    }
+
+    return {
+      txHash: result.txHash,
+      rpcKey: shouldUseFlashbots ? "flashbots" : preferredRpc.key,
+      simulated: Boolean(request.simulateBeforeSend)
+    };
+  }
+
+  private getPreferredExecutionRpc(chain: MintJobInput["target"]["chain"]): RpcEndpointConfig {
+    try {
+      return this.deps.rpcRouter.getPreferredConfig(chain, "http");
+    } catch {
+      return this.deps.rpcRouter.getPreferredConfig(chain);
+    }
+  }
+
+  private withGasBuffer(gasEstimate: bigint): bigint {
+    return gasEstimate + gasEstimate / 5n + 21_000n;
   }
 
   private buildResult(job: MintJobInput, attempts: MintExecutionAttempt[]): MintJobResult {
