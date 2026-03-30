@@ -45,6 +45,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   const selectedEntry = entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null;
   const selectedTest = selectedEntry ? testResults[selectedEntry.key] : undefined;
   const isBusy = isSaving || isDeleting || isTestingOne || isTestingAll;
+  const summary = summarize(entries, testResults);
 
   async function refreshEntries(): Promise<void> {
     const next = await backendFetch<ApiKeysDashboardResponse>("/api-keys");
@@ -159,12 +160,18 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     <div className="space-y-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <CardTitle>API Keys</CardTitle>
+          <CardTitle>API Key Command Center</CardTitle>
           <Button disabled={isBusy} type="button" onClick={handleTestAll}>
             {isTestingAll ? "Testing..." : "Test all keys"}
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <SummaryCard label="Managed" value={String(summary.managed)} variant="default" />
+            <SummaryCard label="Valid" value={String(summary.valid)} variant="success" />
+            <SummaryCard label="Not valid" value={String(summary.invalid)} variant="destructive" />
+            <SummaryCard label="Untested" value={String(summary.untested)} variant="warning" />
+          </div>
           <p className="text-sm text-muted-foreground">
             {feedback ?? (lastTestedAt ? `Last tested ${formatDateTime(lastTestedAt)}` : "Select a key to manage it.")}
           </p>
@@ -256,6 +263,48 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   );
 }
 
+function summarize(
+  entries: ApiKeyRecord[],
+  testResults: Record<ApiKeyRecord["key"], ApiKeyTestResult>
+): {
+  managed: number;
+  valid: number;
+  invalid: number;
+  untested: number;
+} {
+  let valid = 0;
+  let invalid = 0;
+  let untested = 0;
+
+  for (const entry of entries) {
+    const test = testResults[entry.key];
+
+    if (test?.status === "valid") {
+      valid += 1;
+      continue;
+    }
+
+    if (test?.status === "invalid") {
+      invalid += 1;
+      continue;
+    }
+
+    if (!entry.hasValue) {
+      invalid += 1;
+      continue;
+    }
+
+    untested += 1;
+  }
+
+  return {
+    managed: entries.length,
+    valid,
+    invalid,
+    untested
+  };
+}
+
 function getDisplayStatus(
   entry: ApiKeyRecord,
   test?: ApiKeyTestResult
@@ -277,4 +326,21 @@ function getDisplayStatus(
   }
 
   return { label: "Untested", variant: "default" };
+}
+
+function SummaryCard({
+  label,
+  value,
+  variant
+}: {
+  label: string;
+  value: string;
+  variant: "default" | "success" | "warning" | "destructive";
+}): JSX.Element {
+  return (
+    <div className="rounded-3xl border border-border bg-muted/40 p-4">
+      <Badge variant={variant}>{label}</Badge>
+      <p className="mt-4 text-3xl font-semibold text-foreground">{value}</p>
+    </div>
+  );
 }
