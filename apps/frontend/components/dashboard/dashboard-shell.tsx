@@ -1,5 +1,6 @@
 "use client";
 
+import type { FormEvent, JSX } from "react";
 import { useEffect, useState, useTransition } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
@@ -24,7 +25,7 @@ interface ToastMessage {
   description: string;
 }
 
-export function DashboardShell({ initialData }: DashboardShellProps): React.JSX.Element {
+export function DashboardShell({ initialData }: DashboardShellProps): JSX.Element {
   const [snapshot, setSnapshot] = useState(initialData.snapshot);
   const [wallets, setWallets] = useState(initialData.wallets);
   const [analyzerAddress, setAnalyzerAddress] = useState("");
@@ -78,7 +79,7 @@ export function DashboardShell({ initialData }: DashboardShellProps): React.JSX.
     });
 
     socket.on(SOCKET_EVENTS.jobStatus, (payload) => {
-      pushToast("Mint job updated", `${payload.jobId} → ${payload.status}`);
+      pushToast("Mint job updated", `${payload.jobId} -> ${payload.status}`);
     });
 
     return () => {
@@ -99,7 +100,7 @@ export function DashboardShell({ initialData }: DashboardShellProps): React.JSX.
     }, 4000);
   }
 
-  async function handleAnalyze(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleAnalyze(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
 
     try {
@@ -118,7 +119,7 @@ export function DashboardShell({ initialData }: DashboardShellProps): React.JSX.
     }
   }
 
-  async function handleStartMint(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleStartMint(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
 
     try {
@@ -497,7 +498,7 @@ export function DashboardShell({ initialData }: DashboardShellProps): React.JSX.
                       <Badge variant={rpc.live ? "success" : "destructive"}>{rpc.live ? "Live" : "Down"}</Badge>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {rpc.latencyMs}ms latency • {(rpc.successRate * 100).toFixed(0)}% success • {rpc.failureCount} failures
+                      {rpc.latencyMs}ms latency | {(rpc.successRate * 100).toFixed(0)}% success | {rpc.failureCount} failures
                     </p>
                   </div>
                 ))}
@@ -529,7 +530,7 @@ function MetricCard({
   label: string;
   value: string;
   hint: string;
-}): React.JSX.Element {
+}): JSX.Element {
   return (
     <Card>
       <CardContent className="flex items-center gap-4 p-6">
@@ -554,7 +555,7 @@ function ToggleRow({
   title: string;
   enabled: boolean;
   onToggle: () => void;
-}): React.JSX.Element {
+}): JSX.Element {
   return (
     <button
       className="flex items-center justify-between rounded-2xl border border-border bg-muted/50 px-4 py-3 text-left"
@@ -570,7 +571,7 @@ function ToggleRow({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string | number }): React.JSX.Element {
+function Stat({ label, value }: { label: string; value: string | number }): JSX.Element {
   return (
     <div className="rounded-2xl border border-border bg-card px-4 py-3">
       <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>

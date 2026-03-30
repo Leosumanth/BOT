@@ -103,8 +103,8 @@ export class ContractAnalyzer {
         const value = await this.rpcRouter.executeWithFailover(chain, (runtime) =>
           runtime.publicClient.readContract({
             address: contractAddress,
-            abi,
-            functionName
+            abi: abi as any,
+            functionName: functionName as any
           })
         );
 

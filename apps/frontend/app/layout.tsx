@@ -1,3 +1,4 @@
+import type { JSX, ReactNode } from "react";
 import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import { AppProviders } from "@/components/providers/app-providers";
@@ -18,7 +19,7 @@ export const metadata: Metadata = {
   description: "Production-grade NFT mint tracker and execution dashboard"
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
+export default function RootLayout({ children }: { children: ReactNode }): JSX.Element {
   return (
     <html lang="en">
       <body className={`${fontSans.variable} ${fontMono.variable} bg-background text-foreground antialiased`}>

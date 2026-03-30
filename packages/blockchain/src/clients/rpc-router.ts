@@ -1,16 +1,18 @@
-import type { PublicClient, Transport, WalletClient } from "viem";
+import type { PublicClient, WalletClient } from "viem";
 import { createPublicClient, createWalletClient, http, webSocket } from "viem";
 import type { RpcEndpointConfig, RpcHealthSnapshot } from "@mintbot/shared";
 import { nowIso } from "@mintbot/shared";
 import type { ChainKey } from "@mintbot/shared";
 import { resolveViemChain } from "./chain-registry.js";
 
-interface EndpointRuntime {
+export interface RpcRuntime {
   config: RpcEndpointConfig;
-  publicClient: PublicClient<Transport>;
-  walletClient: WalletClient<Transport>;
+  publicClient: PublicClient;
+  walletClient: WalletClient;
   health: RpcHealthSnapshot;
 }
+
+interface EndpointRuntime extends RpcRuntime {}
 
 export class RpcRouter {
   private readonly endpoints = new Map<string, EndpointRuntime>();
@@ -73,19 +75,19 @@ export class RpcRouter {
     return this.getHealthSnapshot(chain);
   }
 
-  getPreferredPublicClient(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): PublicClient<Transport> {
+  getPreferredPublicClient(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): PublicClient {
     const runtime = this.getPreferredRuntime(chain, transport);
     return runtime.publicClient;
   }
 
-  getPreferredWalletClient(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): WalletClient<Transport> {
+  getPreferredWalletClient(chain: ChainKey, transport?: RpcEndpointConfig["transport"]): WalletClient {
     const runtime = this.getPreferredRuntime(chain, transport);
     return runtime.walletClient;
   }
 
   async executeWithFailover<T>(
     chain: ChainKey,
-    fn: (runtime: EndpointRuntime) => Promise<T>,
+    fn: (runtime: RpcRuntime) => Promise<T>,
     transport?: RpcEndpointConfig["transport"]
   ): Promise<T> {
     const candidates = this.sortCandidates(chain, transport);

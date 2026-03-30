@@ -23,8 +23,8 @@ export class MintTransactionBuilder {
     }
 
     const data = encodeFunctionData({
-      abi,
-      functionName,
+      abi: abi as any,
+      functionName: functionName as any,
       args: target.mintArgs as never
     });
 
