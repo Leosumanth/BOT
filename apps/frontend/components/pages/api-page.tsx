@@ -224,43 +224,46 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
     }
   }
 
-  async function handleTestDraftOrAll(provider: ApiProviderId): Promise<void> {
+  async function handleTestDraft(provider: ApiProviderId): Promise<void> {
     const label = providerLabel(provider);
     const draftValue = drafts[provider].trim();
-    const storedConfigs = getStoredConfigs(provider);
-    let draftSummary: string | null = null;
-
-    if (draftValue) {
-      const result = await runAction(`test-${provider}`, async () =>
-        backendFetch<ApiDraftKeyTestResponse>("/api-keys/test-draft", {
-          method: "POST",
-          body: JSON.stringify({
-            provider,
-            value: draftValue
-          } satisfies ApiDraftKeyTestRequest)
-        })
-      );
-
-      if (result) {
-        setDraftTests((current) => ({
-          ...current,
-          [provider]: result
-        }));
-        setFeedback(
-          result.ok
-            ? `${label} key passed the connection test.`
-            : `${label} key failed: ${result.health.failureReason ?? statusLabel(result.status)}`
-        );
-        draftSummary = result.ok ? "draft passed" : "draft failed";
-      }
-    }
-
-    if (!storedConfigs.length && !draftValue) {
-      setFeedback(`Paste the ${label} key first, or save one key for provider health retests.`);
+ 
+    if (!draftValue) {
+      setFeedback(`Paste the ${label} key first.`);
       return;
     }
 
+    const result = await runAction(`test-${provider}`, async () =>
+      backendFetch<ApiDraftKeyTestResponse>("/api-keys/test-draft", {
+        method: "POST",
+        body: JSON.stringify({
+          provider,
+          value: draftValue
+        } satisfies ApiDraftKeyTestRequest)
+      })
+    );
+
+    if (!result) {
+      return;
+    }
+
+    setDraftTests((current) => ({
+      ...current,
+      [provider]: result
+    }));
+    setFeedback(
+      result.ok
+        ? `${label} key passed the connection test.`
+        : `${label} key failed: ${result.health.failureReason ?? statusLabel(result.status)}`
+    );
+  }
+
+  async function handleTestAll(provider: ApiProviderId): Promise<void> {
+    const label = providerLabel(provider);
+    const storedConfigs = getStoredConfigs(provider);
+
     if (!storedConfigs.length) {
+      setFeedback(`Save at least one ${label} key first, then you can retest all saved keys.`);
       return;
     }
 
@@ -271,9 +274,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
         });
       }
 
-      await refreshDashboard(
-        `${label} ${storedConfigs.length} saved key${storedConfigs.length === 1 ? "" : "s"} tested${draftSummary ? `, ${draftSummary}` : ""}.`
-      );
+      await refreshDashboard(`${label} ${storedConfigs.length} saved key${storedConfigs.length === 1 ? "" : "s"} tested.`);
     });
   }
 
@@ -355,7 +356,8 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
               onDraftChange={updateDraft}
               onEditConfig={startEdit}
               onSave={handleSave}
-              onTestAll={handleTestDraftOrAll}
+              onTest={handleTestDraft}
+              onTestAll={handleTestAll}
               onTestConfig={handleTestConfig}
             />
           );
@@ -379,6 +381,7 @@ function ProviderKeyCard({
   onDeleteConfig,
   onDraftChange,
   onSave,
+  onTest,
   onTestAll
 }: {
   definition: ApiKeyFieldDefinition;
@@ -394,12 +397,15 @@ function ProviderKeyCard({
   onDeleteConfig: (config: ApiConfigRecord) => Promise<void>;
   onDraftChange: (provider: ApiProviderId, value: string) => void;
   onSave: (provider: ApiProviderId) => Promise<void>;
+  onTest: (provider: ApiProviderId) => Promise<void>;
   onTestAll: (provider: ApiProviderId) => Promise<void>;
 }): JSX.Element {
   const storedConfig = storedConfigs[0] ?? null;
   const storedCount = storedConfigs.length;
   const saveBusy = busyKey === `save-${definition.provider}`;
-  const testBusy = busyKey === `test-${definition.provider}` || busyKey === `test-all-${definition.provider}`;
+  const testBusy = busyKey === `test-${definition.provider}`;
+  const testAllBusy = busyKey === `test-all-${definition.provider}`;
+  const hasDraft = Boolean(draftValue.trim());
   const testedDraftValid = Boolean(draftTest?.ok && draftValue.trim());
   const showMetaPanel = Boolean(
     draftTest ||
@@ -493,12 +499,21 @@ function ProviderKeyCard({
         <div className="flex flex-wrap gap-3">
           <Button
             className="h-10 border border-[#d4b07a]/10 bg-[#1b1714] px-5 text-[#f3eadf] hover:bg-[#25201c]"
-            disabled={saveBusy || testBusy}
+            disabled={saveBusy || testBusy || testAllBusy}
             type="button"
             variant="ghost"
             onClick={() => onAdd(definition.provider)}
           >
             Add
+          </Button>
+          <Button
+            className="h-10 border border-[#d4b07a]/10 bg-[#1b1714] px-5 text-[#f3eadf] hover:bg-[#25201c]"
+            disabled={!hasDraft || testBusy || saveBusy}
+            type="button"
+            variant="ghost"
+            onClick={() => void onTest(definition.provider)}
+          >
+            {testBusy ? "Testing..." : "Test"}
           </Button>
           <Button
             className="h-10 bg-[#d7b07b] px-5 text-[#221812] hover:bg-[#e5c190]"
@@ -508,15 +523,17 @@ function ProviderKeyCard({
           >
             {saveBusy ? "Saving..." : "Save"}
           </Button>
-          <Button
-            className="h-10 border border-[#d4b07a]/10 bg-[#1b1714] px-5 text-[#f3eadf] hover:bg-[#25201c]"
-            disabled={(!draftValue.trim() && !observedConfig) || testBusy}
-            type="button"
-            variant="ghost"
-            onClick={() => void onTestAll(definition.provider)}
-          >
-            {testBusy ? "Testing..." : "Test All"}
-          </Button>
+          {storedCount > 0 ? (
+            <Button
+              className="h-10 border border-[#d4b07a]/10 bg-[#1b1714] px-5 text-[#f3eadf] hover:bg-[#25201c]"
+              disabled={testAllBusy || saveBusy}
+              type="button"
+              variant="ghost"
+              onClick={() => void onTestAll(definition.provider)}
+            >
+              {testAllBusy ? "Testing..." : "Test All"}
+            </Button>
+          ) : null}
         </div>
       </CardContent>
     </Card>
