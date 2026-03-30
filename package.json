@@ -8,7 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @mintbot/shared && npm run build -w @mintbot/blockchain && npm run build -w @mintbot/bot && npm run build -w @mintbot/backend && npm run build -w @mintbot/frontend",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "npm run build -w @mintbot/shared && npm run build -w @mintbot/blockchain && npm run build -w @mintbot/bot && npm run build -w @mintbot/backend",
+    "build:frontend": "npm run build -w @mintbot/shared && npm run build -w @mintbot/frontend",
     "typecheck": "npm run build -w @mintbot/shared && npm run typecheck -w @mintbot/shared && npm run build -w @mintbot/blockchain && npm run typecheck -w @mintbot/blockchain && npm run build -w @mintbot/bot && npm run typecheck -w @mintbot/bot && npm run typecheck -w @mintbot/backend && npm run typecheck -w @mintbot/frontend",
     "dev": "concurrently \"npm run dev -w @mintbot/backend\" \"npm run dev -w @mintbot/frontend\"",
     "dev:backend": "npm run dev -w @mintbot/backend",

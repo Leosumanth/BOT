@@ -62,6 +62,28 @@ npm run dev:worker
 npm run build
 ```
 
+## Railway
+
+This repo is a shared npm-workspace monorepo. For Railway, keep each service rooted at the repository root so shared workspace packages stay available during builds.
+
+- Backend service config file: `/apps/backend/railway.json`
+- Frontend service config file: `/apps/frontend/railway.json`
+
+If your Railway services were created manually instead of via JavaScript monorepo auto-import, set each service's custom config file path to the matching absolute path above.
+
+If you prefer configuring commands in the Railway dashboard instead of using the config files, use:
+
+- Backend build command: `npm run build:backend`
+- Backend start command: `npm run start:backend`
+- Frontend build command: `npm run build:frontend`
+- Frontend start command: `npm run start:frontend`
+
+Set cross-service variables so the deployed frontend talks to the deployed backend and the backend CORS policy allows the frontend origin:
+
+- Backend `FRONTEND_URL=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}`
+- Frontend `NEXT_PUBLIC_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}/api`
+- Frontend `NEXT_PUBLIC_SOCKET_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}`
+
 ## API Surface
 
 - `POST /api/bot/start`
