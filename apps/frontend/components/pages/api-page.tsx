@@ -13,7 +13,6 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { backendFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -22,16 +21,7 @@ type DrawerState = { mode: "create"; provider?: ApiProviderId } | { mode: "edit"
 
 type ApiFormState = {
   provider: ApiProviderId;
-  label: string;
   value: string;
-  endpointUrl: string;
-  priority: string;
-  maxLatencyMs: string;
-  isBackup: boolean;
-  enabled: boolean;
-  autoFailover: boolean;
-  automationEnabled: boolean;
-  notes: string;
 };
 
 const FALLBACK_PROVIDERS = [
@@ -69,16 +59,7 @@ const FALLBACK_PROVIDERS = [
 function createEmptyForm(provider: ApiProviderId = "opensea"): ApiFormState {
   return {
     provider,
-    label: "",
-    value: "",
-    endpointUrl: FALLBACK_PROVIDERS.find((entry) => entry.provider === provider)?.defaultEndpointUrl ?? "",
-    priority: "10",
-    maxLatencyMs: "2500",
-    isBackup: false,
-    enabled: true,
-    autoFailover: true,
-    automationEnabled: true,
-    notes: ""
+    value: ""
   };
 }
 
@@ -139,16 +120,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   function openEdit(config: ApiConfigRecord): void {
     setForm({
       provider: config.provider,
-      label: config.label,
-      value: "",
-      endpointUrl: config.endpointUrl,
-      priority: String(config.priority),
-      maxLatencyMs: String(config.maxLatencyMs),
-      isBackup: config.isBackup,
-      enabled: config.enabled,
-      autoFailover: config.autoFailover,
-      automationEnabled: config.automationEnabled,
-      notes: config.notes
+      value: ""
     });
     setDrawer({ mode: "edit", id: config.id });
   }
@@ -161,52 +133,34 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
   async function handleSave(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
 
-    const request = {
-      provider: form.provider,
-      label: form.label.trim(),
-      value: form.value.trim(),
-      endpointUrl: form.endpointUrl.trim(),
-      priority: Number(form.priority),
-      maxLatencyMs: Number(form.maxLatencyMs),
-      isBackup: form.isBackup,
-      enabled: form.enabled,
-      autoFailover: form.autoFailover,
-      automationEnabled: form.automationEnabled,
-      notes: form.notes.trim()
-    };
+    const secret = form.value.trim();
+    const providerName = providerLabel(form.provider);
 
     const saved = await runAction(drawer?.mode === "edit" ? `save-${drawer.id}` : "create-config", async () => {
       if (drawer?.mode === "edit") {
         await backendFetch<ApiConfigRecord>(`/api-keys/configs/${drawer.id}`, {
           method: "PATCH",
           body: JSON.stringify({
-            label: request.label,
-            value: request.value || undefined,
-            endpointUrl: request.endpointUrl,
-            priority: request.priority,
-            maxLatencyMs: request.maxLatencyMs,
-            isBackup: request.isBackup,
-            enabled: request.enabled,
-            autoFailover: request.autoFailover,
-            automationEnabled: request.automationEnabled,
-            notes: request.notes
+            value: secret || undefined
           } satisfies ApiConfigUpdateRequest)
         });
-        return refreshDashboard(`${request.label} updated.`);
+        const next = await refreshDashboard(`${providerName} key updated.`);
+        return { focusId: drawer.id, dashboard: next };
       }
 
-      await backendFetch<ApiConfigRecord>("/api-keys/configs", {
+      const created = await backendFetch<ApiConfigRecord>("/api-keys/configs", {
         method: "POST",
-        body: JSON.stringify(request satisfies ApiConfigCreateRequest)
+        body: JSON.stringify({
+          provider: form.provider,
+          value: secret
+        } satisfies ApiConfigCreateRequest)
       });
-      return refreshDashboard(`${request.label} added to the automation pool.`);
+      const next = await refreshDashboard(`${providerName} key added.`);
+      return { focusId: created.id, dashboard: next };
     });
 
     if (saved) {
-      const focusId = drawer?.mode === "edit" ? drawer.id : saved.configs.find((entry) => entry.label === request.label)?.id;
-      if (focusId) {
-        setSelectedId(focusId);
-      }
+      setSelectedId(saved.focusId);
       closeDrawer();
     }
   }
@@ -408,7 +362,7 @@ function HeroSection({
               {busyKey === "benchmark" ? "Benchmarking..." : "Benchmark now"}
             </Button>
             <Button className="bg-cyan-300 text-slate-950 hover:bg-cyan-200" type="button" onClick={() => onCreate()}>
-              Add API config
+              Add API key
             </Button>
           </div>
         </div>
@@ -457,7 +411,7 @@ function ProviderGrid({
           ))
         ) : (
           <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-white/[0.03] p-6 text-sm text-slate-300 md:col-span-2 2xl:col-span-4">
-            Provider health will appear here after you add your first API config. Nothing is preloaded or evaluated until a real config exists.
+            Provider health will appear here after you add your first API key. Nothing is preloaded or evaluated until a real key exists.
           </div>
         )}
       </CardContent>
@@ -493,13 +447,13 @@ function ConfigTable({
   return (
     <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
       <CardHeader className="pb-4">
-        <CardTitle className="text-xl text-white">Operational config table</CardTitle>
+        <CardTitle className="text-xl text-white">Stored API keys</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="min-w-[1040px] text-sm">
           <thead className="text-left text-xs uppercase tracking-[0.2em] text-slate-400">
             <tr>
-              <th className="pb-3 pr-4">Config</th>
+              <th className="pb-3 pr-4">Key</th>
               <th className="pb-3 pr-4">Secret</th>
               <th className="pb-3 pr-4">Status</th>
               <th className="pb-3 pr-4">Role</th>
@@ -541,7 +495,7 @@ function ConfigTable({
                         <MiniButton busy={busyKey === `test-${config.id}`} label="Test" onClick={() => void onTest(config)} />
                         <MiniButton label={revealed ? "Hide" : "Show"} onClick={() => (revealed ? onHide(config.id) : void onReveal(config))} />
                         <MiniButton label="Copy" onClick={() => void onCopy(config)} />
-                        <MiniButton disabled={config.source !== "database"} label="Edit" onClick={() => onEdit(config)} />
+                        <MiniButton disabled={config.source !== "database"} label="Replace" onClick={() => onEdit(config)} />
                         <MiniButton disabled={config.source !== "database"} label="Delete" tone="danger" onClick={() => void onDelete(config)} />
                       </div>
                     </td>
@@ -551,7 +505,7 @@ function ConfigTable({
             ) : (
               <tr>
                 <td className="py-8 text-sm text-slate-400" colSpan={8}>
-                  No API configs are registered yet. Add a primary config to start automated health tracking and failover.
+                  No API keys are registered yet. Add your first provider key to start automated health tracking and failover.
                 </td>
               </tr>
             )}
@@ -599,7 +553,7 @@ function ReadinessCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse; 
           </>
         ) : (
           <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-white/[0.03] px-4 py-5 text-slate-300">
-            Add your first external API config to enable live readiness checks, backup validation, and automation gating.
+            Add your first external API key to enable live readiness checks, backup validation, and automation gating.
           </div>
         )}
       </CardContent>
@@ -639,7 +593,7 @@ function MaintenanceCard({ data, onBenchmark }: { data: ApiKeysDashboardResponse
           </>
         ) : (
           <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-white/[0.03] px-4 py-5 text-slate-300">
-            Background maintenance stays idle until at least one API config is registered.
+            Background maintenance stays idle until at least one API key is registered.
           </div>
         )}
       </CardContent>
@@ -671,7 +625,7 @@ function ConfigDetail({
   return (
     <Card className="border-white/10 bg-[#07111d] text-white shadow-[0_20px_60px_rgba(2,8,20,0.45)]">
       <CardHeader className="pb-4">
-        <CardTitle className="text-xl text-white">{config ? config.label : "Select a config"}</CardTitle>
+        <CardTitle className="text-xl text-white">{config ? config.label : "Select a key"}</CardTitle>
       </CardHeader>
       <CardContent>
         {config ? (
@@ -692,7 +646,7 @@ function ConfigDetail({
                 <MiniButton busy={busyKey === `test-${config.id}`} label="Test" onClick={() => void onTest(config)} />
                 <MiniButton label={revealedValue ? "Hide" : "Show"} onClick={() => (revealedValue ? onHide(config.id) : void onReveal(config))} />
                 <MiniButton label="Copy" onClick={() => void onCopy(config)} />
-                <MiniButton disabled={config.source !== "database"} label="Edit" onClick={() => onEdit(config)} />
+                <MiniButton disabled={config.source !== "database"} label="Replace" onClick={() => onEdit(config)} />
                 <MiniButton disabled={config.source !== "database"} label="Delete" tone="danger" onClick={() => void onDelete(config)} />
               </div>
             </div>
@@ -724,7 +678,7 @@ function ConfigDetail({
             </div>
           </div>
         ) : (
-          <p className="text-sm text-slate-400">Pick a config from the table to inspect health, memory, recovery status, and secret controls.</p>
+          <p className="text-sm text-slate-400">Pick a key from the table to inspect health, memory, recovery status, and secret controls.</p>
         )}
       </CardContent>
     </Card>
@@ -783,13 +737,18 @@ function ConfigDrawer({
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onUpdateForm: <K extends keyof ApiFormState>(key: K, value: ApiFormState[K]) => void;
 }): JSX.Element {
+  const selectedProvider = providerCatalog.find((entry) => entry.provider === form.provider);
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
       <div className="h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-[#07111d] p-6 text-white shadow-[0_20px_60px_rgba(2,8,20,0.65)]">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{drawer?.mode === "edit" ? "Edit config" : "Add config"}</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">{drawer?.mode === "edit" ? "Refine automation behavior" : "Register a new external API"}</h2>
+            <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{drawer?.mode === "edit" ? "Edit key" : "Add key"}</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">{drawer?.mode === "edit" ? "Replace stored API key" : "Add a supported API key"}</h2>
+            <p className="mt-3 max-w-md text-sm leading-6 text-slate-400">
+              Provider behavior is coded in the app. This drawer only stores the key. Labels, endpoints, priority, and failover defaults are managed automatically.
+            </p>
           </div>
           <Button className="border border-white/10 bg-white/5 text-white hover:bg-white/10" type="button" variant="ghost" onClick={onClose}>
             Close
@@ -800,12 +759,11 @@ function ConfigDrawer({
           <Field label="Provider">
             <select
               className="h-11 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 text-sm text-white"
+              disabled={drawer?.mode === "edit"}
               value={form.provider}
               onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                 const provider = event.target.value as ApiProviderId;
-                const nextEndpoint = providerCatalog.find((entry) => entry.provider === provider)?.defaultEndpointUrl ?? "";
                 onUpdateForm("provider", provider);
-                onUpdateForm("endpointUrl", nextEndpoint);
               }}
             >
               {providerCatalog.map((entry) => (
@@ -816,62 +774,25 @@ function ConfigDrawer({
             </select>
           </Field>
 
-          <Field label="Label">
+          <Field label={drawer?.mode === "edit" ? "Replace key (optional)" : "API key"}>
             <Input
               className="border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
-              placeholder="Primary OpenSea key"
-              value={form.label}
-              onChange={(event) => onUpdateForm("label", event.target.value)}
-            />
-          </Field>
-
-          <Field label={drawer?.mode === "edit" ? "Replace secret (optional)" : "Secret"}>
-            <Input
-              className="border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
-              placeholder="sk_live_..."
+              placeholder={form.provider === "openai" ? "sk-..." : "Paste the provider key"}
               type="password"
               value={form.value}
               onChange={(event) => onUpdateForm("value", event.target.value)}
             />
           </Field>
 
-          <Field label="Endpoint URL">
-            <Input
-              className="border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
-              value={form.endpointUrl}
-              onChange={(event) => onUpdateForm("endpointUrl", event.target.value)}
-            />
-          </Field>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Priority">
-              <Input className="border-white/10 bg-slate-950 text-white" value={form.priority} onChange={(event) => onUpdateForm("priority", event.target.value)} />
-            </Field>
-            <Field label="Max latency (ms)">
-              <Input
-                className="border-white/10 bg-slate-950 text-white"
-                value={form.maxLatencyMs}
-                onChange={(event) => onUpdateForm("maxLatencyMs", event.target.value)}
-              />
-            </Field>
-          </div>
-
-          <Field label="Automation notes">
-            <Textarea
-              className="min-h-[110px] border-white/10 bg-slate-950 text-white placeholder:text-slate-500"
-              placeholder="Explain when this config should be preferred or kept as backup."
-              value={form.notes}
-              onChange={(event) => onUpdateForm("notes", event.target.value)}
-            />
-          </Field>
-
-          <ToggleRow checked={form.enabled} label="Enabled" onChange={(checked) => onUpdateForm("enabled", checked)} />
-          <ToggleRow checked={form.isBackup} label="Backup config" onChange={(checked) => onUpdateForm("isBackup", checked)} />
-          <ToggleRow checked={form.autoFailover} label="Auto failover" onChange={(checked) => onUpdateForm("autoFailover", checked)} />
-          <ToggleRow checked={form.automationEnabled} label="Automation eligible" onChange={(checked) => onUpdateForm("automationEnabled", checked)} />
+          {selectedProvider ? (
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-sm text-slate-300">
+              <p className="font-medium text-white">{selectedProvider.label}</p>
+              <p className="mt-2 text-slate-400">{selectedProvider.description}</p>
+            </div>
+          ) : null}
 
           <Button className="w-full bg-cyan-300 text-slate-950 hover:bg-cyan-200" disabled={Boolean(busyKey)} type="submit">
-            {busyKey ? "Saving..." : drawer?.mode === "edit" ? "Update config" : "Create config"}
+            {busyKey ? "Saving..." : drawer?.mode === "edit" ? "Update key" : "Save key"}
           </Button>
         </form>
       </div>
@@ -884,15 +805,6 @@ function Field({ label, children }: { label: string; children: JSX.Element }): J
     <label className="space-y-2 text-sm font-medium text-slate-300">
       <span>{label}</span>
       {children}
-    </label>
-  );
-}
-
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }): JSX.Element {
-  return (
-    <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
-      <span>{label}</span>
-      <input checked={checked} className="h-4 w-4 accent-cyan-300" type="checkbox" onChange={(event) => onChange(event.target.checked)} />
     </label>
   );
 }

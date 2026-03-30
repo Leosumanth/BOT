@@ -212,8 +212,11 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(`A secret is required to add ${provider.label}.`);
     }
 
+    const existingProviderConfigs = (await this.database.listApiServiceConfigs()).filter((entry) => entry.provider === provider.provider);
     const createdId = randomUUID();
-    const label = request.label.trim() || `${provider.label} Primary`;
+    const isBackup = request.isBackup ?? existingProviderConfigs.some((entry) => !entry.isBackup);
+    const priority = this.normalizePriority(request.priority ?? this.getDefaultProviderPriority(existingProviderConfigs));
+    const label = request.label?.trim() || this.buildManagedConfigLabel(provider.label, existingProviderConfigs, isBackup);
     const endpointUrl = this.normalizeEndpointUrl(request.endpointUrl, provider.defaultEndpointUrl);
 
     await this.database.upsertApiServiceConfig({
@@ -223,8 +226,8 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       valueCiphertext: this.encrypt(value),
       endpointUrl,
       enabled: request.enabled ?? true,
-      priority: this.normalizePriority(request.priority),
-      isBackup: request.isBackup ?? false,
+      priority,
+      isBackup,
       autoFailover: request.autoFailover ?? true,
       automationEnabled: request.automationEnabled ?? true,
       maxLatencyMs: this.normalizeLatency(request.maxLatencyMs, provider.defaultMaxLatencyMs),
@@ -239,7 +242,7 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       actionTaken: "Config added",
       result: "Stored",
       message: `${provider.label} configuration added to the automation pool.`,
-      payload: { endpointUrl, priority: this.normalizePriority(request.priority), isBackup: request.isBackup ?? false }
+      payload: { endpointUrl, priority, isBackup }
     });
 
     await this.executeMaintenance("manual");
@@ -1537,6 +1540,27 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
   private normalizePriority(value: number | undefined): number {
     const priority = Number(value ?? 10);
     return Number.isFinite(priority) ? Math.max(1, Math.min(999, Math.round(priority))) : 10;
+  }
+
+  private getDefaultProviderPriority(existingConfigs: Array<{ priority: number }>): number {
+    if (!existingConfigs.length) {
+      return 10;
+    }
+
+    return Math.min(
+      existingConfigs.reduce((max, entry) => Math.max(max, entry.priority), 10) + 10,
+      999
+    );
+  }
+
+  private buildManagedConfigLabel(providerLabel: string, existingConfigs: Array<{ isBackup: boolean }>, isBackup: boolean): string {
+    if (!isBackup) {
+      const primaryCount = existingConfigs.filter((entry) => !entry.isBackup).length;
+      return primaryCount === 0 ? providerLabel : `${providerLabel} Primary ${primaryCount + 1}`;
+    }
+
+    const backupCount = existingConfigs.filter((entry) => entry.isBackup).length;
+    return `${providerLabel} Backup ${backupCount + 1}`;
   }
 
   private normalizeLatency(value: number | undefined, fallback: number): number {

@@ -269,7 +269,7 @@ export interface ApiKeysDashboardResponse {
 
 export interface ApiConfigCreateRequest {
   provider: ApiProviderId;
-  label: string;
+  label?: string;
   value: string;
   endpointUrl?: string;
   enabled?: boolean;
