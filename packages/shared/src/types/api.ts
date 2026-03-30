@@ -92,36 +92,26 @@ export interface TaskRecord {
 }
 
 export type ManagedApiKey =
-  | "ETHEREUM_RPC_HTTP_ALCHEMY"
-  | "ETHEREUM_RPC_HTTP_QUICKNODE"
-  | "ETHEREUM_RPC_WS_ALCHEMY"
-  | "ETHEREUM_RPC_WS_QUICKNODE"
-  | "BASE_RPC_HTTP_ALCHEMY"
-  | "BASE_RPC_HTTP_QUICKNODE"
-  | "BASE_RPC_WS_ALCHEMY"
-  | "BASE_RPC_WS_QUICKNODE"
-  | "FLASHBOTS_RELAY_URL"
-  | "FLASHBOTS_AUTH_PRIVATE_KEY";
+  | "OPENSEA_API_KEY"
+  | "ETHERSCAN_API_KEY"
+  | "DRPC_API_KEY"
+  | "OPENAI_API_KEY";
 
-export type ApiKeySource = "database" | "env" | "default" | "unset";
-export type ApiKeyCategory = "rpc" | "flashbots";
-export type ApiKeyKind = "url" | "secret";
+export type ApiKeySource = "database" | "env" | "unset";
+export type ApiKeyCategory = "marketplace" | "explorer" | "rpc-service" | "ai";
+export type ApiKeyKind = "secret";
 
 export interface ApiKeyDescriptor {
   key: ManagedApiKey;
   label: string;
   category: ApiKeyCategory;
-  provider: "alchemy" | "quicknode" | "flashbots";
+  provider: "opensea" | "etherscan" | "drpc" | "openai";
   kind: ApiKeyKind;
   description: string;
-  chain?: ChainKey;
-  transport?: RpcEndpointConfig["transport"];
-  linkedPage?: "/rpc" | "/api";
 }
 
 export interface ApiKeyRecord extends ApiKeyDescriptor {
   source: ApiKeySource;
-  enabled: boolean;
   hasValue: boolean;
   valueHint: string;
   createdAt?: string;
@@ -130,7 +120,6 @@ export interface ApiKeyRecord extends ApiKeyDescriptor {
 
 export interface ApiKeyUpsertRequest {
   value?: string;
-  enabled: boolean;
 }
 
 export interface ApiKeysDashboardResponse {
@@ -140,9 +129,6 @@ export interface ApiKeysDashboardResponse {
     configured: number;
     databaseOverrides: number;
     envBacked: number;
-    disabled: number;
-    rpcConfigured: number;
-    flashbotsReady: boolean;
     lastRefreshedAt: string;
   };
 }

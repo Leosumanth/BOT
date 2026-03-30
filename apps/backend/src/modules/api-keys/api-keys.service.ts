@@ -1,7 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import type { OnModuleInit } from "@nestjs/common";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { FlashbotsBundleClient } from "@mintbot/blockchain";
 import type {
   ApiKeyDescriptor,
   ApiKeyRecord,
@@ -13,129 +11,55 @@ import type {
 } from "@mintbot/shared";
 import { AppConfigService } from "../../config/app-config.service.js";
 import { DatabaseService } from "../../database/database.service.js";
-import { RuntimeService } from "../runtime/runtime.service.js";
 
 type ManagedApiKeyValues = Partial<Record<ManagedApiKey, string | undefined>>;
 
+const OPENSEA_TEST_COLLECTION = "cryptopunks";
+const ETHERSCAN_TEST_URL = "https://api.etherscan.io/v2/api";
+const DRPC_TEST_URL = "https://lb.drpc.live/ethereum/";
+const OPENAI_TEST_URL = "https://api.openai.com/v1/models";
+
 const API_KEY_CATALOG = [
   {
-    key: "ETHEREUM_RPC_HTTP_ALCHEMY",
-    label: "Ethereum Alchemy HTTP",
-    category: "rpc",
-    provider: "alchemy",
-    kind: "url",
-    description: "Primary Ethereum HTTP endpoint used for reads and transaction preparation.",
-    chain: "ethereum",
-    transport: "http",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "ETHEREUM_RPC_HTTP_QUICKNODE",
-    label: "Ethereum QuickNode HTTP",
-    category: "rpc",
-    provider: "quicknode",
-    kind: "url",
-    description: "Secondary Ethereum HTTP provider for failover and route ranking.",
-    chain: "ethereum",
-    transport: "http",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "ETHEREUM_RPC_WS_ALCHEMY",
-    label: "Ethereum Alchemy WebSocket",
-    category: "rpc",
-    provider: "alchemy",
-    kind: "url",
-    description: "Ethereum WebSocket stream used for subscriptions and live monitoring.",
-    chain: "ethereum",
-    transport: "ws",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "ETHEREUM_RPC_WS_QUICKNODE",
-    label: "Ethereum QuickNode WebSocket",
-    category: "rpc",
-    provider: "quicknode",
-    kind: "url",
-    description: "Backup Ethereum WebSocket provider for resilient mempool and block feeds.",
-    chain: "ethereum",
-    transport: "ws",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "BASE_RPC_HTTP_ALCHEMY",
-    label: "Base Alchemy HTTP",
-    category: "rpc",
-    provider: "alchemy",
-    kind: "url",
-    description: "Primary Base HTTP endpoint for chain reads and mint execution setup.",
-    chain: "base",
-    transport: "http",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "BASE_RPC_HTTP_QUICKNODE",
-    label: "Base QuickNode HTTP",
-    category: "rpc",
-    provider: "quicknode",
-    kind: "url",
-    description: "Secondary Base HTTP provider used for failover and ranking.",
-    chain: "base",
-    transport: "http",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "BASE_RPC_WS_ALCHEMY",
-    label: "Base Alchemy WebSocket",
-    category: "rpc",
-    provider: "alchemy",
-    kind: "url",
-    description: "Base WebSocket stream for subscriptions and realtime monitoring.",
-    chain: "base",
-    transport: "ws",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "BASE_RPC_WS_QUICKNODE",
-    label: "Base QuickNode WebSocket",
-    category: "rpc",
-    provider: "quicknode",
-    kind: "url",
-    description: "Backup Base WebSocket provider for resilient streaming coverage.",
-    chain: "base",
-    transport: "ws",
-    linkedPage: "/rpc"
-  },
-  {
-    key: "FLASHBOTS_RELAY_URL",
-    label: "Flashbots Relay URL",
-    category: "flashbots",
-    provider: "flashbots",
-    kind: "url",
-    description: "Relay endpoint used when private bundle submission is enabled."
-  },
-  {
-    key: "FLASHBOTS_AUTH_PRIVATE_KEY",
-    label: "Flashbots Auth Private Key",
-    category: "flashbots",
-    provider: "flashbots",
+    key: "OPENSEA_API_KEY",
+    label: "OpenSea",
+    category: "marketplace",
+    provider: "opensea",
     kind: "secret",
-    description: "Signing key used to authenticate Flashbots bundle requests."
+    description: "Marketplace API key used for OpenSea collection and drop intelligence."
+  },
+  {
+    key: "ETHERSCAN_API_KEY",
+    label: "Etherscan",
+    category: "explorer",
+    provider: "etherscan",
+    kind: "secret",
+    description: "Explorer API key used for ABI lookups and on-chain contract metadata."
+  },
+  {
+    key: "DRPC_API_KEY",
+    label: "dRPC",
+    category: "rpc-service",
+    provider: "drpc",
+    kind: "secret",
+    description: "Raw dRPC API key for services that build authenticated RPC requests."
+  },
+  {
+    key: "OPENAI_API_KEY",
+    label: "OpenAI",
+    category: "ai",
+    provider: "openai",
+    kind: "secret",
+    description: "OpenAI API key for AI-assisted analysis and automation features."
   }
 ] satisfies ApiKeyDescriptor[];
 
 @Injectable()
-export class ApiKeysService implements OnModuleInit {
+export class ApiKeysService {
   constructor(
     private readonly config: AppConfigService,
-    private readonly database: DatabaseService,
-    private readonly runtime: RuntimeService
+    private readonly database: DatabaseService
   ) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.database.ensureSchema();
-    await this.runtime.applyManagedApiKeys(await this.getEffectiveValueMap());
-  }
 
   async list(): Promise<ApiKeysDashboardResponse> {
     const entries = await this.buildRecords();
@@ -144,14 +68,9 @@ export class ApiKeysService implements OnModuleInit {
       entries,
       summary: {
         total: entries.length,
-        configured: entries.filter((entry) => entry.enabled && entry.hasValue).length,
+        configured: entries.filter((entry) => entry.hasValue).length,
         databaseOverrides: entries.filter((entry) => entry.source === "database").length,
         envBacked: entries.filter((entry) => entry.source === "env").length,
-        disabled: entries.filter((entry) => !entry.enabled).length,
-        rpcConfigured: entries.filter((entry) => entry.category === "rpc" && entry.enabled && entry.hasValue).length,
-        flashbotsReady: entries
-          .filter((entry) => entry.category === "flashbots")
-          .every((entry) => entry.enabled && entry.hasValue),
         lastRefreshedAt: new Date().toISOString()
       }
     };
@@ -159,23 +78,19 @@ export class ApiKeysService implements OnModuleInit {
 
   async upsert(key: ManagedApiKey, request: ApiKeyUpsertRequest): Promise<ApiKeyRecord> {
     const definition = this.getDefinition(key);
-    const stored = new Map((await this.database.listApiCredentials()).map((entry) => [entry.key, entry]));
-    const existing = stored.get(key);
-    const existingValue = existing?.valueCiphertext ? this.decrypt(existing.valueCiphertext) : undefined;
-    const nextValue = request.value?.trim() || existingValue;
+    const nextValue = request.value?.trim();
 
-    if (request.enabled && !nextValue) {
-      throw new BadRequestException(`A value is required to enable ${definition.label}.`);
+    if (!nextValue) {
+      throw new BadRequestException(`A value is required to save ${definition.label}.`);
     }
 
     await this.database.upsertApiCredential({
       key,
-      valueCiphertext: nextValue ? this.encrypt(nextValue) : null,
-      valueHint: nextValue ? "Configured in dashboard" : "Disabled in dashboard",
-      enabled: request.enabled
+      valueCiphertext: this.encrypt(nextValue),
+      valueHint: "Saved in dashboard",
+      enabled: true
     });
 
-    await this.runtime.applyManagedApiKeys(await this.getEffectiveValueMap());
     const records = await this.buildRecords();
     return records.find((entry) => entry.key === key) ?? this.buildUnsetRecord(definition);
   }
@@ -183,8 +98,6 @@ export class ApiKeysService implements OnModuleInit {
   async remove(key: ManagedApiKey): Promise<{ removed: boolean }> {
     this.getDefinition(key);
     const removed = await this.database.deleteApiCredential(key);
-    await this.runtime.applyManagedApiKeys(await this.getEffectiveValueMap());
-
     return { removed };
   }
 
@@ -192,7 +105,7 @@ export class ApiKeysService implements OnModuleInit {
     const testedAt = new Date().toISOString();
     const records = await this.buildRecords();
     const effectiveValues = await this.getEffectiveValueMap();
-    const results = await this.runTests(records, effectiveValues, testedAt);
+    const results = await Promise.all(records.map((record) => this.testRecord(record, effectiveValues[record.key], testedAt)));
 
     return {
       testedAt,
@@ -214,8 +127,8 @@ export class ApiKeysService implements OnModuleInit {
       throw new BadRequestException(`Unsupported API key ${key}.`);
     }
 
-    const [result] = await this.runTests([record], await this.getEffectiveValueMap(), testedAt);
-    return result;
+    const effectiveValues = await this.getEffectiveValueMap();
+    return this.testRecord(record, effectiveValues[key], testedAt);
   }
 
   private async buildRecords(): Promise<ApiKeyRecord[]> {
@@ -224,29 +137,25 @@ export class ApiKeysService implements OnModuleInit {
 
     return API_KEY_CATALOG.map((definition) => {
       const override = stored.get(definition.key);
+      const overrideValue = override?.enabled && override.valueCiphertext ? this.decrypt(override.valueCiphertext) : undefined;
 
-      if (override) {
-        const decryptedValue = override.valueCiphertext ? this.decrypt(override.valueCiphertext) : undefined;
-
+      if (overrideValue) {
         return {
           ...definition,
           source: "database",
-          enabled: override.enabled,
-          hasValue: override.enabled && Boolean(decryptedValue),
-          valueHint: buildSafeValueHint("database", override.enabled, Boolean(decryptedValue)),
-          createdAt: override.createdAt,
-          updatedAt: override.updatedAt
+          hasValue: true,
+          valueHint: "Saved in dashboard",
+          createdAt: override?.createdAt,
+          updatedAt: override?.updatedAt
         } satisfies ApiKeyRecord;
       }
 
-      const envValue = envValues[definition.key];
-      if (envValue) {
+      if (envValues[definition.key]) {
         return {
           ...definition,
-          source: this.config.hasManagedApiKeyEnvValue(definition.key) ? "env" : "default",
-          enabled: true,
+          source: "env",
           hasValue: true,
-          valueHint: buildSafeValueHint(this.config.hasManagedApiKeyEnvValue(definition.key) ? "env" : "default", true, true)
+          valueHint: "Configured in environment"
         } satisfies ApiKeyRecord;
       }
 
@@ -261,8 +170,8 @@ export class ApiKeysService implements OnModuleInit {
     return API_KEY_CATALOG.reduce<ManagedApiKeyValues>((values, definition) => {
       const override = stored.get(definition.key);
 
-      if (override) {
-        values[definition.key] = override.enabled && override.valueCiphertext ? this.decrypt(override.valueCiphertext) : undefined;
+      if (override?.enabled && override.valueCiphertext) {
+        values[definition.key] = this.decrypt(override.valueCiphertext);
         return values;
       }
 
@@ -284,7 +193,6 @@ export class ApiKeysService implements OnModuleInit {
     return {
       ...definition,
       source: "unset",
-      enabled: true,
       hasValue: false,
       valueHint: "Not configured"
     };
@@ -314,118 +222,186 @@ export class ApiKeysService implements OnModuleInit {
     return { key, status, message, testedAt };
   }
 
-  private async runTests(
-    records: ApiKeyRecord[],
-    effectiveValues: ManagedApiKeyValues,
-    testedAt: string
-  ): Promise<ApiKeyTestResult[]> {
-    await this.runtime.applyManagedApiKeys(effectiveValues);
-    await this.runtime.rpcRouter.warm();
-    const rpcHealth = new Map(this.runtime.rpcRouter.getHealthSnapshot().map((entry) => [entry.endpointKey, entry]));
-
-    return Promise.all(
-      records.map(async (record) => {
-        if (!record.enabled) {
-          return this.buildTestResult(record.key, "skipped", "Disabled in dashboard.", testedAt);
-        }
-
-        if (!record.hasValue) {
-          return this.buildTestResult(record.key, "invalid", "No value configured.", testedAt);
-        }
-
-        if (record.category === "rpc") {
-          const runtimeKey = buildRuntimeRpcKey(record);
-          const health = runtimeKey ? rpcHealth.get(runtimeKey) : undefined;
-
-          if (!health) {
-            return this.buildTestResult(record.key, "invalid", "Runtime endpoint is missing for this key.", testedAt);
-          }
-
-          if (health.live) {
-            return this.buildTestResult(record.key, "valid", `RPC check passed in ${health.latencyMs}ms.`, testedAt);
-          }
-
-          return this.buildTestResult(record.key, "invalid", health.lastError ?? "RPC check failed.", testedAt);
-        }
-
-        return this.testFlashbotsRecord(record.key, effectiveValues[record.key], effectiveValues, testedAt);
-      })
-    );
-  }
-
-  private async testFlashbotsRecord(
-    key: ManagedApiKey,
-    value: string | undefined,
-    values: ManagedApiKeyValues,
-    testedAt: string
-  ): Promise<ApiKeyTestResult> {
-    if (!value) {
-      return this.buildTestResult(key, "invalid", "No value configured.", testedAt);
+  private async testRecord(record: ApiKeyRecord, value: string | undefined, testedAt: string): Promise<ApiKeyTestResult> {
+    if (!record.hasValue || !value) {
+      return this.buildTestResult(record.key, "invalid", "No key configured.", testedAt);
     }
 
-    if (key === "FLASHBOTS_AUTH_PRIVATE_KEY") {
+    try {
+      switch (record.key) {
+        case "OPENSEA_API_KEY":
+          return this.buildTestResult(record.key, "valid", await this.verifyOpenSeaKey(value), testedAt);
+        case "ETHERSCAN_API_KEY":
+          return this.buildTestResult(record.key, "valid", await this.verifyEtherscanKey(value), testedAt);
+        case "DRPC_API_KEY":
+          return this.buildTestResult(record.key, "valid", await this.verifyDrpcKey(value), testedAt);
+        case "OPENAI_API_KEY":
+          return this.buildTestResult(record.key, "valid", await this.verifyOpenAiKey(value), testedAt);
+        default:
+          return this.buildTestResult(record.key, "skipped", "No validator is wired for this key yet.", testedAt);
+      }
+    } catch (error) {
+      return this.buildTestResult(record.key, "invalid", error instanceof Error ? error.message : "Validation failed.", testedAt);
+    }
+  }
+
+  private async verifyOpenSeaKey(value: string): Promise<string> {
+    this.assertRawToken(value, {
+      label: "OpenSea",
+      blockedPatterns: [/^https?:\/\//i, /x-api-key/i, /^curl\b/i],
+      invalidInputMessage: "Paste the raw OpenSea API key only."
+    });
+
+    const { response, payload } = await this.requestJson(`https://api.opensea.io/api/v2/collections/${OPENSEA_TEST_COLLECTION}`, {
+      method: "GET",
+      headers: {
+        "x-api-key": value
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(this.pickApiError(payload, `OpenSea request failed with status ${response.status}.`));
+    }
+
+    return "OpenSea key is valid.";
+  }
+
+  private async verifyEtherscanKey(value: string): Promise<string> {
+    this.assertRawToken(value, {
+      label: "Etherscan",
+      blockedPatterns: [/^https?:\/\//i, /etherscan/i, /apikey=/i],
+      invalidInputMessage: "Paste the raw Etherscan API key only."
+    });
+
+    const url = new URL(ETHERSCAN_TEST_URL);
+    url.search = new URLSearchParams({
+      chainid: "1",
+      module: "stats",
+      action: "ethprice",
+      apikey: value
+    }).toString();
+
+    const { response, payload } = await this.requestJson(url.toString());
+
+    if (!response.ok) {
+      throw new Error(this.pickApiError(payload, `Etherscan request failed with status ${response.status}.`));
+    }
+
+    if (String(payload?.status ?? "") !== "1") {
+      throw new Error(this.pickApiError(payload, "Etherscan rejected the API key."));
+    }
+
+    return "Etherscan key is valid.";
+  }
+
+  private async verifyDrpcKey(value: string): Promise<string> {
+    this.assertRawToken(value, {
+      label: "dRPC",
+      blockedPatterns: [/^https?:\/\//i, /drpc/i, /^curl\b/i],
+      invalidInputMessage: "Paste the raw dRPC API key only."
+    });
+
+    const { response, payload } = await this.requestJson(`${DRPC_TEST_URL}${encodeURIComponent(value)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "eth_blockNumber",
+        params: []
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(this.pickApiError(payload, `dRPC request failed with status ${response.status}.`));
+    }
+
+    if (payload?.jsonrpc !== "2.0" || payload?.error || !payload?.result) {
+      throw new Error(this.pickApiError(payload, "dRPC rejected the API key."));
+    }
+
+    return "dRPC key is valid.";
+  }
+
+  private async verifyOpenAiKey(value: string): Promise<string> {
+    this.assertRawToken(value, {
+      label: "OpenAI",
+      blockedPatterns: [/^https?:\/\//i, /authorization:/i, /^curl\b/i],
+      invalidInputMessage: "Paste the raw OpenAI API key only."
+    });
+
+    const { response, payload } = await this.requestJson(OPENAI_TEST_URL, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${value}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(this.pickApiError(payload, `OpenAI request failed with status ${response.status}.`));
+    }
+
+    return "OpenAI key is valid.";
+  }
+
+  private assertRawToken(
+    value: string,
+    options: {
+      label: string;
+      blockedPatterns: RegExp[];
+      invalidInputMessage: string;
+    }
+  ): void {
+    if (!value.trim()) {
+      throw new Error(`${options.label} key is empty.`);
+    }
+
+    if (options.blockedPatterns.some((pattern) => pattern.test(value))) {
+      throw new Error(options.invalidInputMessage);
+    }
+
+    if (/\s/.test(value)) {
+      throw new Error(`${options.label} key must be a single token with no spaces.`);
+    }
+  }
+
+  private async requestJson(url: string, init: RequestInit = {}): Promise<{ response: Response; payload: any }> {
+    const response = await fetch(url, {
+      ...init,
+      cache: "no-store",
+      signal: AbortSignal.timeout(12_000),
+      headers: {
+        Accept: "application/json",
+        ...(init.headers ?? {})
+      }
+    });
+
+    const raw = await response.text();
+    let payload: any = {};
+
+    if (raw) {
       try {
-        new FlashbotsBundleClient(values.FLASHBOTS_RELAY_URL ?? "https://relay.flashbots.net", value);
-        return this.buildTestResult(
-          key,
-          "valid",
-          values.FLASHBOTS_RELAY_URL ? "Private key format looks valid." : "Private key format looks valid, but relay URL is missing.",
-          testedAt
-        );
-      } catch (error) {
-        return this.buildTestResult(key, "invalid", error instanceof Error ? error.message : "Invalid Flashbots auth key.", testedAt);
+        payload = JSON.parse(raw);
+      } catch {
+        payload = { raw };
       }
     }
 
-    try {
-      new URL(value);
-    } catch {
-      return this.buildTestResult(key, "invalid", "Relay URL is not a valid URL.", testedAt);
-    }
-
-    try {
-      const response = await fetch(value, {
-        method: "GET",
-        signal: AbortSignal.timeout(6_000),
-        cache: "no-store"
-      });
-
-      return this.buildTestResult(
-        key,
-        response.status < 500 ? "valid" : "invalid",
-        response.status < 500 ? `Relay reachable (${response.status}).` : `Relay returned ${response.status}.`,
-        testedAt
-      );
-    } catch (error) {
-      return this.buildTestResult(key, "invalid", error instanceof Error ? error.message : "Relay check failed.", testedAt);
-    }
-  }
-}
-
-function buildSafeValueHint(source: ApiKeyRecord["source"], enabled: boolean, hasValue: boolean): string {
-  if (!enabled) {
-    return "Disabled";
+    return { response, payload };
   }
 
-  if (!hasValue) {
-    return "Not configured";
+  private pickApiError(payload: any, fallback: string): string {
+    return (
+      payload?.error?.message ||
+      payload?.error?.type ||
+      payload?.result ||
+      payload?.message ||
+      payload?.errors?.[0] ||
+      payload?.detail ||
+      payload?.raw ||
+      fallback
+    );
   }
-
-  if (source === "database") {
-    return "Configured in dashboard";
-  }
-
-  if (source === "env" || source === "default") {
-    return "Configured";
-  }
-
-  return "Configured";
-}
-
-function buildRuntimeRpcKey(record: Pick<ApiKeyRecord, "category" | "chain" | "provider" | "transport">): string | null {
-  if (record.category !== "rpc" || !record.chain || !record.transport) {
-    return null;
-  }
-
-  return `${record.chain}-${record.provider}-${record.transport === "ws" ? "ws" : "http"}`;
 }
