@@ -171,7 +171,7 @@ export class ApiKeysService implements OnModuleInit {
     await this.database.upsertApiCredential({
       key,
       valueCiphertext: nextValue ? this.encrypt(nextValue) : null,
-      valueHint: nextValue ? maskValue(definition.kind, nextValue) : "Disabled in dashboard",
+      valueHint: nextValue ? "Configured in dashboard" : "Disabled in dashboard",
       enabled: request.enabled
     });
 
@@ -251,7 +251,7 @@ export class ApiKeysService implements OnModuleInit {
           source: "database",
           enabled: override.enabled,
           hasValue: override.enabled && Boolean(decryptedValue),
-          valueHint: override.valueHint || (override.enabled ? "Configured in dashboard" : "Disabled in dashboard"),
+          valueHint: buildSafeValueHint("database", override.enabled, Boolean(decryptedValue)),
           createdAt: override.createdAt,
           updatedAt: override.updatedAt
         } satisfies ApiKeyRecord;
@@ -264,7 +264,7 @@ export class ApiKeysService implements OnModuleInit {
           source: this.config.hasManagedApiKeyEnvValue(definition.key) ? "env" : "default",
           enabled: true,
           hasValue: true,
-          valueHint: maskValue(definition.kind, envValue)
+          valueHint: buildSafeValueHint(this.config.hasManagedApiKeyEnvValue(definition.key) ? "env" : "default", true, true)
         } satisfies ApiKeyRecord;
       }
 
@@ -381,22 +381,24 @@ export class ApiKeysService implements OnModuleInit {
   }
 }
 
-function maskValue(kind: ApiKeyDescriptor["kind"], value: string): string {
-  if (kind === "url") {
-    try {
-      const parsed = new URL(value);
-      const suffix = parsed.pathname.length > 12 ? `...${parsed.pathname.slice(-12)}` : parsed.pathname;
-      return `${parsed.origin}${suffix || "/"}`;
-    } catch {
-      return `${value.slice(0, 10)}...${value.slice(-6)}`;
-    }
+function buildSafeValueHint(source: ApiKeyRecord["source"], enabled: boolean, hasValue: boolean): string {
+  if (!enabled) {
+    return "Disabled";
   }
 
-  if (value.length <= 8) {
-    return "*".repeat(Math.max(value.length, 4));
+  if (!hasValue) {
+    return "Not configured";
   }
 
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+  if (source === "database") {
+    return "Configured in dashboard";
+  }
+
+  if (source === "env" || source === "default") {
+    return "Configured";
+  }
+
+  return "Configured";
 }
 
 function buildRuntimeRpcKey(record: Pick<ApiKeyRecord, "category" | "chain" | "provider" | "transport">): string | null {

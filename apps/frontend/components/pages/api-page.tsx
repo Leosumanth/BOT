@@ -2,7 +2,6 @@
 
 import type { ChangeEvent, JSX } from "react";
 import { useEffect, useMemo, useState, useTransition } from "react";
-import Link from "next/link";
 import type { ApiKeyRecord, ApiKeysDashboardResponse, ApiKeyTestResponse, ApiKeyTestResult } from "@mintbot/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -214,10 +213,9 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <SummaryCard label="Managed keys" value={String(summary.total)} tone="default" />
             <SummaryCard label="Configured" value={String(summary.configured)} tone="success" />
-            <SummaryCard label="DB overrides" value={String(summary.databaseOverrides)} tone="default" />
             <SummaryCard label="Invalid after test" value={String(testSummary.invalid)} tone={testSummary.invalid ? "destructive" : "default"} />
             <SummaryCard label="Last tested" value={lastTestedAt ? formatDateTime(lastTestedAt) : "Not run"} tone="default" />
           </div>
@@ -255,20 +253,14 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                       <p className="mt-1 font-mono text-xs text-muted-foreground">{entry.key}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Badge>{titleCase(entry.provider)}</Badge>
-                      <Badge variant={status.variant}>{status.label}</Badge>
-                      <Badge variant={test ? badgeVariantForTest(test.status) : "default"}>{test ? titleCase(test.status) : "Untested"}</Badge>
+                      <Badge variant={test ? badgeVariantForTest(test.status) : status.variant}>{test ? titleCase(test.status) : status.label}</Badge>
                     </div>
                   </div>
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <TinyChip label={entry.category} />
-                    {entry.chain ? <TinyChip label={entry.chain} /> : null}
-                    {entry.transport ? <TinyChip label={entry.transport.toUpperCase()} /> : null}
-                    <TinyChip label={`Source: ${entry.source}`} />
-                  </div>
-
-                  {test ? <p className="mt-3 text-sm text-muted-foreground">{test.message}</p> : null}
+                  <p className="mt-4 text-sm text-muted-foreground">
+                    {entry.valueHint} • Source: {titleCase(entry.source)}
+                    {test ? ` • ${test.message}` : ""}
+                  </p>
                 </button>
               );
             })}
@@ -290,9 +282,7 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                 <div className="grid gap-3 md:grid-cols-2">
                   <DetailRow label="Env name" value={selectedEntry.key} mono />
                   <DetailRow label="Current source" value={titleCase(selectedEntry.source)} />
-                  <DetailRow label="Category" value={titleCase(selectedEntry.category)} />
                   <DetailRow label="Provider" value={titleCase(selectedEntry.provider)} />
-                  <DetailRow label="Current value" value={selectedEntry.valueHint} />
                   <DetailRow label="Last updated" value={selectedEntry.updatedAt ? formatDateTime(selectedEntry.updatedAt) : "Not changed in dashboard"} />
                 </div>
 
@@ -308,20 +298,6 @@ export function ApiPage({ dashboard }: { dashboard: ApiKeysDashboardResponse }):
                       {selectedTest ? titleCase(selectedTest.status) : "Untested"}
                     </Badge>
                   </div>
-                </div>
-
-                <div className="rounded-3xl border border-border bg-muted/35 p-5">
-                  <p className="text-sm font-semibold text-foreground">What this key controls</p>
-                  <p className="mt-2 text-sm text-muted-foreground">{selectedEntry.description}</p>
-                  {selectedEntry.linkedPage ? (
-                    <p className="mt-3 text-sm text-muted-foreground">
-                      Endpoint routing stays on{" "}
-                      <Link className="font-medium text-foreground underline decoration-border underline-offset-4" href={selectedEntry.linkedPage}>
-                        {selectedEntry.linkedPage}
-                      </Link>
-                      .
-                    </p>
-                  ) : null}
                 </div>
 
                 <div className="space-y-4">
@@ -461,8 +437,4 @@ function DetailRow({ label, value, mono = false }: { label: string; value: strin
       <p className={cn("mt-2 text-sm font-semibold text-foreground", mono ? "font-mono" : "")}>{value}</p>
     </div>
   );
-}
-
-function TinyChip({ label }: { label: string }): JSX.Element {
-  return <span className="rounded-full bg-card px-3 py-1 text-xs font-medium text-muted-foreground">{titleCase(label)}</span>;
 }
